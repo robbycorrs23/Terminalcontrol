@@ -290,9 +290,11 @@ body {
    ring; the flag stays identifiable via the active title-bar button. */
 .term.flagged.waiting {
   border-color: var(--waiting);
+  box-shadow: 0 0 0 2px var(--waiting), 0 0 18px 2px var(--waiting);
 }
 .term.flagged.waiting.done {
   border-color: var(--done);
+  box-shadow: 0 0 0 2px var(--done), 0 0 18px 2px var(--done);
 }
 @keyframes pulse {
   50% {
