@@ -1,0 +1,721 @@
+import { Term, PaneInfo, TermHost } from "./terminal";
+import { play } from "./sound";
+import { getAppearance, setAppearance, xtermTheme, xtermFontSize } from "./theme";
+
+const grid = document.getElementById("grid")!;
+const scrim = document.getElementById("scrim")!;
+const tray = document.getElementById("tray")!;
+const queueEl = document.getElementById("queue")!;
+const nextBtn = document.getElementById("nextBtn") as HTMLButtonElement;
+const layoutSel = document.getElementById("layoutSel") as HTMLSelectElement;
+
+// This browser window's workspace id. sessionStorage is per-window and survives
+// refresh, so a refresh reconnects to the same terminals but a NEW window starts
+// its own empty workspace — letting different windows hold different layouts.
+const SESSION = (() => {
+  let s = sessionStorage.getItem("fleet-session");
+  if (!s) {
+    s = (crypto.randomUUID?.() || String(Math.random()).slice(2)) as string;
+    sessionStorage.setItem("fleet-session", s);
+  }
+  return s;
+})();
+
+const currentEl = document.getElementById("current")!;
+
+const terms = new Map<string, Term>();
+const queue: string[] = []; // pane ids waiting on the user, in arrival order
+const minimized = new Set<string>(); // pane ids currently in the tray
+let zoomed: Term | null = null;
+let suppressNextOpen = false; // set after a drag so the trailing click doesn't zoom
+let currentLayout: string | null = sessionStorage.getItem("fleet-current-layout");
+
+// ---- Host callbacks for each Term -------------------------------------
+const host: TermHost = {
+  onOpen: (t) => {
+    if (suppressNextOpen) return;
+    zoom(t);
+  },
+  onClose: (t) => closeTerm(t.id),
+  onMinimize: (t) => minimize(t),
+};
+
+// ---- Grid -------------------------------------------------------------
+function addTerm(info: PaneInfo): Term {
+  const existing = terms.get(info.id);
+  if (existing) return existing;
+  const t = new Term(info, host);
+  terms.set(info.id, t);
+  t.cell.dataset.id = info.id; // lets us read grid order for layout autosave
+  grid.append(t.cell);
+  enableDrag(t);
+  reflow();
+  if (info.attention?.waiting) enqueue(info.id, info.attention.kind || "question");
+  return t;
+}
+
+function removeTerm(id: string) {
+  const t = terms.get(id);
+  if (!t) return;
+  if (zoomed === t) unzoom();
+  t.dispose();
+  terms.delete(id);
+  minimized.delete(id);
+  dequeue(id);
+  renderTray();
+  reflow();
+}
+
+async function closeTerm(id: string) {
+  await fetch(`/api/panes/${id}`, { method: "DELETE" });
+  removeTerm(id);
+}
+
+// Square-ish auto grid based on how many cells are actually in the grid
+// (minimized ones are pulled out, so they don't count).
+function reflow() {
+  const n = Math.max(grid.children.length, 1);
+  const cols = Math.ceil(Math.sqrt(n));
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  for (const t of terms.values()) if (!minimized.has(t.id)) t.refit();
+}
+
+// ---- Minimize / tray --------------------------------------------------
+function minimize(t: Term) {
+  if (zoomed === t) unzoom();
+  if (minimized.has(t.id)) return;
+  t.cell.remove();
+  minimized.add(t.id);
+  renderTray();
+  reflow();
+}
+
+function restore(id: string) {
+  const t = terms.get(id);
+  if (!t || !minimized.has(id)) return;
+  minimized.delete(id);
+  grid.append(t.cell);
+  renderTray();
+  reflow();
+  persistOrder();
+  t.refit();
+}
+
+// Tell the server this window's current grid order (grid first, then minimized),
+// so a refresh — which rebuilds from the server snapshot — keeps the arrangement.
+function persistOrder() {
+  const ordered = [...grid.children].map((c) => (c as HTMLElement).dataset.id!).filter(Boolean);
+  const rest = [...minimized].filter((id) => !ordered.includes(id));
+  fetch("/api/order", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ session: SESSION, ids: [...ordered, ...rest] }),
+  });
+}
+
+function renderTray() {
+  tray.innerHTML = "";
+  if (minimized.size === 0) {
+    tray.hidden = true;
+    return;
+  }
+  tray.hidden = false;
+  const label = document.createElement("span");
+  label.className = "tray-label";
+  label.textContent = "Minimized:";
+  tray.append(label);
+  for (const id of minimized) {
+    const t = terms.get(id);
+    if (!t) continue;
+    const chip = document.createElement("div");
+    chip.className =
+      "tchip" + (t.isWaiting() ? " waiting" + (t.waitingKind() === "done" ? " done" : "") : "");
+    chip.innerHTML = `<span class="tname"></span><span class="tclose" title="Close">✕</span>`;
+    (chip.querySelector(".tname") as HTMLElement).textContent = basenameOf(t.info.cwd);
+    chip.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).classList.contains("tclose")) {
+        e.stopPropagation();
+        closeTerm(id);
+      } else {
+        restore(id);
+      }
+    });
+    tray.append(chip);
+  }
+}
+
+// ---- Zoom to center (animated) ----------------------------------------
+function zoom(t: Term) {
+  if (minimized.has(t.id)) restore(t.id);
+  if (zoomed === t) return;
+  if (zoomed) unzoom();
+  zoomed = t;
+  clearAttention(t.id);
+
+  const el = t.el;
+  const start = t.cell.getBoundingClientRect();
+
+  el.style.transition = "none";
+  el.classList.add("zoomed");
+  setRect(el, start);
+  scrim.hidden = false;
+  void el.getBoundingClientRect(); // force reflow so the next change animates
+
+  el.style.transition =
+    "top .28s cubic-bezier(.2,.8,.2,1), left .28s cubic-bezier(.2,.8,.2,1)," +
+    " width .28s cubic-bezier(.2,.8,.2,1), height .28s cubic-bezier(.2,.8,.2,1)";
+  setRect(el, centerRect());
+  onceTransitionEnd(el, () => {
+    t.refit();
+    t.focusTerm();
+  });
+}
+
+function unzoom() {
+  const t = zoomed;
+  if (!t) return;
+  zoomed = null;
+  const el = t.el;
+  setRect(el, t.cell.getBoundingClientRect());
+  scrim.hidden = true;
+  onceTransitionEnd(el, () => {
+    el.classList.remove("zoomed");
+    el.removeAttribute("style"); // back to CSS-driven inset:0 in its cell
+    t.refit();
+  });
+}
+
+function centerRect(): DOMRect {
+  const w = Math.min(1200, innerWidth * 0.92);
+  const h = innerHeight * 0.86;
+  return new DOMRect((innerWidth - w) / 2, (innerHeight - h) / 2 + 20, w, h);
+}
+function setRect(el: HTMLElement, r: { left: number; top: number; width: number; height: number }) {
+  el.style.left = r.left + "px";
+  el.style.top = r.top + "px";
+  el.style.width = r.width + "px";
+  el.style.height = r.height + "px";
+}
+function onceTransitionEnd(el: HTMLElement, fn: () => void) {
+  let done = false;
+  const run = (e?: TransitionEvent) => {
+    if (e && e.target !== el) return;
+    if (done) return;
+    done = true;
+    el.removeEventListener("transitionend", run as EventListener);
+    fn();
+  };
+  el.addEventListener("transitionend", run as EventListener);
+  setTimeout(run, 360);
+}
+
+scrim.addEventListener("click", unzoom);
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const om = document.getElementById("openmode") as HTMLElement;
+  if (!picker.hidden) closePicker();
+  else if (om && !om.hidden) om.hidden = true;
+  else if (zoomed) unzoom();
+});
+addEventListener("resize", () => {
+  if (zoomed) setRect(zoomed.el, centerRect());
+  reflow();
+});
+
+// ---- Drag to reorder --------------------------------------------------
+let dropTarget: HTMLElement | null = null;
+
+function enableDrag(t: Term) {
+  t.titleBar.addEventListener("pointerdown", (e) => {
+    if ((e.target as HTMLElement).closest(".ctl")) return; // controls aren't a handle
+    if (e.button !== 0 || zoomed) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let dragging = false;
+    let offX = 0;
+    let offY = 0;
+
+    const onMove = (ev: PointerEvent) => {
+      if (!dragging) {
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
+        dragging = true;
+        const r = t.cell.getBoundingClientRect();
+        offX = startX - r.left;
+        offY = startY - r.top;
+        t.el.classList.add("dragging");
+        setRect(t.el, r);
+      }
+      setRect(t.el, {
+        left: ev.clientX - offX,
+        top: ev.clientY - offY,
+        width: t.el.offsetWidth,
+        height: t.el.offsetHeight,
+      });
+      const target = cellUnder(ev, t);
+      setDropTarget(target);
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      if (!dragging) return;
+      const target = dropTarget;
+      setDropTarget(null);
+      t.el.classList.remove("dragging");
+      t.el.removeAttribute("style");
+      if (target && target !== t.cell) {
+        const tr = target.getBoundingClientRect();
+        const after = ev.clientX > tr.left + tr.width / 2;
+        if (after) target.after(t.cell);
+        else target.before(t.cell);
+        reflow();
+        persistOrder(); // remember the order for this window across refreshes
+        autosaveLayout(); // and, if this window is a layout, save it there too
+      }
+      t.refit();
+      suppressNextOpen = true;
+      setTimeout(() => (suppressNextOpen = false), 0);
+    };
+
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  });
+}
+
+function cellUnder(ev: PointerEvent, t: Term): HTMLElement | null {
+  t.el.style.pointerEvents = "none";
+  const under = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
+  t.el.style.pointerEvents = "";
+  const cell = under?.closest(".cell") as HTMLElement | null;
+  if (cell && cell !== t.cell && cell.parentElement === grid) return cell;
+  return null;
+}
+
+function setDropTarget(cell: HTMLElement | null) {
+  if (dropTarget === cell) return;
+  dropTarget?.classList.remove("drop-target");
+  dropTarget = cell;
+  dropTarget?.classList.add("drop-target");
+}
+
+// ---- Attention queue --------------------------------------------------
+function onAttention(id: string, kind: "question" | "done") {
+  const t = terms.get(id);
+  if (!t) return;
+  if (zoomed === t) return; // you're already looking at it
+  t.setWaiting(true, kind);
+  if (minimized.has(id)) renderTray();
+  enqueue(id, kind);
+  play(kind);
+}
+
+function enqueue(id: string, _kind: "question" | "done") {
+  if (!queue.includes(id)) queue.push(id);
+  renderQueue();
+}
+function dequeue(id: string) {
+  const i = queue.indexOf(id);
+  if (i >= 0) queue.splice(i, 1);
+  renderQueue();
+}
+function setCleared(id: string) {
+  terms.get(id)?.setWaiting(false);
+  if (minimized.has(id)) renderTray();
+  dequeue(id);
+}
+function clearAttention(id: string) {
+  const t = terms.get(id);
+  if (!t || !t.isWaiting()) return;
+  fetch(`/api/panes/${id}/clear`, { method: "POST" });
+  setCleared(id);
+}
+function renderQueue() {
+  queueEl.innerHTML = "";
+  for (const id of queue) {
+    const t = terms.get(id);
+    const chip = document.createElement("span");
+    const kind = t?.waitingKind() === "done" ? "done" : "question";
+    chip.className = "qchip" + (kind === "done" ? " done" : "");
+    chip.textContent = t ? basenameOf(t.info.cwd) : id;
+    chip.onclick = () => t && zoom(t);
+    queueEl.append(chip);
+  }
+  nextBtn.hidden = queue.length === 0;
+}
+nextBtn.onclick = () => {
+  const t = queue[0] && terms.get(queue[0]);
+  if (t) zoom(t);
+};
+
+function basenameOf(p: string): string {
+  const parts = p.replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || p;
+}
+
+// ---- Folder picker ----------------------------------------------------
+const picker = document.getElementById("picker") as HTMLElement;
+const crumbsEl = document.getElementById("crumbs")!;
+const plistEl = document.getElementById("plist")!;
+const precentEl = document.getElementById("precent")!;
+const runClaude = document.getElementById("runClaude") as HTMLInputElement;
+const searchEl = document.getElementById("psearch") as HTMLInputElement;
+const sortEl = document.getElementById("psort") as HTMLSelectElement;
+const mkdirBtn = document.getElementById("pmkdir")!;
+const starBtn = document.getElementById("pstar")!;
+
+type Entry = { name: string; path: string; mtime: number; btime: number };
+let pickEntries: Entry[] = [];
+let pickPath: string | null = null;
+let pickParent: string | null = null;
+let pickHome = "";
+let prefs: { defaultDir: string | null; sort: string } = { defaultDir: null, sort: "name" };
+
+async function loadPrefs() {
+  prefs = await fetch("/api/prefs").then((r) => r.json());
+  sortEl.value = prefs.sort || "name";
+}
+
+async function openPicker() {
+  picker.hidden = false;
+  // Resume where we left off; on first open use the saved default (or home).
+  await navigate(pickPath ?? prefs.defaultDir);
+  loadPickerRecents();
+  searchEl.focus();
+}
+function closePicker() {
+  picker.hidden = true;
+}
+
+async function navigate(path: string | null) {
+  const data = await fetch(
+    "/api/dirs?path=" + encodeURIComponent(path ?? "")
+  ).then((r) => r.json());
+  if (data.error) {
+    plistEl.innerHTML = `<div class="prow empty">⚠ ${data.error}</div>`;
+    return;
+  }
+  pickPath = data.path;
+  pickParent = data.parent;
+  pickHome = data.home;
+  pickEntries = data.entries;
+  searchEl.value = "";
+  renderCrumbs();
+  renderList();
+  updateStar();
+}
+
+function renderCrumbs() {
+  crumbsEl.innerHTML = "";
+  const path = pickPath!;
+  const underHome = path === pickHome || path.startsWith(pickHome + "/");
+  const rest = underHome ? path.slice(pickHome.length).split("/").filter(Boolean) : path.split("/").filter(Boolean);
+  const labels = underHome ? ["~", ...rest] : ["/", ...rest];
+
+  labels.forEach((label, i) => {
+    if (i > 0) {
+      const sep = document.createElement("span");
+      sep.className = "sep";
+      sep.textContent = "/";
+      crumbsEl.append(sep);
+    }
+    const crumb = document.createElement("span");
+    crumb.className = "crumb";
+    crumb.textContent = label;
+    let target: string;
+    if (underHome) target = i === 0 ? pickHome : pickHome + "/" + rest.slice(0, i).join("/");
+    else target = i === 0 ? "/" : "/" + rest.slice(0, i).join("/");
+    crumb.onclick = () => navigate(target);
+    crumbsEl.append(crumb);
+  });
+}
+
+function renderList() {
+  plistEl.innerHTML = "";
+  const q = searchEl.value.trim().toLowerCase();
+  const mode = sortEl.value;
+  let items = pickEntries.slice();
+  if (q) items = items.filter((e) => e.name.toLowerCase().includes(q));
+  items.sort((a, b) =>
+    mode === "edited" ? b.mtime - a.mtime : mode === "created" ? b.btime - a.btime : a.name.localeCompare(b.name)
+  );
+
+  if (pickParent && !q) {
+    const up = document.createElement("div");
+    up.className = "prow up";
+    up.innerHTML = `<span class="ico">⤴</span><span>..</span>`;
+    up.onclick = () => navigate(pickParent);
+    plistEl.append(up);
+  }
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "prow empty";
+    empty.textContent = q ? "no folders match" : "no sub-folders here — use “Open here”";
+    plistEl.append(empty);
+  }
+  for (const e of items) {
+    const row = document.createElement("div");
+    row.className = "prow";
+    row.innerHTML = `<span class="ico">📁</span><span class="nm"></span>`;
+    (row.querySelector(".nm") as HTMLElement).textContent = e.name;
+    if (mode !== "name") {
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      const t = mode === "created" ? e.btime : e.mtime;
+      meta.textContent = new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "2-digit" });
+      row.append(meta);
+    }
+    row.onclick = () => navigate(e.path);
+    plistEl.append(row);
+  }
+}
+
+function updateStar() {
+  const active = !!pickPath && prefs.defaultDir === pickPath;
+  starBtn.classList.toggle("active", active);
+  starBtn.textContent = active ? "★ Start" : "☆ Start";
+  starBtn.title = active ? "This is the default start folder (click to unset)" : "Open the picker here by default";
+}
+
+searchEl.addEventListener("input", renderList);
+sortEl.addEventListener("change", async () => {
+  renderList();
+  prefs = await putPrefs({ sort: sortEl.value });
+});
+mkdirBtn.addEventListener("click", async () => {
+  const name = prompt("New folder name (created in " + prettyPath(pickPath!) + "):");
+  if (!name) return;
+  const r = await fetch("/api/mkdir", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path: pickPath, name }),
+  }).then((r) => r.json());
+  if (r.error) {
+    alert("Couldn't create folder: " + r.error);
+    return;
+  }
+  await navigate(pickPath); // refresh listing; the new folder appears
+});
+starBtn.addEventListener("click", async () => {
+  const next = prefs.defaultDir === pickPath ? null : pickPath;
+  prefs = await putPrefs({ defaultDir: next });
+  updateStar();
+});
+async function putPrefs(patch: object) {
+  return fetch("/api/prefs", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  }).then((r) => r.json());
+}
+
+async function loadPickerRecents() {
+  const recents: string[] = await fetch("/api/recents").then((r) => r.json());
+  precentEl.innerHTML = "";
+  if (!recents.length) {
+    precentEl.hidden = true;
+    return;
+  }
+  precentEl.hidden = false;
+  const label = document.createElement("span");
+  label.textContent = "Recent:";
+  precentEl.append(label);
+  for (const p of recents.slice(0, 6)) {
+    const chip = document.createElement("span");
+    chip.className = "rchip";
+    chip.textContent = prettyPath(p);
+    chip.title = p;
+    chip.onclick = () => choose(p);
+    precentEl.append(chip);
+  }
+}
+
+function choose(path: string) {
+  openTermAt(path, runClaude.checked ? "claude" : "");
+  closePicker();
+}
+async function openTermAt(cwd: string, cmd: string) {
+  await fetch("/api/panes", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cwd, cmd, session: SESSION }),
+  });
+}
+function prettyPath(p: string): string {
+  if (pickHome && (p === pickHome || p.startsWith(pickHome + "/")))
+    return "~" + p.slice(pickHome.length);
+  return p;
+}
+
+document.getElementById("addBtn")!.addEventListener("click", openPicker);
+document.getElementById("pcancel")!.addEventListener("click", closePicker);
+document.getElementById("popen")!.addEventListener("click", () => pickPath && choose(pickPath));
+picker.addEventListener("click", (e) => {
+  if (e.target === picker) closePicker(); // click backdrop to dismiss
+});
+
+// ---- Control socket (grid-level events) -------------------------------
+function connectControl() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/control?session=${encodeURIComponent(SESSION)}`);
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    switch (m.t) {
+      case "panes":
+        for (const info of m.panes as PaneInfo[]) addTerm(info);
+        break;
+      case "created":
+        addTerm(m.pane);
+        break;
+      case "closed":
+        removeTerm(m.pane);
+        break;
+      case "attention":
+        onAttention(m.pane, m.kind);
+        break;
+      case "cleared":
+        setCleared(m.pane);
+        break;
+      case "layouts":
+        loadLayouts(); // a layout was saved/removed in some window
+        break;
+    }
+  };
+  ws.onclose = () => setTimeout(connectControl, 1500);
+}
+
+// ---- Current layout + autosave ----------------------------------------
+function setCurrentLayout(name: string | null) {
+  currentLayout = name;
+  if (name) sessionStorage.setItem("fleet-current-layout", name);
+  else sessionStorage.removeItem("fleet-current-layout");
+  currentEl.hidden = !name;
+  currentEl.textContent = name ? "▣ " + name : "";
+  if (name) layoutSel.value = name;
+}
+function flashSaved() {
+  currentEl.classList.add("saved");
+  setTimeout(() => currentEl.classList.remove("saved"), 900);
+}
+// Slots for the current window, in order: grid order first, then minimized.
+function currentSlots() {
+  const ordered = [...grid.children].map((c) => (c as HTMLElement).dataset.id!).filter(Boolean);
+  const rest = [...minimized].filter((id) => !ordered.includes(id));
+  return [...ordered, ...rest]
+    .map((id) => terms.get(id))
+    .filter(Boolean)
+    .map((t) => ({ cwd: t!.info.cwd, cmd: t!.info.cmd }));
+}
+async function saveLayout(name: string) {
+  await fetch("/api/layouts", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, slots: currentSlots() }),
+  });
+}
+function autosaveLayout() {
+  if (!currentLayout) return;
+  saveLayout(currentLayout);
+  flashSaved();
+}
+
+// ---- Layout actions ---------------------------------------------------
+document.getElementById("saveBtn")!.addEventListener("click", async () => {
+  const name = prompt("Save this window as layout named:", currentLayout || "");
+  if (!name) return;
+  await saveLayout(name);
+  setCurrentLayout(name);
+  await loadLayouts();
+});
+
+const openmode = document.getElementById("openmode") as HTMLElement;
+const omMsg = document.getElementById("omMsg")!;
+let pendingOpen: string | null = null;
+
+document.getElementById("openBtn")!.addEventListener("click", () => {
+  const name = layoutSel.value;
+  if (!name) return;
+  if (terms.size === 0) {
+    doOpen(name, "overwrite"); // empty window — nothing to merge, just adopt it
+    return;
+  }
+  pendingOpen = name;
+  omMsg.innerHTML = `Open <b>${name}</b> — add its terminals to this window, or replace what's open here?`;
+  openmode.hidden = false;
+});
+document.getElementById("omCancel")!.addEventListener("click", () => {
+  openmode.hidden = true;
+  pendingOpen = null;
+});
+document.getElementById("omAdd")!.addEventListener("click", () => {
+  if (pendingOpen) doOpen(pendingOpen, "add");
+  openmode.hidden = true;
+});
+document.getElementById("omReplace")!.addEventListener("click", () => {
+  if (pendingOpen) doOpen(pendingOpen, "overwrite");
+  openmode.hidden = true;
+});
+openmode.addEventListener("click", (e) => {
+  if (e.target === openmode) {
+    openmode.hidden = true;
+    pendingOpen = null;
+  }
+});
+
+async function doOpen(name: string, mode: "add" | "overwrite") {
+  pendingOpen = null;
+  await fetch(`/api/layouts/${encodeURIComponent(name)}/open`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ session: SESSION, mode }),
+  });
+  // Overwrite => this window now *is* that layout (autosave on move targets it).
+  // Add => the window holds a mix, so it maps to no single layout.
+  setCurrentLayout(mode === "overwrite" ? name : null);
+}
+
+async function loadLayouts() {
+  const keep = layoutSel.value;
+  const layouts = await fetch("/api/layouts").then((r) => r.json());
+  layoutSel.innerHTML = `<option value="">layouts…</option>`;
+  for (const l of layouts) {
+    const o = document.createElement("option");
+    o.value = l.name;
+    o.textContent = `${l.name} (${l.slots?.length ?? 0})`;
+    layoutSel.append(o);
+  }
+  // Preserve the user's selection (or pin to the current layout) across refreshes.
+  layoutSel.value = currentLayout || keep || "";
+}
+
+// ---- Appearance (light/dark + large text) -----------------------------
+const themeBtn = document.getElementById("themeBtn")!;
+const textBtn = document.getElementById("textBtn")!;
+function applyAppearance() {
+  const a = getAppearance();
+  document.body.classList.toggle("light", a.light);
+  document.body.classList.toggle("big", a.big);
+  const theme = xtermTheme(a.light);
+  const fs = xtermFontSize(a.big);
+  for (const t of terms.values()) t.setAppearance(theme, fs);
+  themeBtn.textContent = a.light ? "☾" : "☀";
+  themeBtn.title = a.light ? "Switch to dark" : "Switch to light";
+  textBtn.textContent = a.big ? "A−" : "A⁺";
+  textBtn.title = a.big ? "Switch to normal text" : "Switch to large text";
+}
+themeBtn.addEventListener("click", () => {
+  const a = getAppearance();
+  setAppearance({ ...a, light: !a.light });
+  applyAppearance();
+});
+textBtn.addEventListener("click", () => {
+  const a = getAppearance();
+  setAppearance({ ...a, big: !a.big });
+  applyAppearance();
+});
+
+// ---- Boot -------------------------------------------------------------
+applyAppearance();
+connectControl();
+loadLayouts();
+loadPrefs();
+setCurrentLayout(currentLayout); // restore the indicator after a refresh

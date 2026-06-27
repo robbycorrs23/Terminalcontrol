@@ -1,0 +1,25 @@
+{
+  "name": "fleetview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A grid of Claude Code terminals that zoom to center and ding when a Claude needs you.",
+  "scripts": {
+    "postinstall": "node scripts/fix-pty-helper.js",
+    "setup": "node server/setup-hooks.js",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "go": "npm run build && npm start"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

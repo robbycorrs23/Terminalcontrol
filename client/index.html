@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FleetView</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <header id="bar">
+      <span class="brand">▦ FleetView</span>
+      <span id="current" class="current" hidden></span>
+      <div id="queue" title="Terminals waiting on you"></div>
+      <span class="spacer"></span>
+      <button id="textBtn" class="icon" title="Toggle large text">A⁺</button>
+      <button id="themeBtn" class="icon" title="Toggle light / dark">☀</button>
+      <button id="nextBtn" hidden>Jump to next ⏎</button>
+      <select id="layoutSel">
+        <option value="">layouts…</option>
+      </select>
+      <button id="openBtn">Open</button>
+      <button id="saveBtn">Save layout</button>
+      <button id="addBtn">+ Terminal</button>
+    </header>
+
+    <main id="grid"></main>
+
+    <footer id="tray" hidden></footer>
+
+    <div id="scrim" hidden></div>
+
+    <!-- Open-layout chooser modal -->
+    <div id="openmode" hidden>
+      <div class="panel small">
+        <div class="phead"><span class="ptitle">Open layout</span></div>
+        <div class="omsg" id="omMsg"></div>
+        <div class="pfoot">
+          <span class="spacer"></span>
+          <button id="omCancel">Cancel</button>
+          <button id="omAdd">Add to this window</button>
+          <button id="omReplace" class="primary">Replace this window</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Folder picker modal -->
+    <div id="picker" hidden>
+      <div class="panel">
+        <div class="phead">
+          <span class="ptitle">New terminal</span>
+          <span class="crumbs" id="crumbs"></span>
+        </div>
+        <div class="ptools">
+          <input id="psearch" type="text" placeholder="Search this folder…" />
+          <select id="psort" title="Sort">
+            <option value="name">Name</option>
+            <option value="edited">Last edited</option>
+            <option value="created">Last created</option>
+          </select>
+          <button id="pmkdir" title="Create a folder here">+ Folder</button>
+          <button id="pstar" title="Open the picker here by default">☆ Start</button>
+        </div>
+        <div class="plist" id="plist"></div>
+        <div class="precent" id="precent"></div>
+        <div class="pfoot">
+          <label class="runclaude">
+            <input type="checkbox" id="runClaude" checked />
+            run <code>claude</code> on open
+          </label>
+          <span class="spacer"></span>
+          <button id="pcancel">Cancel</button>
+          <button id="popen" class="primary">Open here</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
