@@ -5,6 +5,7 @@
   --accent: #58a6ff;
   --waiting: #f0a35e; /* needs you */
   --done: #3fb950; /* finished a turn */
+  --flag: #a371f7;
   --text: #c9d1d9;
   --text-dim: #8b949e;
   --btn: #21262d;
@@ -18,6 +19,7 @@ body.light {
   --accent: #0969da;
   --waiting: #bc4c00;
   --done: #1a7f37;
+  --flag: #8250df;
   --text: #1f2328;
   --text-dim: #57606a;
   --btn: #eaeef2;
@@ -36,7 +38,8 @@ body.big .term .title .path {
 }
 body.big #bar button,
 body.big #bar select,
-body.big .qchip {
+body.big .qchip,
+body.big .fchip {
   font-size: 14px;
 }
 
@@ -143,6 +146,21 @@ body {
   background: var(--done);
 }
 
+/* ---- Follow-up chips ---- */
+#followups {
+  display: flex;
+  gap: 6px;
+}
+.fchip {
+  background: var(--flag);
+  color: #000;
+  border-radius: 10px;
+  padding: 1px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 /* ---- Grid ---- */
 #grid {
   flex: 1;
@@ -224,6 +242,14 @@ body {
   background: #f85149;
   color: #fff;
 }
+.term .ctl.flag.active {
+  background: var(--flag);
+  color: #000;
+}
+.term .ctl.flag.active:hover {
+  background: var(--flag);
+  color: #000;
+}
 .term .xt {
   flex: 1;
   min-height: 0;
@@ -253,6 +279,20 @@ body {
 }
 .term.waiting.done .badge {
   background: var(--done);
+}
+/* Follow-up flag: a steady, non-animated purple marker. Distinct from the
+   pulsing attention glow, and left intact when a box is also waiting. */
+.term.flagged {
+  border-color: var(--flag);
+  box-shadow: 0 0 0 1px var(--flag);
+}
+/* When a box is both flagged and waiting, the animated attention glow wins the
+   ring; the flag stays identifiable via the active title-bar button. */
+.term.flagged.waiting {
+  border-color: var(--waiting);
+}
+.term.flagged.waiting.done {
+  border-color: var(--done);
 }
 @keyframes pulse {
   50% {
