@@ -8,6 +8,7 @@ export interface PaneInfo {
   cwd: string;
   cmd: string;
   attention?: { waiting: boolean; kind: "question" | "done" | null };
+  followUp?: boolean;
   createdAt: number;
 }
 
@@ -15,6 +16,7 @@ export interface TermHost {
   onOpen(t: Term): void; // user clicked the box → zoom it
   onClose(t: Term): void; // × → kill it
   onMinimize(t: Term): void; // – → send to tray
+  onToggleFollowUp(t: Term): void; // 🚩 → toggle the follow-up flag
 }
 
 /**
@@ -48,6 +50,7 @@ export class Term {
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
       `<button class="ctl img" title="Add image to prompt">🖼</button>` +
+      `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
     (this.titleBar.querySelector(".path") as HTMLElement).textContent =
@@ -78,6 +81,10 @@ export class Term {
     this.titleBar.querySelector(".close")!.addEventListener("click", (e) => {
       e.stopPropagation();
       host.onClose(this);
+    });
+    this.titleBar.querySelector(".flag")!.addEventListener("click", (e) => {
+      e.stopPropagation();
+      host.onToggleFollowUp(this);
     });
     // 🖼 opens a file picker — the same path-injection flow as drag-and-drop.
     const fileInput = el("input", "img-input") as HTMLInputElement;
@@ -114,6 +121,7 @@ export class Term {
     if (info.attention?.waiting && info.attention.kind) {
       this.setWaiting(true, info.attention.kind);
     }
+    if (info.followUp) this.setFollowUp(true);
   }
 
   private connect() {
@@ -239,6 +247,15 @@ export class Term {
       badge.textContent = kind === "done" ? "done" : "needs you";
       this.badgeSlot.append(badge);
     }
+  }
+
+  isFlagged() {
+    return this.el.classList.contains("flagged");
+  }
+
+  setFollowUp(on: boolean) {
+    this.el.classList.toggle("flagged", on);
+    (this.titleBar.querySelector(".flag") as HTMLElement)?.classList.toggle("active", on);
   }
 
   dispose() {
