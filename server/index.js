@@ -141,6 +141,15 @@ app.post("/api/panes/:id/clear", (req, res) => {
   res.status(204).end();
 });
 
+app.post("/api/panes/:id/followup", (req, res) => {
+  const id = req.params.id;
+  if (!ptys.info(id)) return res.status(404).json({ error: "no such pane" });
+  const on = !!(req.body && req.body.on);
+  ptys.setFollowUp(id, on);
+  broadcast(ptys.sessionOf(id), { t: "followup", pane: id, on });
+  res.status(204).end();
+});
+
 // --- Layouts -------------------------------------------------------------
 app.get("/api/layouts", (_req, res) => res.json(layouts.list()));
 

@@ -61,6 +61,7 @@ export class PtyManager extends EventEmitter {
       order: p.order,
       cwd: p.cwd,
       cmd: p.cmd,
+      followUp: p.followUp,
       createdAt: p.createdAt,
     }));
     try {
@@ -92,6 +93,7 @@ export class PtyManager extends EventEmitter {
         buffer: "",
         clients: new Set(),
         attention: { waiting: false, kind: null },
+        followUp: !!m.followUp,
         createdAt: m.createdAt || Date.now(),
       };
       this._bridge(pane);
@@ -153,6 +155,7 @@ export class PtyManager extends EventEmitter {
       buffer: "",
       clients: new Set(),
       attention: { waiting: false, kind: null },
+      followUp: false,
       createdAt: Date.now(),
     };
 
@@ -232,6 +235,13 @@ export class PtyManager extends EventEmitter {
     if (pane) pane.attention = { waiting: false, kind: null };
   }
 
+  setFollowUp(id, on) {
+    const pane = this.panes.get(id);
+    if (!pane) return;
+    pane.followUp = !!on;
+    this._persistState();
+  }
+
   kill(id) {
     const pane = this.panes.get(id);
     if (!pane) return;
@@ -254,6 +264,7 @@ export class PtyManager extends EventEmitter {
       cmd: p.cmd,
       session: p.session,
       attention: p.attention,
+      followUp: p.followUp,
       createdAt: p.createdAt,
     };
   }
