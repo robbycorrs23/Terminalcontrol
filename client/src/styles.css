@@ -39,7 +39,9 @@ body.big .term .title .path {
 body.big #bar button,
 body.big #bar select,
 body.big .qchip,
-body.big .fchip {
+body.big .fchip,
+body.big .rchip.recover,
+body.big .rec-label {
   font-size: 14px;
 }
 
@@ -159,6 +161,49 @@ body {
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
+}
+
+/* ---- Recovery chips (dormant terminals) ---- */
+#recovery {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.rec-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.rchip.recover {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 1px 5px 1px 9px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.rchip.recover.alive {
+  /* its tmux session is still running — respawn restores it fully */
+  border-color: var(--done);
+  border-style: solid;
+}
+.rchip.recover .rname {
+  cursor: pointer;
+}
+.rchip.recover .rx {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.rchip.recover .rx:hover {
+  color: var(--waiting);
+}
+.rec-all {
+  font-size: 11px;
+  padding: 1px 8px;
 }
 
 /* ---- Grid ---- */
@@ -433,6 +478,16 @@ body {
 }
 .omsg b {
   color: var(--accent);
+}
+.omsg .omnote {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.omsg .omnote b {
+  color: var(--text);
 }
 
 /* ---- Folder picker modal ---- */

@@ -2,8 +2,9 @@ import * as pty from "node-pty";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
+import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 
 const SHELL =
   process.env.SHELL ||
@@ -31,31 +32,68 @@ function findTmux() {
  * `fleet_<id>`; the pane's pty is a `tmux attach` bridge to it. Pane metadata is
  * persisted so that on restart we reattach to any sessions still alive.
  *
+ * A pane is either **active** (live tmux session + bridge pty) or **dormant**
+ * (metadata kept, no bridge — recoverable via `respawn`). Panes become dormant
+ * when their tmux session vanishes unexpectedly (e.g. the tmux server is torn
+ * down across a long system sleep) or when a layout "Replace" sets them aside.
+ * This is deliberate: losing a pane's metadata means losing the ability to bring
+ * the terminal back, so we never silently drop a pane the user didn't close.
+ *
  * Emits:
  *   "attention" (paneId, kind)
- *   "exit"      (paneId, session)
+ *   "exit"      (paneId, session)            — pane closed for good (user × )
+ *   "died"      (paneId, session, info)      — pane became dormant (recoverable)
  */
 export class PtyManager extends EventEmitter {
   constructor(port, stateFile) {
     super();
     this.port = port;
     this.panes = new Map();
+    this.dormant = new Map();
     this.seq = 0;
     this.stateFile = stateFile;
     this.tmuxBin = findTmux();
     this.tmux = !!this.tmuxBin;
+
+    // Keep the tmux server's socket on a STABLE path under the user's home, not
+    // the default one in /tmp. macOS periodically sweeps /tmp and wipes it on
+    // some power transitions, which would orphan/kill the tmux server and take
+    // every terminal with it — exactly the failure dormant panes recover from.
+    this.sock = null;
     if (this.tmux) {
+      const dir = join(os.homedir(), ".fleetview");
+      try {
+        mkdirSync(dir, { recursive: true });
+      } catch {}
+      this.sock = join(dir, `tmux-${port}.sock`);
       // Make the inner tmux transparent + snappy for TUIs like Claude Code.
-      spawnSync(this.tmuxBin, ["start-server"], { stdio: "ignore" });
-      spawnSync(this.tmuxBin, ["set-option", "-g", "escape-time", "10"], { stdio: "ignore" });
+      spawnSync(this.tmuxBin, this._tx(["start-server"]), { stdio: "ignore" });
+      spawnSync(this.tmuxBin, this._tx(["set-option", "-g", "escape-time", "10"]), { stdio: "ignore" });
       this._restore();
     }
+  }
+
+  // Prefix tmux args with a socket so the invocation targets the right server.
+  // New panes use the stable socket (`this.sock`); panes restored from a prior
+  // run keep whatever socket they were created on (a legacy `null` = tmux's
+  // default /tmp socket), so an upgrade reattaches old sessions instead of
+  // abandoning them. Without tmux this is never called.
+  _tx(args, sock = this.sock) {
+    return sock ? ["-S", sock, ...args] : args;
+  }
+
+  _hasSession(id, sock = this.sock) {
+    if (!this.tmux) return false;
+    return (
+      spawnSync(this.tmuxBin, this._tx(["has-session", "-t", "fleet_" + id], sock), { stdio: "ignore" })
+        .status === 0
+    );
   }
 
   // ---- persistence + restore -------------------------------------------
   _persistState() {
     if (!this.stateFile) return;
-    const data = [...this.panes.values()].map((p) => ({
+    const dump = (p, dormant) => ({
       id: p.id,
       session: p.session,
       order: p.order,
@@ -63,10 +101,38 @@ export class PtyManager extends EventEmitter {
       cmd: p.cmd,
       followUp: p.followUp,
       createdAt: p.createdAt,
-    }));
+      sock: p.sock ?? null,
+      dormant,
+      sessionAlive: dormant ? !!p.sessionAlive : undefined,
+    });
+    const data = [
+      ...[...this.panes.values()].map((p) => dump(p, false)),
+      ...[...this.dormant.values()].map((p) => dump(p, true)),
+    ];
     try {
       writeFileSync(this.stateFile, JSON.stringify(data, null, 2));
     } catch {}
+  }
+
+  _blankPane(m) {
+    return {
+      id: m.id,
+      cwd: m.cwd,
+      cmd: m.cmd,
+      session: m.session || null,
+      order: m.order ?? this.seq,
+      // Pre-upgrade entries have no `sock` → null = tmux's default socket, where
+      // sessions from the old code still live, so we can reattach them.
+      sock: m.sock !== undefined ? m.sock : null,
+      pty: null,
+      buffer: "",
+      clients: new Set(),
+      attention: { waiting: false, kind: null },
+      followUp: !!m.followUp,
+      createdAt: m.createdAt || Date.now(),
+      sessionAlive: false,
+      _intentional: false,
+    };
   }
 
   _restore() {
@@ -78,30 +144,35 @@ export class PtyManager extends EventEmitter {
       return;
     }
     let restored = 0;
+    let dormant = 0;
     for (const m of saved) {
-      const alive =
-        spawnSync(this.tmuxBin, ["has-session", "-t", "fleet_" + m.id], { stdio: "ignore" })
-          .status === 0;
-      if (!alive) continue; // its tmux session is gone — drop it
-      const pane = {
-        id: m.id,
-        cwd: m.cwd,
-        cmd: m.cmd,
-        session: m.session || null,
-        order: m.order ?? this.seq,
-        pty: null,
-        buffer: "",
-        clients: new Set(),
-        attention: { waiting: false, kind: null },
-        followUp: !!m.followUp,
-        createdAt: m.createdAt || Date.now(),
-      };
-      this._bridge(pane);
-      this.panes.set(pane.id, pane);
+      const pane = this._blankPane(m);
       if (pane.order >= this.seq) this.seq = pane.order + 1;
-      restored++;
+      const alive = this._hasSession(m.id, pane.sock);
+
+      if (m.dormant) {
+        // Was already set aside / dead. Keep it dormant; just re-check liveness.
+        pane.sessionAlive = alive;
+        this.dormant.set(pane.id, pane);
+        dormant++;
+        continue;
+      }
+      if (alive) {
+        this._bridge(pane);
+        this.panes.set(pane.id, pane);
+        restored++;
+      } else {
+        // Its tmux session is gone — DON'T drop it (that loses the only way to
+        // bring the terminal back). Keep it dormant so the UI can offer respawn.
+        pane.sessionAlive = false;
+        this.dormant.set(pane.id, pane);
+        dormant++;
+      }
     }
-    if (restored) console.log(`[fleetview] reattached ${restored} terminal(s) from tmux.`);
+    if (restored || dormant)
+      console.log(
+        `[fleetview] reattached ${restored} terminal(s); ${dormant} dormant (recoverable) from a prior run.`
+      );
     this._persistState();
   }
 
@@ -114,7 +185,7 @@ export class PtyManager extends EventEmitter {
       TERM: "xterm-256color",
     };
     const term = this.tmux
-      ? pty.spawn(this.tmuxBin, ["attach-session", "-t", "fleet_" + pane.id], {
+      ? pty.spawn(this.tmuxBin, this._tx(["attach-session", "-t", "fleet_" + pane.id], pane.sock), {
           name: "xterm-256color",
           cols: 80,
           rows: 24,
@@ -133,10 +204,52 @@ export class PtyManager extends EventEmitter {
       for (const ws of pane.clients) safeSend(ws, { t: "d", d });
     });
     term.onExit(() => {
+      // An intentional teardown (× close, or set-aside on Replace) has already
+      // moved this pane to its final home — don't touch it again here.
+      if (pane._intentional) return;
+      // Unexpected: the bridge died because the tmux session vanished (server
+      // torn down, `exit` typed, etc). Keep the pane as dormant so the user can
+      // bring it back instead of silently losing it.
       this.panes.delete(pane.id);
+      pane.pty = null;
+      pane.clients = new Set();
+      pane.buffer = "";
+      pane.sessionAlive = this._hasSession(pane.id, pane.sock);
+      this.dormant.set(pane.id, pane);
       this._persistState();
-      this.emit("exit", pane.id, pane.session);
+      this.emit("died", pane.id, pane.session, this._dormantInfo(pane));
     });
+  }
+
+  _newTmuxSession(id, dir, sock = this.sock) {
+    const name = "fleet_" + id;
+    // Detached session running the login shell, in the chosen dir, with the
+    // FLEET_* breadcrumbs the Claude Code hooks read. `-e` sets the session env.
+    spawnSync(
+      this.tmuxBin,
+      this._tx([
+        "new-session", "-d", "-s", name, "-x", "220", "-y", "50", "-c", dir,
+        "-e", "FLEET_PANE_ID=" + id, "-e", "FLEET_PORT=" + this.port,
+      ], sock),
+      { stdio: "ignore" }
+    );
+    // Make it transparent: no status bar, no prefix key stealing input.
+    for (const opt of [["status", "off"], ["prefix", "None"], ["prefix2", "None"]]) {
+      spawnSync(this.tmuxBin, this._tx(["set-option", "-t", name, ...opt], sock), { stdio: "ignore" });
+    }
+  }
+
+  _runStartup(pane) {
+    if (!pane.cmd) return;
+    setTimeout(() => {
+      if (this.tmux) {
+        spawnSync(this.tmuxBin, this._tx(["send-keys", "-t", "fleet_" + pane.id, pane.cmd, "Enter"], pane.sock), { stdio: "ignore" });
+      } else {
+        try {
+          pane.pty.write(pane.cmd + "\r");
+        } catch {}
+      }
+    }, 350);
   }
 
   create({ cwd, cmd, session } = {}) {
@@ -157,40 +270,61 @@ export class PtyManager extends EventEmitter {
       attention: { waiting: false, kind: null },
       followUp: false,
       createdAt: Date.now(),
+      sock: this.sock, // new sessions always live on the stable socket
+      sessionAlive: false,
+      _intentional: false,
     };
 
-    if (this.tmux) {
-      const name = "fleet_" + id;
-      // Detached session running the login shell, in the chosen dir, with the
-      // FLEET_* breadcrumbs the Claude Code hooks read. `-e` sets the session env.
-      spawnSync(
-        this.tmuxBin,
-        ["new-session", "-d", "-s", name, "-x", "220", "-y", "50", "-c", dir,
-         "-e", "FLEET_PANE_ID=" + id, "-e", "FLEET_PORT=" + this.port],
-        { stdio: "ignore" }
-      );
-      // Make it transparent: no status bar, no prefix key stealing input.
-      for (const opt of [["status", "off"], ["prefix", "None"], ["prefix2", "None"]]) {
-        spawnSync(this.tmuxBin, ["set-option", "-t", name, ...opt], { stdio: "ignore" });
-      }
-    }
-
+    if (this.tmux) this._newTmuxSession(id, dir, this.sock);
     this._bridge(pane);
     this.panes.set(id, pane);
-
-    if (startup) {
-      setTimeout(() => {
-        if (this.tmux) {
-          spawnSync(this.tmuxBin, ["send-keys", "-t", "fleet_" + id, startup, "Enter"], { stdio: "ignore" });
-        } else {
-          try {
-            pane.pty.write(startup + "\r");
-          } catch {}
-        }
-      }, 350);
-    }
+    this._runStartup(pane);
     this._persistState();
     return pane;
+  }
+
+  /**
+   * Bring a dormant pane back. If its tmux session is still alive (it was set
+   * aside, not killed) we just re-attach — the Claude session and its full state
+   * are preserved. If the session is gone we spawn a fresh one in the same folder
+   * and re-run its command.
+   */
+  respawn(id) {
+    const pane = this.dormant.get(id);
+    if (!pane) return null;
+    const alive = this._hasSession(id, pane.sock);
+    const fresh = this.tmux && !alive;
+    if (fresh) {
+      // A dead session is recreated on the stable socket — migrating it forward
+      // off any legacy default-socket location it used to live on.
+      pane.sock = this.sock;
+      this._newTmuxSession(id, pane.cwd, this.sock);
+    }
+
+    pane._intentional = false;
+    pane.pty = null;
+    pane.buffer = "";
+    pane.clients = new Set();
+    pane.attention = { waiting: false, kind: null };
+    this._bridge(pane);
+    this.dormant.delete(id);
+    this.panes.set(id, pane);
+    // Only (re-)run the command on a fresh session; a reattach already has it.
+    if (fresh || !this.tmux) this._runStartup(pane);
+    this._persistState();
+    return this.info(id);
+  }
+
+  /** Drop a dormant pane for good (user chose not to recover it). */
+  discardDormant(id) {
+    const pane = this.dormant.get(id);
+    if (!pane) return;
+    if (this.tmux) {
+      // If its session was merely set aside (still alive), kill it now.
+      spawnSync(this.tmuxBin, this._tx(["kill-session", "-t", "fleet_" + id], pane.sock), { stdio: "ignore" });
+    }
+    this.dormant.delete(id);
+    this._persistState();
   }
 
   attach(id, ws) {
@@ -236,23 +370,54 @@ export class PtyManager extends EventEmitter {
   }
 
   setFollowUp(id, on) {
-    const pane = this.panes.get(id);
+    const pane = this.panes.get(id) || this.dormant.get(id);
     if (!pane) return;
     pane.followUp = !!on;
     this._persistState();
   }
 
+  /** User closed the pane (×) — destroy it for good. */
   kill(id) {
     const pane = this.panes.get(id);
-    if (!pane) return;
+    if (!pane) {
+      // Closing a pane that's already dormant just discards it.
+      if (this.dormant.has(id)) this.discardDormant(id);
+      return;
+    }
+    pane._intentional = true; // stop onExit from resurrecting it as dormant
     if (this.tmux) {
-      spawnSync(this.tmuxBin, ["kill-session", "-t", "fleet_" + id], { stdio: "ignore" });
+      spawnSync(this.tmuxBin, this._tx(["kill-session", "-t", "fleet_" + id], pane.sock), { stdio: "ignore" });
     }
     try {
       pane.pty.kill();
     } catch {}
     this.panes.delete(id);
     this._persistState();
+  }
+
+  /**
+   * Set a pane aside without killing its work (used by layout "Replace"). The
+   * tmux session keeps running detached; the pane goes dormant and can be
+   * respawned later with its Claude session fully intact. Without tmux there's
+   * nothing to detach, so it behaves like a recoverable (but fresh-on-respawn)
+   * dormant pane.
+   */
+  setAside(id) {
+    const pane = this.panes.get(id);
+    if (!pane) return null;
+    pane._intentional = true; // detaching kills the bridge pty; don't double-handle
+    const alive = this._hasSession(id, pane.sock);
+    try {
+      pane.pty.kill(); // kills the attach client → detaches; tmux session lives on
+    } catch {}
+    this.panes.delete(id);
+    pane.pty = null;
+    pane.clients = new Set();
+    pane.buffer = "";
+    pane.sessionAlive = alive;
+    this.dormant.set(id, pane);
+    this._persistState();
+    return this._dormantInfo(pane);
   }
 
   info(id) {
@@ -269,8 +434,21 @@ export class PtyManager extends EventEmitter {
     };
   }
 
+  _dormantInfo(p) {
+    return {
+      id: p.id,
+      cwd: p.cwd,
+      cmd: p.cmd,
+      session: p.session,
+      followUp: p.followUp,
+      createdAt: p.createdAt,
+      order: p.order,
+      sessionAlive: !!p.sessionAlive,
+    };
+  }
+
   sessionOf(id) {
-    return this.panes.get(id)?.session ?? null;
+    return (this.panes.get(id) || this.dormant.get(id))?.session ?? null;
   }
 
   idsOf(session) {
@@ -293,6 +471,13 @@ export class PtyManager extends EventEmitter {
       .filter((p) => session === undefined || p.session === session)
       .sort((a, b) => a.order - b.order)
       .map((p) => this.info(p.id));
+  }
+
+  dormantList(session) {
+    return [...this.dormant.values()]
+      .filter((p) => session === undefined || p.session === session)
+      .sort((a, b) => a.order - b.order)
+      .map((p) => this._dormantInfo(p));
   }
 }
 

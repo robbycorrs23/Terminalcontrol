@@ -7,6 +7,7 @@ const scrim = document.getElementById("scrim")!;
 const tray = document.getElementById("tray")!;
 const queueEl = document.getElementById("queue")!;
 const followupsEl = document.getElementById("followups")!;
+const recoveryEl = document.getElementById("recovery")!;
 const nextBtn = document.getElementById("nextBtn") as HTMLButtonElement;
 const layoutSel = document.getElementById("layoutSel") as HTMLSelectElement;
 
@@ -24,10 +25,15 @@ const SESSION = (() => {
 
 const currentEl = document.getElementById("current")!;
 
+type DormantInfo = PaneInfo & { sessionAlive?: boolean };
+
 const terms = new Map<string, Term>();
 const queue: string[] = []; // pane ids waiting on the user, in arrival order
 const minimized = new Set<string>(); // pane ids currently in the tray
 const flagged = new Set<string>(); // pane ids marked for follow-up
+// Terminals whose tmux session died or was set aside (Replace). Kept here so the
+// user can bring them back instead of losing them — they show as recovery chips.
+const dormant = new Map<string, DormantInfo>();
 let zoomed: Term | null = null;
 let suppressNextOpen = false; // set after a drag so the trailing click doesn't zoom
 let currentLayout: string | null = sessionStorage.getItem("fleet-current-layout");
@@ -387,6 +393,70 @@ function renderFollowups() {
   }
 }
 
+// ---- Recovery (dormant terminals) -------------------------------------
+// A pane becomes dormant when its tmux session dies (crash / long system sleep)
+// or when a layout "Replace" sets it aside. We never silently drop it: it shows
+// as a recovery chip so its terminal can be brought back. Chips that were merely
+// set aside (sessionAlive) restore the live Claude session intact; ones whose
+// session died respawn a fresh shell in the same folder.
+function markDormant(info: DormantInfo) {
+  if (terms.has(info.id)) removeTerm(info.id); // it was on screen — take it off
+  dormant.set(info.id, info);
+  renderRecovery();
+}
+function undormant(id: string) {
+  if (dormant.delete(id)) renderRecovery();
+}
+async function respawnPane(id: string) {
+  const info = dormant.get(id);
+  if (!info) return;
+  undormant(id); // optimistic; the server's "created" broadcast adds the box back
+  await fetch(`/api/panes/${id}/respawn`, { method: "POST" });
+}
+async function respawnAll() {
+  for (const id of [...dormant.keys()]) await respawnPane(id);
+}
+async function discardPane(id: string) {
+  undormant(id);
+  await fetch(`/api/dormant/${id}`, { method: "DELETE" });
+}
+function renderRecovery() {
+  recoveryEl.innerHTML = "";
+  if (dormant.size === 0) return;
+  const label = document.createElement("span");
+  label.className = "rec-label";
+  label.textContent = "⏎ recover:";
+  recoveryEl.append(label);
+  for (const info of dormant.values()) {
+    const chip = document.createElement("span");
+    chip.className = "rchip recover" + (info.sessionAlive ? " alive" : "");
+    chip.title = info.sessionAlive
+      ? `${info.cwd} — set aside, click to restore (Claude session intact)`
+      : `${info.cwd} — terminal died, click to respawn a fresh shell here`;
+    const name = document.createElement("span");
+    name.className = "rname";
+    name.textContent = basenameOf(info.cwd);
+    name.onclick = () => respawnPane(info.id);
+    const x = document.createElement("span");
+    x.className = "rx";
+    x.title = "Discard — don't recover this terminal";
+    x.textContent = "✕";
+    x.onclick = (e) => {
+      e.stopPropagation();
+      discardPane(info.id);
+    };
+    chip.append(name, x);
+    recoveryEl.append(chip);
+  }
+  if (dormant.size > 1) {
+    const all = document.createElement("button");
+    all.className = "rec-all";
+    all.textContent = `Recover all (${dormant.size})`;
+    all.onclick = () => respawnAll();
+    recoveryEl.append(all);
+  }
+}
+
 // ---- Folder picker ----------------------------------------------------
 const picker = document.getElementById("picker") as HTMLElement;
 const crumbsEl = document.getElementById("crumbs")!;
@@ -599,10 +669,20 @@ function connectControl() {
         for (const info of m.panes as PaneInfo[]) addTerm(info);
         break;
       case "created":
+        undormant(m.pane.id); // a respawn lands here — drop its recovery chip
         addTerm(m.pane);
         break;
       case "closed":
         removeTerm(m.pane);
+        break;
+      case "dormant":
+        for (const info of m.dormant as DormantInfo[]) markDormant(info);
+        break;
+      case "died":
+        markDormant(m.pane as DormantInfo);
+        break;
+      case "discarded":
+        undormant(m.pane);
         break;
       case "attention":
         onAttention(m.pane, m.kind);
@@ -680,7 +760,14 @@ document.getElementById("openBtn")!.addEventListener("click", () => {
     return;
   }
   pendingOpen = name;
-  omMsg.innerHTML = `Open <b>${name}</b> — add its terminals to this window, or replace what's open here?`;
+  const n = terms.size;
+  const live = [...terms.values()].filter((t) => t.info.cmd?.includes("claude")).length;
+  const livePart = live ? ` (${live} running <code>claude</code>)` : "";
+  omMsg.innerHTML =
+    `Open <b>${name}</b> — <b>Add</b> its terminals alongside the ${n} here, ` +
+    `or <b>Replace</b>?<br><span class="omnote">Replace sets aside the current ` +
+    `${n} terminal${n === 1 ? "" : "s"}${livePart}; they keep running and stay ` +
+    `recoverable from the <b>⏎ recover</b> bar, so this won't lose your work.</span>`;
   openmode.hidden = false;
 });
 document.getElementById("omCancel")!.addEventListener("click", () => {

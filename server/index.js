@@ -49,6 +49,9 @@ function broadcastAll(msg) {
 }
 ptys.on("attention", (pane, kind) => broadcast(ptys.sessionOf(pane), { t: "attention", pane, kind }));
 ptys.on("exit", (pane, session) => broadcast(session, { t: "closed", pane }));
+// A pane's tmux session vanished unexpectedly — it's now dormant (recoverable),
+// not gone. Tell the window so it can offer a respawn instead of dropping the box.
+ptys.on("died", (pane, session, info) => broadcast(session, { t: "died", pane: info }));
 
 // Dropped images are written here so Claude can read them by absolute path —
 // the same contract as dragging a file into a native terminal.
@@ -63,6 +66,26 @@ app.use(express.json({ limit: "30mb" }));
 
 // --- Panes ---------------------------------------------------------------
 app.get("/api/panes", (req, res) => res.json(ptys.list(req.query.session)));
+
+// Dormant panes: ones whose terminal died or was set aside, kept so the user can
+// bring them back. `sessionAlive` says whether respawn will restore the live
+// Claude session (true) or start a fresh shell in the same folder (false).
+app.get("/api/dormant", (req, res) => res.json(ptys.dormantList(req.query.session)));
+
+app.post("/api/panes/:id/respawn", (req, res) => {
+  const info = ptys.respawn(req.params.id);
+  if (!info) return res.status(404).json({ error: "no such dormant pane" });
+  layouts.addRecent(info.cwd);
+  broadcast(info.session, { t: "created", pane: info });
+  res.json(info);
+});
+
+app.delete("/api/dormant/:id", (req, res) => {
+  const session = ptys.sessionOf(req.params.id);
+  ptys.discardDormant(req.params.id);
+  broadcast(session, { t: "discarded", pane: req.params.id });
+  res.status(204).end();
+});
 
 app.post("/api/panes", (req, res) => {
   const { cwd, cmd, session } = req.body || {};
@@ -170,11 +193,13 @@ app.post("/api/layouts/:name/open", (req, res) => {
   if (!layout) return res.status(404).json({ error: "no such layout" });
   const { session, mode } = req.body || {};
 
-  // "overwrite" clears this window's existing terminals first; "add" keeps them.
+  // "overwrite" sets this window's existing terminals aside (non-destructively —
+  // their tmux sessions keep running and land in the dormant/recovery list, so a
+  // mis-click on Replace can be undone); "add" keeps them on screen.
   if (mode === "overwrite") {
     for (const id of ptys.idsOf(session)) {
-      ptys.kill(id);
-      broadcast(session, { t: "closed", pane: id });
+      const info = ptys.setAside(id);
+      if (info) broadcast(session, { t: "died", pane: info });
     }
   }
 
@@ -222,8 +247,10 @@ server.on("upgrade", (req, socket, head) => {
           }
         } catch {}
       });
-      // Hand the new browser only its own window's terminals.
+      // Hand the new browser only its own window's terminals, plus any dormant
+      // (recoverable) panes so a refresh after a crash/sleep offers to bring them back.
       ws.send(JSON.stringify({ t: "panes", panes: ptys.list(session) }));
+      ws.send(JSON.stringify({ t: "dormant", dormant: ptys.dormantList(session) }));
     });
   } else if (url.pathname === "/term") {
     const id = url.searchParams.get("pane");
