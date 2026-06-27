@@ -6,6 +6,7 @@ const grid = document.getElementById("grid")!;
 const scrim = document.getElementById("scrim")!;
 const tray = document.getElementById("tray")!;
 const queueEl = document.getElementById("queue")!;
+const followupsEl = document.getElementById("followups")!;
 const nextBtn = document.getElementById("nextBtn") as HTMLButtonElement;
 const layoutSel = document.getElementById("layoutSel") as HTMLSelectElement;
 
@@ -26,6 +27,7 @@ const currentEl = document.getElementById("current")!;
 const terms = new Map<string, Term>();
 const queue: string[] = []; // pane ids waiting on the user, in arrival order
 const minimized = new Set<string>(); // pane ids currently in the tray
+const flagged = new Set<string>(); // pane ids marked for follow-up
 let zoomed: Term | null = null;
 let suppressNextOpen = false; // set after a drag so the trailing click doesn't zoom
 let currentLayout: string | null = sessionStorage.getItem("fleet-current-layout");
@@ -38,6 +40,16 @@ const host: TermHost = {
   },
   onClose: (t) => closeTerm(t.id),
   onMinimize: (t) => minimize(t),
+  onToggleFollowUp: (t) => {
+    const on = !t.isFlagged();
+    t.setFollowUp(on); // optimistic; server broadcast confirms
+    setFlagged(t.id, on);
+    fetch(`/api/panes/${t.id}/followup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ on }),
+    });
+  },
 };
 
 // ---- Grid -------------------------------------------------------------
@@ -51,6 +63,7 @@ function addTerm(info: PaneInfo): Term {
   enableDrag(t);
   reflow();
   if (info.attention?.waiting) enqueue(info.id, info.attention.kind || "question");
+  if (info.followUp) setFlagged(info.id, true);
   return t;
 }
 
@@ -61,6 +74,8 @@ function removeTerm(id: string) {
   t.dispose();
   terms.delete(id);
   minimized.delete(id);
+  flagged.delete(id);
+  renderFollowups();
   dequeue(id);
   renderTray();
   reflow();
@@ -352,6 +367,26 @@ function basenameOf(p: string): string {
   return parts[parts.length - 1] || p;
 }
 
+function setFlagged(id: string, on: boolean) {
+  if (on) flagged.add(id);
+  else flagged.delete(id);
+  renderFollowups();
+}
+
+function renderFollowups() {
+  followupsEl.innerHTML = "";
+  for (const id of flagged) {
+    const t = terms.get(id);
+    if (!t) continue;
+    const chip = document.createElement("span");
+    chip.className = "fchip";
+    chip.textContent = basenameOf(t.info.cwd);
+    chip.title = "Follow-up — click to jump";
+    chip.onclick = () => zoom(t);
+    followupsEl.append(chip);
+  }
+}
+
 // ---- Folder picker ----------------------------------------------------
 const picker = document.getElementById("picker") as HTMLElement;
 const crumbsEl = document.getElementById("crumbs")!;
@@ -575,6 +610,12 @@ function connectControl() {
       case "cleared":
         setCleared(m.pane);
         break;
+      case "followup": {
+        const t = terms.get(m.pane);
+        if (t) t.setFollowUp(m.on);
+        setFlagged(m.pane, m.on);
+        break;
+      }
       case "layouts":
         loadLayouts(); // a layout was saved/removed in some window
         break;
