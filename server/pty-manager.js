@@ -90,6 +90,39 @@ export class PtyManager extends EventEmitter {
     );
   }
 
+  // Block synchronously without burning CPU (constructor-time only).
+  _sleepSync(ms) {
+    try {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    } catch {
+      const end = Date.now() + ms;
+      while (Date.now() < end) {}
+    }
+  }
+
+  /**
+   * Liveness check used during restore. A single has-session can transiently
+   * fail right after the tmux server (re)starts or while many clients are
+   * detaching at once — concluding "dead" then would wrongly demote a live
+   * terminal to dormant. So we retry, but ONLY when the failure looks like the
+   * server isn't reachable yet; a clean "can't find session" (server answered,
+   * session genuinely absent) returns dead immediately, keeping startup fast.
+   */
+  _aliveAtRestore(id, sock) {
+    if (!this.tmux) return false;
+    const tries = 5;
+    for (let i = 0; i < tries; i++) {
+      const r = spawnSync(this.tmuxBin, this._tx(["has-session", "-t", "fleet_" + id], sock), { stdio: "pipe" });
+      if (r.status === 0) return true;
+      const err = (r.stderr || "").toString().toLowerCase();
+      const serverUnreachable =
+        !!r.error || err === "" || err.includes("no server") || err.includes("error connecting") || err.includes("no such file");
+      if (!serverUnreachable) return false; // server answered: session is really gone
+      if (i < tries - 1) this._sleepSync(200);
+    }
+    return false;
+  }
+
   // ---- persistence + restore -------------------------------------------
   _persistState() {
     if (!this.stateFile) return;
@@ -148,7 +181,7 @@ export class PtyManager extends EventEmitter {
     for (const m of saved) {
       const pane = this._blankPane(m);
       if (pane.order >= this.seq) this.seq = pane.order + 1;
-      const alive = this._hasSession(m.id, pane.sock);
+      const alive = this._aliveAtRestore(m.id, pane.sock);
 
       if (m.dormant) {
         // Was already set aside / dead. Keep it dormant; just re-check liveness.
