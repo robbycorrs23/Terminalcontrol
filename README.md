@@ -6,8 +6,9 @@ and it flies home. Run a `claude` in each box — when one **needs your approval
 asks a question**, its box glows and dings, and a chip appears in the top bar so
 you can jump straight to it.
 
-It's a local tool: the server spawns real shells on your Mac (via `node-pty`), so
-it runs on `localhost`, not in the cloud.
+It's a local tool: the server spawns real shells on your machine (macOS or Linux,
+via `node-pty`) and binds to `localhost` only — it's not meant for the cloud or a
+shared network. See [Security](#security) before changing that.
 
 ## Quick start
 
@@ -20,6 +21,23 @@ Open **http://localhost:4280**. Click **+ Terminal**, pick a folder, and a shell
 opens there running `claude` (untick "run claude" for a plain shell).
 
 To run on a different port: `FLEET_PORT=5000 npm run go`.
+
+## Security
+
+FleetView spawns **real shells with no authentication**: anything that can reach
+its port can run arbitrary commands on the host. To contain that, the server
+**binds to `127.0.0.1` (loopback) by default**, so only programs on this machine
+can connect.
+
+Do not expose it to a network. If you knowingly need LAN access (trusted,
+firewalled network only), opt in explicitly:
+
+```bash
+FLEET_HOST=0.0.0.0 npm run go   # reachable from the network — you accept the risk
+```
+
+It prints a warning when bound to anything other than loopback. There is still no
+auth, so put it behind a VPN/SSH tunnel/reverse proxy if you go this route.
 
 ## Interactions
 

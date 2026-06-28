@@ -11,6 +11,11 @@ import { ensureHooks } from "./setup-hooks.js";
 import { listDirs, makeDir } from "./fs-browse.js";
 
 const PORT = Number(process.env.FLEET_PORT) || 4280;
+// Bind to loopback by default. This server spawns REAL shells with NO auth, so a
+// process that can reach the port can run arbitrary commands on this machine —
+// it must never be exposed to the network casually. Opt in explicitly (e.g.
+// FLEET_HOST=0.0.0.0) only on a trusted/firewalled network, and understand the risk.
+const HOST = process.env.FLEET_HOST || "127.0.0.1";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const DIST = join(ROOT, "dist");
@@ -260,6 +265,13 @@ server.on("upgrade", (req, socket, head) => {
   }
 });
 
-server.listen(PORT, () => {
+const isLoopback = HOST === "127.0.0.1" || HOST === "::1" || HOST === "localhost";
+server.listen(PORT, HOST, () => {
   console.log(`\n  ▦ FleetView → http://localhost:${PORT}\n`);
+  if (!isLoopback) {
+    console.warn(
+      `  ⚠ Listening on ${HOST} — reachable from the network. This server runs\n` +
+        `    shells with no authentication; anyone who can reach it gets a shell.\n`
+    );
+  }
 });
