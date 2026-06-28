@@ -1,5 +1,6 @@
 import { Term, PaneInfo, TermHost } from "./terminal";
 import { play } from "./sound";
+import { setTabAttention } from "./tab";
 import { getAppearance, setAppearance, xtermTheme, xtermFontSize } from "./theme";
 
 const grid = document.getElementById("grid")!;
@@ -362,6 +363,16 @@ function renderQueue() {
     queueEl.append(chip);
   }
   nextBtn.hidden = queue.length === 0;
+
+  // Mirror the waiting state in the browser tab (title + favicon dot) so it's
+  // visible even when FleetView isn't the focused tab. queue[0] is the oldest
+  // waiter — the same one "Jump to next" goes to.
+  const head = queue[0] ? terms.get(queue[0]) : undefined;
+  setTabAttention(
+    queue.length,
+    head ? basenameOf(head.info.cwd) : "",
+    head ? head.waitingKind() : null
+  );
 }
 nextBtn.onclick = () => {
   const t = queue[0] && terms.get(queue[0]);
@@ -900,3 +911,4 @@ connectControl();
 loadLayouts();
 loadPrefs();
 setCurrentLayout(currentLayout); // restore the indicator after a refresh
+renderQueue(); // draw the idle favicon / base title before any attention arrives
