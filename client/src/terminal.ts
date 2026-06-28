@@ -36,6 +36,9 @@ export class Term {
   private fit: FitAddon;
   private ws?: WebSocket;
   private ro: ResizeObserver;
+  private reconnectTimer?: number;
+  private connectedOnce = false; // have we ever had an open socket?
+  private disposed = false;
 
   constructor(info: PaneInfo, host: TermHost) {
     this.id = info.id;
@@ -125,14 +128,69 @@ export class Term {
   }
 
   private connect() {
+    if (this.disposed) return;
+    // On a reconnect the box already shows the old output; the server replays the
+    // full scrollback on attach, so clear first to avoid stacking it on top.
+    if (this.connectedOnce) {
+      try {
+        this.term.reset();
+      } catch {}
+    }
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/term?pane=${this.id}`);
-    ws.onopen = () => this.refit();
+    this.ws = ws;
+    ws.onopen = () => {
+      this.connectedOnce = true;
+      this.refit();
+    };
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
       if (m.t === "d") this.term.write(m.d);
     };
-    this.ws = ws;
+    // The PTY socket previously never reconnected, so after the laptop slept
+    // (which silently kills the socket) the box looked alive but its terminal was
+    // dead until a manual page refresh. Reconnect on drop; the server replays
+    // scrollback on re-attach, repainting the screen.
+    ws.onclose = () => {
+      if (this.ws === ws) this.scheduleReconnect();
+    };
+    ws.onerror = () => {
+      try {
+        ws.close();
+      } catch {}
+    };
+  }
+
+  private scheduleReconnect(delay = 1000) {
+    if (this.disposed || this.reconnectTimer != null) return;
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = undefined;
+      this.connect();
+    }, delay);
+  }
+
+  /**
+   * Drop the current socket and reconnect immediately. Used when the page wakes
+   * from sleep: the socket may be a "zombie" (readyState still OPEN but actually
+   * dead), so we can't trust it — tear it down and re-attach to be sure I/O flows.
+   */
+  reconnectNow() {
+    if (this.disposed) return;
+    if (this.reconnectTimer != null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    const old = this.ws;
+    if (old) {
+      old.onclose = null; // we're reconnecting ourselves; don't double-schedule
+      old.onerror = null;
+      old.onmessage = null;
+      try {
+        old.close();
+      } catch {}
+    }
+    this.ws = undefined;
+    this.connect();
   }
 
   private send(m: unknown) {
@@ -259,10 +317,15 @@ export class Term {
   }
 
   dispose() {
+    this.disposed = true; // stop any pending/!future reconnect
+    if (this.reconnectTimer != null) clearTimeout(this.reconnectTimer);
     this.ro.disconnect();
-    try {
-      this.ws?.close();
-    } catch {}
+    if (this.ws) {
+      this.ws.onclose = null; // closing on purpose — don't trigger a reconnect
+      try {
+        this.ws.close();
+      } catch {}
+    }
     this.term.dispose();
     this.cell.remove();
   }

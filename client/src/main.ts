@@ -659,15 +659,23 @@ picker.addEventListener("click", (e) => {
 });
 
 // ---- Control socket (grid-level events) -------------------------------
+let controlWs: WebSocket | null = null;
 function connectControl() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/control?session=${encodeURIComponent(SESSION)}`);
+  controlWs = ws;
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     switch (m.t) {
-      case "panes":
+      case "panes": {
+        // Authoritative snapshot of this window's live terminals (sent on every
+        // connect). Add new ones and drop any box the server no longer has —
+        // e.g. a terminal closed while we were asleep.
+        const live = new Set((m.panes as PaneInfo[]).map((p) => p.id));
         for (const info of m.panes as PaneInfo[]) addTerm(info);
+        for (const id of [...terms.keys()]) if (!live.has(id)) removeTerm(id);
         break;
+      }
       case "created":
         undormant(m.pane.id); // a respawn lands here — drop its recovery chip
         addTerm(m.pane);
@@ -701,8 +709,53 @@ function connectControl() {
         break;
     }
   };
-  ws.onclose = () => setTimeout(connectControl, 1500);
+  ws.onclose = () => {
+    if (controlWs === ws) {
+      controlWs = null;
+      setTimeout(connectControl, 1500);
+    }
+  };
 }
+
+function reconnectControl() {
+  const old = controlWs;
+  if (old) {
+    old.onclose = null; // reconnecting ourselves; don't double-schedule
+    try {
+      old.close();
+    } catch {}
+  }
+  controlWs = null;
+  connectControl();
+}
+
+// Laptop sleep silently freezes every WebSocket; on wake they can be dead
+// "zombies" (still readyState OPEN) so the page looks live but nothing flows
+// until a manual refresh. Re-establish the control socket and every terminal.
+function recoverConnections() {
+  reconnectControl();
+  for (const t of terms.values()) t.reconnectNow();
+}
+
+// Detect a wake via a heartbeat: if the interval didn't fire for far longer than
+// its period, the machine was suspended (lid closed). This only triggers on a
+// real sleep, not ordinary tab switches, so it won't cause needless reconnect
+// flicker. `online`/`pageshow` are extra nudges for network blips / bfcache.
+let lastHeartbeat = Date.now();
+setInterval(() => {
+  const now = Date.now();
+  if (now - lastHeartbeat > 15000) recoverConnections();
+  lastHeartbeat = now;
+}, 5000);
+addEventListener("online", () => recoverConnections());
+addEventListener("pageshow", (e) => {
+  if ((e as PageTransitionEvent).persisted) recoverConnections();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && controlWs?.readyState !== WebSocket.OPEN) {
+    recoverConnections();
+  }
+});
 
 // ---- Current layout + autosave ----------------------------------------
 function setCurrentLayout(name: string | null) {
