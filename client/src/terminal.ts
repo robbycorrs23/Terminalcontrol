@@ -9,6 +9,7 @@ export interface PaneInfo {
   cmd: string;
   attention?: { waiting: boolean; kind: "question" | "done" | null };
   followUp?: boolean;
+  lastInput?: string;
   createdAt: number;
 }
 
@@ -31,6 +32,7 @@ export class Term {
   el: HTMLElement; // the .term box (this is what zooms/drags)
   titleBar: HTMLElement; // drag handle
   private xtEl: HTMLElement;
+  private pinnedEl: HTMLElement; // pinned "last prompt you sent" strip
   private badgeSlot: HTMLElement;
   private term: Xterm;
   private fit: FitAddon;
@@ -60,8 +62,10 @@ export class Term {
       basename(info.cwd);
     (this.titleBar.querySelector(".path") as HTMLElement).title = info.cwd;
     this.badgeSlot = this.titleBar.querySelector(".badge-slot") as HTMLElement;
+    this.pinnedEl = el("div", "pinned");
+    this.pinnedEl.hidden = true;
     this.xtEl = el("div", "xt");
-    this.el.append(this.titleBar, this.xtEl);
+    this.el.append(this.titleBar, this.pinnedEl, this.xtEl);
     this.cell.append(this.el);
 
     this.term = new Xterm({
@@ -125,6 +129,17 @@ export class Term {
       this.setWaiting(true, info.attention.kind);
     }
     if (info.followUp) this.setFollowUp(true);
+    if (info.lastInput) this.setLastInput(info.lastInput);
+  }
+
+  /** Pin the last prompt sent to this window's Claude (from the server). */
+  setLastInput(text: string) {
+    this.info.lastInput = text;
+    const clean = (text || "").replace(/\s+/g, " ").trim();
+    this.pinnedEl.hidden = !clean;
+    this.pinnedEl.textContent = clean;
+    this.pinnedEl.title = text || ""; // full prompt on hover
+    this.refit(); // the strip changed the terminal's available height
   }
 
   private connect() {

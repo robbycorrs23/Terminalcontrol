@@ -703,6 +703,9 @@ function connectControl() {
       case "discarded":
         undormant(m.pane);
         break;
+      case "input":
+        terms.get(m.pane)?.setLastInput(m.text);
+        break;
       case "attention":
         onAttention(m.pane, m.kind);
         break;

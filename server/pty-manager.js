@@ -133,6 +133,7 @@ export class PtyManager extends EventEmitter {
       cwd: p.cwd,
       cmd: p.cmd,
       followUp: p.followUp,
+      lastInput: p.lastInput || "",
       createdAt: p.createdAt,
       sock: p.sock ?? null,
       dormant,
@@ -162,6 +163,7 @@ export class PtyManager extends EventEmitter {
       clients: new Set(),
       attention: { waiting: false, kind: null },
       followUp: !!m.followUp,
+      lastInput: m.lastInput || "",
       createdAt: m.createdAt || Date.now(),
       sessionAlive: false,
       _intentional: false,
@@ -302,6 +304,7 @@ export class PtyManager extends EventEmitter {
       clients: new Set(),
       attention: { waiting: false, kind: null },
       followUp: false,
+      lastInput: "",
       createdAt: Date.now(),
       sock: this.sock, // new sessions always live on the stable socket
       sessionAlive: false,
@@ -409,6 +412,19 @@ export class PtyManager extends EventEmitter {
     this._persistState();
   }
 
+  // The last prompt the user submitted to this pane's Claude (from the
+  // UserPromptSubmit hook). Pinned in the UI so you can see what you last asked.
+  setLastInput(id, text) {
+    const pane = this.panes.get(id) || this.dormant.get(id);
+    if (!pane) return;
+    pane.lastInput = String(text || "").slice(0, 2000);
+    this._persistState();
+  }
+
+  lastInputOf(id) {
+    return (this.panes.get(id) || this.dormant.get(id))?.lastInput || "";
+  }
+
   /** User closed the pane (×) — destroy it for good. */
   kill(id) {
     const pane = this.panes.get(id);
@@ -463,6 +479,7 @@ export class PtyManager extends EventEmitter {
       session: p.session,
       attention: p.attention,
       followUp: p.followUp,
+      lastInput: p.lastInput || "",
       createdAt: p.createdAt,
     };
   }

@@ -295,6 +295,28 @@ body {
   background: var(--flag);
   color: #000;
 }
+/* Pinned "last prompt you sent" strip, directly under the title bar. */
+.term .pinned {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+.term .pinned::before {
+  content: "❯ ";
+  color: var(--accent);
+  font-weight: 700;
+}
+body.big .term .pinned {
+  font-size: 13px;
+}
 .term .xt {
   flex: 1;
   min-height: 0;

@@ -25,6 +25,20 @@ function hookCommand(kind) {
 }
 
 /**
+ * UserPromptSubmit hook: Claude puts the submitted prompt on stdin as JSON, so we
+ * forward stdin verbatim and let the server pull out `.prompt`. The pane id rides
+ * in the query string. Guarded so it's a no-op outside FleetView terminals.
+ */
+function promptHookCommand() {
+  return (
+    '[ -n "$FLEET_PANE_ID" ] && ' +
+    'curl -s -X POST ' +
+    '"http://localhost:${FLEET_PORT:-4280}/hook/prompt?pane=$FLEET_PANE_ID" ' +
+    "-H 'content-type: application/json' --data-binary @- >/dev/null 2>&1 || true"
+  );
+}
+
+/**
  * Idempotently merge the Notification (needs-you) and Stop (turn-finished) hooks
  * into ~/.claude/settings.json. Safe to run every server start: it strips any
  * previously-installed FleetView hooks first, then re-adds the current ones, and
@@ -54,6 +68,15 @@ export function ensureHooks(port = 4280) {
     const kept = existing.filter((g) => !JSON.stringify(g).includes(MARKER));
     kept.push({ hooks: [{ type: "command", command: hookCommand(kind) }] });
     settings.hooks[event] = kept;
+  }
+
+  // UserPromptSubmit uses a different command (forwards the prompt), same
+  // strip-our-own-then-re-add idempotency.
+  {
+    const existing = settings.hooks.UserPromptSubmit || [];
+    const kept = existing.filter((g) => !JSON.stringify(g).includes(MARKER));
+    kept.push({ hooks: [{ type: "command", command: promptHookCommand() }] });
+    settings.hooks.UserPromptSubmit = kept;
   }
 
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

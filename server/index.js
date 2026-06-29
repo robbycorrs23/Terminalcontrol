@@ -227,6 +227,18 @@ app.post("/hook", (req, res) => {
   res.status(204).end();
 });
 
+// UserPromptSubmit hook forwards Claude's raw hook JSON here (the prompt is in
+// `.prompt`); we pin it as this window's "last input".
+app.post("/hook/prompt", (req, res) => {
+  const id = req.query.pane;
+  const prompt = req.body && typeof req.body.prompt === "string" ? req.body.prompt : "";
+  if (id && prompt) {
+    ptys.setLastInput(id, prompt);
+    broadcast(ptys.sessionOf(id), { t: "input", pane: id, text: ptys.lastInputOf(id) });
+  }
+  res.status(204).end();
+});
+
 // --- Static client -------------------------------------------------------
 app.use(express.static(DIST));
 app.get("*", (_req, res) => res.sendFile(join(DIST, "index.html")));
