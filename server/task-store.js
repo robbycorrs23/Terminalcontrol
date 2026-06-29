@@ -27,7 +27,9 @@ export class TaskStore {
     this.tasks = Array.isArray(tasks) ? sanitize(tasks) : [];
     try {
       writeFileSync(this.file, JSON.stringify({ tasks: this.tasks }, null, 2));
-    } catch {}
+    } catch (e) {
+      console.warn(`[fleetview] could not write ${this.file}: ${e.message}`);
+    }
     return this.tasks;
   }
 }

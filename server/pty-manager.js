@@ -145,7 +145,9 @@ export class PtyManager extends EventEmitter {
     ];
     try {
       writeFileSync(this.stateFile, JSON.stringify(data, null, 2));
-    } catch {}
+    } catch (e) {
+      console.warn(`[fleetview] could not write ${this.stateFile}: ${e.message}`);
+    }
   }
 
   _blankPane(m) {
@@ -175,7 +177,12 @@ export class PtyManager extends EventEmitter {
     let saved;
     try {
       saved = JSON.parse(readFileSync(this.stateFile, "utf8"));
-    } catch {
+    } catch (e) {
+      console.warn(`[fleetview] could not read ${this.stateFile} (${e.message}); starting with no restored terminals.`);
+      return;
+    }
+    if (!Array.isArray(saved)) {
+      console.warn(`[fleetview] ${this.stateFile} is not an array; ignoring it.`);
       return;
     }
     let restored = 0;

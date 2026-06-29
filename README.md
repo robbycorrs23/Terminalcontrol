@@ -34,7 +34,7 @@ Needs **Node.js** (macOS or Linux). Three external tools matter:
 `npm run doctor` reports exactly what's missing with the install command for your
 platform, and can install tmux for you (interactive, or set `FLEET_AUTO_INSTALL=1`).
 `npm run go` / `npm start` also run this check on boot and **warn loudly** if a
-dependency is missing — nothing is silently degraded.
+dependency is missing — a missing dependency is never silently ignored.
 
 - **Restart without rebuilding:** `npm start` (serves the existing `dist/`).
   `npm run go` rebuilds the client every time — use it after client changes or a
@@ -177,7 +177,7 @@ launchd/systemd hand it a minimal PATH and it can't find tmux/claude/curl). Pass
 ## Architecture
 
 ```
-Browser (one tab)                    Node server (localhost:4280)
+Browser (per window)                 Node server (localhost:4280)
   grid of xterm.js boxes  ──WS /term──►  PtyManager  → one node-pty shell per box
   FLIP zoom-to-center                    LayoutStore → layouts.json
   attention queue/glow/sounds ◄─WS /control─ grid events (created/closed/attention)

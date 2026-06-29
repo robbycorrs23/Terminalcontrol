@@ -13,7 +13,8 @@ Local-only tool: a Node server on `localhost` spawns the shells.
 - **curl** — the Claude Code hooks use it to phone home. Usually preinstalled.
 - **`claude`** (Claude Code CLI) — for the per-box agents (untick "run claude" for a
   plain shell).
-- macOS or Linux. `$SHELL` should be set (falls back to `/bin/bash` on non-mac).
+- macOS or Linux. `$SHELL` should be set (falls back to `/bin/zsh`; see
+  `server/pty-manager.js`).
 
 ## Run / build / test
 - `npm install` — installs deps; a postinstall (`scripts/fix-pty-helper.js`) chmods
@@ -35,10 +36,12 @@ Local-only tool: a Node server on `localhost` spawns the shells.
 - `npm start` — start the server without rebuilding.
 - `FLEET_PORT=5000 npm run go` — different port. `FLEET_HOST=0.0.0.0` — bind beyond
   loopback (see Security).
-- **Typecheck: `npx tsc --noEmit`.** ⚠️ `vite build` uses esbuild and does NOT
-  typecheck — always run `tsc` separately.
-- **No test framework.** Tests are standalone Node scripts that exercise modules in
-  isolation (temp state files, unique ports, isolated tmux sockets). Run with `node`.
+- **Typecheck: `npm run typecheck`** (= `tsc --noEmit`). ⚠️ `vite build` uses
+  esbuild and does NOT typecheck — always run `tsc` separately. CI runs typecheck
+  + build + `node --check` (`.github/workflows/ci.yml`).
+- **No test framework / no committed tests.** Verify changes with throwaway Node
+  scripts that exercise modules in isolation (temp state files, unique ports,
+  isolated tmux sockets), run ad-hoc with `node`; don't commit them.
   When testing HTTP in-process, use `fetch` (async) — a synchronous `spawnSync`
   curl against an in-process server **deadlocks** the event loop.
 

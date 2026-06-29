@@ -5,3 +5,6 @@ sessions.json
 tasks.json
 *.log
 .DS_Store
+
+# local AI-tooling working dir
+.superpowers/

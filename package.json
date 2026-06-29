@@ -5,12 +5,34 @@
   "type": "module",
   "license": "MIT",
   "description": "A grid of Claude Code terminals that zoom to center and ding when a Claude needs you.",
+  "author": "Steve Schopp",
+  "homepage": "https://github.com/schoppllc/Terminalcontrol#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/schoppllc/Terminalcontrol.git"
+  },
+  "bugs": {
+    "url": "https://github.com/schoppllc/Terminalcontrol/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "terminal",
+    "tmux",
+    "node-pty",
+    "xterm",
+    "dashboard"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "postinstall": "node scripts/fix-pty-helper.js",
     "setup": "node server/setup-hooks.js",
     "doctor": "node scripts/preflight.js",
     "service:install": "node scripts/install-service.js",
     "service:uninstall": "node scripts/uninstall-service.js",
+    "typecheck": "tsc --noEmit",
     "build": "vite build",
     "start": "node server/index.js",
     "go": "npm run build && npm start"

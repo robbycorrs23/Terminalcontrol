@@ -19,7 +19,8 @@ export class LayoutStore {
     if (existsSync(file)) {
       try {
         raw = JSON.parse(readFileSync(file, "utf8"));
-      } catch {
+      } catch (e) {
+        console.warn(`[fleetview] could not read ${file} (${e.message}); starting with no saved layouts.`);
         raw = {};
       }
     }
@@ -36,7 +37,11 @@ export class LayoutStore {
   }
 
   _persist() {
-    writeFileSync(this.file, JSON.stringify(this.data, null, 2));
+    try {
+      writeFileSync(this.file, JSON.stringify(this.data, null, 2));
+    } catch (e) {
+      console.warn(`[fleetview] could not write ${this.file}: ${e.message}`);
+    }
   }
 
   // --- Layouts ---
