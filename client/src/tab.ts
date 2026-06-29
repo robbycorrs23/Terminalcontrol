@@ -15,9 +15,14 @@ function iconLink(): HTMLLinkElement {
     iconEl.rel = "icon";
     document.head.appendChild(iconEl);
   }
+  // Remember the static SVG favicon (shipped in index.html) so the idle state
+  // always falls back to a reliable, no-JS icon — only the attention dot needs
+  // the canvas.
+  if (baseHref === null) baseHref = iconEl.getAttribute("href") || "";
   return iconEl;
 }
 
+let baseHref: string | null = null;
 // Avoid regenerating the favicon data URL when its visual state hasn't changed.
 let lastIconKey = "";
 
@@ -31,8 +36,10 @@ export function setTabAttention(count: number, name: string, kind: AttentionKind
 
   const key = count > 0 && kind ? kind : "idle";
   if (key === lastIconKey) return;
+  const link = iconLink();
   lastIconKey = key;
-  iconLink().href = drawFavicon(key === "idle" ? null : (key as AttentionKind));
+  // Idle → restore the static SVG; attention → canvas with a colored dot.
+  link.href = key === "idle" ? (baseHref || "") : drawFavicon(key as AttentionKind);
 }
 
 function drawFavicon(kind: AttentionKind | null): string {
