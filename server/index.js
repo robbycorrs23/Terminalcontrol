@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
 import { LayoutStore } from "./layout-store.js";
+import { TaskStore } from "./task-store.js";
 import { ensureHooks } from "./setup-hooks.js";
 import { listDirs, makeDir } from "./fs-browse.js";
 
@@ -25,6 +26,7 @@ ensureHooks(PORT);
 
 const ptys = new PtyManager(PORT, join(ROOT, "sessions.json"));
 const layouts = new LayoutStore(join(ROOT, "layouts.json"));
+const tasks = new TaskStore(join(ROOT, "tasks.json"));
 console.log(
   ptys.tmux
     ? "[fleetview] tmux-backed terminals — they survive server restarts."
@@ -220,6 +222,14 @@ app.post("/api/layouts/:name/open", (req, res) => {
   res.json(created);
 });
 
+// --- Tasks (one global tree, shared across all windows) ------------------
+app.get("/api/tasks", (_req, res) => res.json(tasks.tree()));
+app.put("/api/tasks", (req, res) => {
+  const tree = tasks.replace((req.body && req.body.tasks) || []);
+  broadcastAll({ t: "tasks", tasks: tree });
+  res.json(tree);
+});
+
 // --- Hook endpoint (Claude Code phones home here) ------------------------
 app.post("/hook", (req, res) => {
   const { pane, kind } = req.body || {};
@@ -268,6 +278,7 @@ server.on("upgrade", (req, socket, head) => {
       // (recoverable) panes so a refresh after a crash/sleep offers to bring them back.
       ws.send(JSON.stringify({ t: "panes", panes: ptys.list(session) }));
       ws.send(JSON.stringify({ t: "dormant", dormant: ptys.dormantList(session) }));
+      ws.send(JSON.stringify({ t: "tasks", tasks: tasks.tree() }));
     });
   } else if (url.pathname === "/term") {
     const id = url.searchParams.get("pane");

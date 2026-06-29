@@ -22,8 +22,21 @@
       </select>
       <button id="openBtn">Open</button>
       <button id="saveBtn">Save layout</button>
+      <button id="tasksBtn" title="Show / hide the task list">✓ Tasks</button>
       <button id="addBtn">+ Terminal</button>
     </header>
+
+    <!-- Task list sidebar (collapsible, closed by default) -->
+    <aside id="tasks">
+      <div class="tasks-head">
+        <span class="tasks-title">✓ Tasks</span>
+        <button id="tasksClose" class="icon" title="Close">✕</button>
+      </div>
+      <div class="tasks-add">
+        <input id="taskInput" type="text" placeholder="Add a task…" />
+      </div>
+      <div id="taskList" class="tasks-list"></div>
+    </aside>
 
     <main id="grid"></main>
 

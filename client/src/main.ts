@@ -1,6 +1,7 @@
 import { Term, PaneInfo, TermHost } from "./terminal";
 import { play } from "./sound";
 import { setTabAttention } from "./tab";
+import { initTasks, applyRemoteTasks, closeTasksIfOpen } from "./tasks";
 import { getAppearance, setAppearance, xtermTheme, xtermFontSize } from "./theme";
 
 const grid = document.getElementById("grid")!;
@@ -237,7 +238,9 @@ addEventListener("keydown", (e) => {
   const om = document.getElementById("openmode") as HTMLElement;
   if (!picker.hidden) closePicker();
   else if (om && !om.hidden) om.hidden = true;
-  else if (zoomed) unzoom();
+  else if (closeTasksIfOpen()) {
+    /* closed the task sidebar */
+  } else if (zoomed) unzoom();
 });
 addEventListener("resize", () => {
   if (zoomed) setRect(zoomed.el, centerRect());
@@ -706,6 +709,9 @@ function connectControl() {
       case "input":
         terms.get(m.pane)?.setLastInput(m.text);
         break;
+      case "tasks":
+        applyRemoteTasks(m.tasks);
+        break;
       case "attention":
         onAttention(m.pane, m.kind);
         break;
@@ -915,3 +921,4 @@ loadLayouts();
 loadPrefs();
 setCurrentLayout(currentLayout); // restore the indicator after a refresh
 renderQueue(); // draw the idle favicon / base title before any attention arrives
+initTasks(); // task-list sidebar (tree arrives via the control socket)
