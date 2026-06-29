@@ -127,12 +127,16 @@ contains `FLEET_PANE_ID` (under `hooks.Notification`, `hooks.Stop`, and
 
 - **Browser refresh / reopen** while the server is up → reconnects to the *same*
   live shells (your Claude sessions keep running, screen repainted from scrollback).
-- **Server restart / crash / reboot** → if **tmux** is installed, each shell runs
-  inside a `fleet_<id>` tmux session that outlives the server, and FleetView
-  **reattaches** on the next start (pane metadata is kept in `sessions.json`). The
-  inner tmux is made transparent — no status bar, no prefix key, low escape-time —
-  so Claude's TUI behaves normally. Without tmux, shells are tied to the server
-  process and a restart loses them.
+- **Server restart / crash** (machine stays powered on) → if **tmux** is installed,
+  each shell runs inside a `fleet_<id>` tmux session that outlives the server, and
+  FleetView **reattaches** on the next start (pane metadata is kept in
+  `sessions.json`). The inner tmux is made transparent — no status bar, no prefix
+  key, low escape-time — so Claude's TUI behaves normally. Without tmux, shells are
+  tied to the server process and a restart loses them.
+- **Reboot** → the tmux server dies too, so live sessions do **not** survive.
+  Boxes come back as **fresh shells in the same folders** (not restored Claude
+  sessions). The *server* can auto-return on login — see
+  [Surviving a reboot](#surviving-a-reboot).
 - **Dead/set-aside terminals** aren't dropped — their metadata is kept so you can
   recover them (see the **⏎ recover** strip).
 - **Layouts** are stored in `layouts.json`; window order + per-pane last-prompt in
@@ -141,6 +145,34 @@ contains `FLEET_PANE_ID` (under `hooks.Notification`, `hooks.Stop`, and
 > tmux is **required** for durable terminals. Run `npm run doctor` (or just start
 > the server — it checks on boot) and it'll tell you loudly if tmux is missing,
 > with the exact install command, e.g. `brew install tmux` (then restart FleetView).
+
+## Surviving a reboot
+
+By default the server doesn't come back after a reboot — you'd run `npm start`
+again. To have it start automatically on login:
+
+```bash
+npm run service:install     # launchd (macOS) or systemd --user (Linux)
+npm run service:uninstall   # stop auto-starting
+```
+
+`service:install` captures a working `PATH` into the service environment (otherwise
+launchd/systemd hand it a minimal PATH and it can't find tmux/claude/curl). Pass
+`FLEET_PORT` / `FLEET_HOST` at install time to bake them in; on macOS logs go to
+`~/Library/Logs/fleetview.log`. On Linux, to keep it running after you log out:
+`loginctl enable-linger $USER`.
+
+**Honest scope — what "survives a reboot" means:**
+
+- ✅ The **server** auto-restarts and `localhost:4280` comes back up.
+- ❌ Your **terminals do not** — a reboot kills the tmux server, so the restored
+  boxes are **fresh shells in the same folders**, not your live Claude sessions.
+  (tmux only preserves sessions across a *server* restart while the machine stays
+  powered on.)
+
+> Don't run the service **and** `npm start`/`npm run go` by hand at the same time —
+> two servers will fight for the port (the second now exits with a readable error).
+> Use `npm run service:uninstall` to stop the auto-start one.
 
 ## Architecture
 

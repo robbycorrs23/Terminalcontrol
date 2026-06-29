@@ -292,6 +292,20 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 const isLoopback = HOST === "127.0.0.1" || HOST === "::1" || HOST === "localhost";
+// Fail readably if the port is taken — usually the login service (or another
+// `npm start`) is already running. Don't dump a raw stack.
+server.on("error", (e) => {
+  if (e.code === "EADDRINUSE") {
+    console.error(
+      `\n[fleetview] port ${PORT} is already in use — FleetView is probably already\n` +
+        `running (e.g. the login auto-start service). Don't run two at once:\n` +
+        `  • use the one that's up, or stop auto-start: npm run service:uninstall\n` +
+        `  • or pick another port: FLEET_PORT=4281 npm start\n`
+    );
+    process.exit(1);
+  }
+  throw e;
+});
 server.listen(PORT, HOST, () => {
   console.log(`\n  ▦ FleetView → http://localhost:${PORT}\n`);
   if (!isLoopback) {

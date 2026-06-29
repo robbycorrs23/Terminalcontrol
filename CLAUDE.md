@@ -24,6 +24,12 @@ Local-only tool: a Node server on `localhost` spawns the shells.
   FIRST at startup (warn-only) so missing-dep warnings are the most prominent output.
 - `npm run go` — build client + start server (this also **restarts** it). Re-runs
   Vite every time; use `npm start` for a plain restart without rebuilding.
+- `npm run service:install` / `service:uninstall` — opt-in auto-start on login
+  (launchd on macOS, systemd --user on Linux). `scripts/install-service.js` captures
+  a working PATH into the service env (launchd/systemd give a minimal PATH, which
+  would silently break tmux/claude/curl). A reboot returns the *server*, not live
+  sessions (reboot kills tmux → fresh shells). The server exits readably on
+  EADDRINUSE so the service + a manual `npm start` don't fight silently.
 - `npm run build` — build the client bundle only (vite → `dist/`). Safe: does NOT
   restart the server; a running server serves the new bundle to the next page load.
 - `npm start` — start the server without rebuilding.
