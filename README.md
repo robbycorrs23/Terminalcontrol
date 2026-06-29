@@ -12,6 +12,11 @@ shared network. See [Security](#security) before changing that.
 
 ## Quick start
 
+**Prerequisites:** **Node.js**; **tmux** (strongly recommended — terminals survive
+server restarts only with it: `brew install tmux` / `apt install tmux`); **curl**
+(used by the alert hooks; usually preinstalled); and the **`claude`** CLI for the
+per-box agents. macOS or Linux.
+
 ```bash
 npm install      # builds node-pty (native) and pulls xterm/vite
 npm run go       # build the client, then start the server
@@ -59,7 +64,22 @@ auth, so put it behind a VPN/SSH tunnel/reverse proxy if you go this route.
   `Open` respawns a layout and asks whether to **add** it to the current window or
   **replace** what's open. Stored in `layouts.json`. When a layout is the window's
   current one (shown as `▣ name` in the bar), **dragging to reorder auto-saves**
-  the new order back to it.
+  the new order back to it. **Replace** is non-destructive — it sets the current
+  terminals aside (recoverable), it doesn't kill them.
+- **Recover** — if a terminal's session dies (e.g. a long system sleep tears down
+  tmux) or you Replace a layout, the box isn't lost: it appears in the **⏎ recover**
+  strip in the top bar; click to bring it back (reattached with full state if its
+  session is still alive, otherwise a fresh shell in the same folder).
+- **Pinned prompt** — the last prompt you sent a window's Claude is pinned under its
+  title bar (`❯ …`, full text on hover) so you can see what you asked each one.
+- **Tab badge** — when a box needs you, the browser tab title and favicon show it,
+  so you notice from another tab.
+- **Tasks** — `✓ Tasks` opens a collapsible right sidebar (closed by default): a
+  single shared, nestable checklist. Add tasks/subtasks, check them off, edit
+  inline, and **drag to reorder or re-nest**. Stored server-side in `tasks.json`
+  and synced live across all your windows.
+- **Sleep-safe** — close the laptop and reopen: terminals auto-reconnect; no manual
+  refresh needed.
 
 ## Windows & sessions
 
@@ -71,11 +91,12 @@ all windows (saving one updates every window's dropdown live).
 
 ## How the alerting works (no output scraping)
 
-Each terminal is spawned with a unique `FLEET_PANE_ID` in its environment. On
-first run, FleetView merges two **Claude Code hooks** into `~/.claude/settings.json`:
+Each terminal is spawned with a unique `FLEET_PANE_ID` in its environment. On every
+server start, FleetView merges three **Claude Code hooks** into `~/.claude/settings.json`:
 
 - **Notification** → POSTs `{pane, kind:"question"}` to the server (Claude needs you)
 - **Stop** → POSTs `{pane, kind:"done"}` (Claude finished its turn)
+- **UserPromptSubmit** → forwards your submitted prompt (it's pinned to that box)
 
 So Claude tells FleetView *exactly* which box needs attention — nothing is parsed
 from the terminal text. The hook commands are guarded with
@@ -84,8 +105,9 @@ FleetView terminal**.
 
 ### Removing the hooks
 
-Open `~/.claude/settings.json` and delete the two hook entries whose `command`
-contains `FLEET_PANE_ID` (under `hooks.Notification` and `hooks.Stop`).
+Open `~/.claude/settings.json` and delete the hook entries whose `command`
+contains `FLEET_PANE_ID` (under `hooks.Notification`, `hooks.Stop`, and
+`hooks.UserPromptSubmit`).
 
 ## What persists
 
@@ -97,7 +119,10 @@ contains `FLEET_PANE_ID` (under `hooks.Notification` and `hooks.Stop`).
   inner tmux is made transparent — no status bar, no prefix key, low escape-time —
   so Claude's TUI behaves normally. Without tmux, shells are tied to the server
   process and a restart loses them.
-- **Layouts** are stored in `layouts.json`; window order in `sessions.json`.
+- **Dead/set-aside terminals** aren't dropped — their metadata is kept so you can
+  recover them (see the **⏎ recover** strip).
+- **Layouts** are stored in `layouts.json`; window order + per-pane last-prompt in
+  `sessions.json`; the task list in `tasks.json`.
 
 > Install tmux for durable terminals: `brew install tmux`. The startup log says
 > whether terminals are tmux-backed.
@@ -114,11 +139,14 @@ Browser (one tab)                    Node server (localhost:4280)
 
 | File | Responsibility |
 |------|----------------|
-| `server/pty-manager.js` | spawn/kill shells, pipe bytes, scrollback, attention state |
+| `server/pty-manager.js` | spawn/kill shells, tmux sessions, scrollback, attention, dormant recovery, persistence |
 | `server/layout-store.js` | read/write named layouts + recent folders |
+| `server/task-store.js` | read/write the global task tree (`tasks.json`) |
 | `server/fs-browse.js` | list sub-directories for the folder picker |
 | `server/setup-hooks.js` | idempotently install the guarded Claude Code hooks |
-| `server/index.js` | HTTP + WebSocket wiring, REST + hook endpoint, static client |
-| `client/src/terminal.ts` | one xterm box bound to one PTY socket |
+| `server/index.js` | HTTP + WebSocket wiring, REST + hook endpoints, static client |
+| `client/src/terminal.ts` | one xterm box bound to one PTY socket (auto-reconnects) |
 | `client/src/main.ts` | grid, zoom, minimize/tray, drag-reorder, folder picker, queue |
+| `client/src/tasks.ts` | the task-list sidebar (tree, drag, debounced save) |
+| `client/src/tab.ts` | browser-tab title + favicon attention indicator |
 | `client/src/sound.ts` | generated alert tones (WebAudio) |
