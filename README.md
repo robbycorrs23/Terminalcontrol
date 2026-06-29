@@ -12,20 +12,34 @@ shared network. See [Security](#security) before changing that.
 
 ## Quick start
 
-**Prerequisites:** **Node.js**; **tmux** (strongly recommended — terminals survive
-server restarts only with it: `brew install tmux` / `apt install tmux`); **curl**
-(used by the alert hooks; usually preinstalled); and the **`claude`** CLI for the
-per-box agents. macOS or Linux.
-
 ```bash
 npm install      # builds node-pty (native) and pulls xterm/vite
+npm run doctor   # checks tmux / curl / claude; offers to install tmux
 npm run go       # build the client, then start the server
 ```
 
 Open **http://localhost:4280**. Click **+ Terminal**, pick a folder, and a shell
 opens there running `claude` (untick "run claude" for a plain shell).
 
-To run on a different port: `FLEET_PORT=5000 npm run go`.
+### Dependencies
+
+Needs **Node.js** (macOS or Linux). Three external tools matter:
+
+| Tool | Needed for | If missing |
+|------|-----------|------------|
+| **tmux** | **durability** — terminals surviving a server restart / sleep | the headline "sleep-safe / survives restart" feature **won't work**; treat tmux as **required** |
+| **curl** | the attention hooks (glow / ding) | no alerts; usually preinstalled |
+| **`claude`** | running `claude` in a box | plain shells still work |
+
+`npm run doctor` reports exactly what's missing with the install command for your
+platform, and can install tmux for you (interactive, or set `FLEET_AUTO_INSTALL=1`).
+`npm run go` / `npm start` also run this check on boot and **warn loudly** if a
+dependency is missing — nothing is silently degraded.
+
+- **Restart without rebuilding:** `npm start` (serves the existing `dist/`).
+  `npm run go` rebuilds the client every time — use it after client changes or a
+  fresh `npm install`; use `npm start` for a plain restart (e.g. after installing tmux).
+- **Different port:** `FLEET_PORT=5000 npm run go`.
 
 ## Security
 
@@ -124,8 +138,9 @@ contains `FLEET_PANE_ID` (under `hooks.Notification`, `hooks.Stop`, and
 - **Layouts** are stored in `layouts.json`; window order + per-pane last-prompt in
   `sessions.json`; the task list in `tasks.json`.
 
-> Install tmux for durable terminals: `brew install tmux`. The startup log says
-> whether terminals are tmux-backed.
+> tmux is **required** for durable terminals. Run `npm run doctor` (or just start
+> the server — it checks on boot) and it'll tell you loudly if tmux is missing,
+> with the exact install command, e.g. `brew install tmux` (then restart FleetView).
 
 ## Architecture
 

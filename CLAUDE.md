@@ -18,7 +18,12 @@ Local-only tool: a Node server on `localhost` spawns the shells.
 ## Run / build / test
 - `npm install` — installs deps; a postinstall (`scripts/fix-pty-helper.js`) chmods
   the node-pty spawn helper.
-- `npm run go` — build client + start server (this also **restarts** it).
+- `npm run doctor` — preflight: checks tmux/curl/claude, prints the exact per-platform
+  install command, and can install tmux (interactive, or `FLEET_AUTO_INSTALL=1`).
+  `scripts/preflight.js` also exports `preflight()`, which `server/index.js` calls
+  FIRST at startup (warn-only) so missing-dep warnings are the most prominent output.
+- `npm run go` — build client + start server (this also **restarts** it). Re-runs
+  Vite every time; use `npm start` for a plain restart without rebuilding.
 - `npm run build` — build the client bundle only (vite → `dist/`). Safe: does NOT
   restart the server; a running server serves the new bundle to the next page load.
 - `npm start` — start the server without rebuilding.

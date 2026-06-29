@@ -10,6 +10,11 @@ import { LayoutStore } from "./layout-store.js";
 import { TaskStore } from "./task-store.js";
 import { ensureHooks } from "./setup-hooks.js";
 import { listDirs, makeDir } from "./fs-browse.js";
+import { preflight } from "../scripts/preflight.js";
+
+// Check for tmux / curl / claude FIRST, so any missing-dependency warning is the
+// most prominent thing the user sees — not buried under later startup logs.
+preflight({ quietIfOk: true });
 
 const PORT = Number(process.env.FLEET_PORT) || 4280;
 // Bind to loopback by default. This server spawns REAL shells with NO auth, so a
@@ -27,11 +32,9 @@ ensureHooks(PORT);
 const ptys = new PtyManager(PORT, join(ROOT, "sessions.json"));
 const layouts = new LayoutStore(join(ROOT, "layouts.json"));
 const tasks = new TaskStore(join(ROOT, "tasks.json"));
-console.log(
-  ptys.tmux
-    ? "[fleetview] tmux-backed terminals — they survive server restarts."
-    : "[fleetview] tmux not found — terminals are tied to this server process."
-);
+// The loud "tmux missing" warning is handled by preflight() above; here we just
+// confirm the durable path when it IS available.
+if (ptys.tmux) console.log("[fleetview] tmux-backed terminals — they survive server restarts.");
 
 // Grid-level events are scoped to a session (= one browser window). Each control
 // socket carries its window's session id; events only reach that window.

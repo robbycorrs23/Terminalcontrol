@@ -7,6 +7,7 @@
   "scripts": {
     "postinstall": "node scripts/fix-pty-helper.js",
     "setup": "node server/setup-hooks.js",
+    "doctor": "node scripts/preflight.js",
     "build": "vite build",
     "start": "node server/index.js",
     "go": "npm run build && npm start"
