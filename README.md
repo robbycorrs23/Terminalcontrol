@@ -197,3 +197,7 @@ Browser (one tab)                    Node server (localhost:4280)
 | `client/src/tasks.ts` | the task-list sidebar (tree, drag, debounced save) |
 | `client/src/tab.ts` | browser-tab title + favicon attention indicator |
 | `client/src/sound.ts` | generated alert tones (WebAudio) |
+
+## License
+
+MIT — see [LICENSE](LICENSE).

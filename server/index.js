@@ -22,6 +22,7 @@ const PORT = Number(process.env.FLEET_PORT) || 4280;
 // it must never be exposed to the network casually. Opt in explicitly (e.g.
 // FLEET_HOST=0.0.0.0) only on a trusted/firewalled network, and understand the risk.
 const HOST = process.env.FLEET_HOST || "127.0.0.1";
+const isLoopback = HOST === "127.0.0.1" || HOST === "::1" || HOST === "localhost";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const DIST = join(ROOT, "dist");
@@ -71,6 +72,36 @@ try {
 } catch {}
 
 const app = express();
+
+// --- Same-origin guard (CSRF / DNS-rebind / WS-hijack) ----------------------
+// No auth here by design, so the ONLY barrier between a random website you visit
+// and your shells is origin checking — which the browser does NOT do for
+// WebSockets and does NOT enforce for cross-site POST *processing*. So we do it
+// ourselves. The curl alert hooks send no Origin and are allowed (they can only
+// reach us from this machine); any browser request must be same-origin.
+function sameOrigin(req) {
+  const host = req.headers.host; // e.g. "127.0.0.1:4280"
+  const origin = req.headers.origin;
+  if (origin != null) {
+    // Browser request → its Origin host:port must equal our own Host. A
+    // cross-site attacker can't forge a matching Origin.
+    try {
+      if (new URL(origin).host !== host) return false;
+    } catch {
+      return false;
+    }
+  }
+  if (isLoopback) {
+    // Anti-DNS-rebinding: in loopback mode the Host authority must be loopback.
+    const hostname = String(host).replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
+    if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) return false;
+  }
+  return true;
+}
+app.use((req, res, next) =>
+  sameOrigin(req) ? next() : res.status(403).end("forbidden: cross-origin")
+);
+
 // Dropped images arrive as base64 data URLs, so allow a generous JSON body.
 app.use(express.json({ limit: "30mb" }));
 
@@ -261,6 +292,11 @@ const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
+  // WebSockets bypass CORS entirely, so this is the most important origin check.
+  if (!sameOrigin(req)) {
+    socket.destroy();
+    return;
+  }
   const url = new URL(req.url, "http://localhost");
   if (url.pathname === "/control") {
     const session = url.searchParams.get("session");
@@ -291,7 +327,6 @@ server.on("upgrade", (req, socket, head) => {
   }
 });
 
-const isLoopback = HOST === "127.0.0.1" || HOST === "::1" || HOST === "localhost";
 // Fail readably if the port is taken — usually the login service (or another
 // `npm start`) is already running. Don't dump a raw stack.
 server.on("error", (e) => {

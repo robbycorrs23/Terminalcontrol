@@ -82,8 +82,10 @@ export function ensureHooks(port = 4280) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(file, JSON.stringify(settings, null, 2));
   console.log(
-    "[fleetview] hooks installed in ~/.claude/settings.json " +
-      "(guarded — no-op outside FleetView terminals)."
+    "[fleetview] NOTE: updated your global ~/.claude/settings.json with 3 hooks\n" +
+      "           (Notification / Stop / UserPromptSubmit). They are guarded and a\n" +
+      "           no-op outside FleetView terminals. To remove them, see the README\n" +
+      "           section \"Removing the hooks\"."
   );
 }
 

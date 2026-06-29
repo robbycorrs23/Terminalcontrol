@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "license": "MIT",
   "description": "A grid of Claude Code terminals that zoom to center and ding when a Claude needs you.",
   "scripts": {
     "postinstall": "node scripts/fix-pty-helper.js",
