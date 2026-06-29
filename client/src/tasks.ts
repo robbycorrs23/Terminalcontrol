@@ -29,6 +29,14 @@ export function initTasks() {
   btn.addEventListener("click", () => setOpen(!aside.classList.contains("open")));
   closeBtn.addEventListener("click", () => setOpen(false));
 
+  // Click anywhere outside the sidebar (but not on its toggle button) closes it.
+  document.addEventListener("pointerdown", (e) => {
+    if (!aside.classList.contains("open")) return;
+    const t = e.target as HTMLElement;
+    if (t.closest("#tasks") || t.closest("#tasksBtn")) return;
+    setOpen(false);
+  });
+
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && input.value.trim()) {
       model.push(newNode(input.value));
