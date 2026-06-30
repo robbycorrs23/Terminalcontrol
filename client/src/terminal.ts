@@ -75,7 +75,10 @@ export class Term {
     this.cell.append(this.el);
 
     this.term = new Xterm({
-      fontFamily: "ui-monospace, Menlo, monospace",
+      // Monospace first, then symbol/emoji fallbacks so Claude's TUI glyphs
+      // (e.g. ⏵ U+23F5, arrows) render instead of showing missing-glyph marks.
+      fontFamily:
+        'ui-monospace, Menlo, Monaco, "DejaVu Sans Mono", "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols2", "Apple Color Emoji", "Noto Color Emoji", monospace',
       fontSize: xtermFontSize(),
       cursorBlink: true,
       scrollback: 5000,
