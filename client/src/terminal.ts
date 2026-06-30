@@ -140,14 +140,18 @@ export class Term {
     if (info.color) this.setColor(info.color);
   }
 
-  /** Tint this box's border with a color (a hex string), or "" to clear it. */
+  /** Tint this box (a hex string), or "" to clear it. */
   setColor(color: string) {
     this.info.color = color;
+    // Store `--tint` on the CELL, not the box: zoom/unzoom and drag-end call
+    // `el.removeAttribute("style")` on the box, which would wipe an inline custom
+    // property there. The cell is never style-stripped, and `--tint` inherits down
+    // to the title; the `.tinted` class on the box survives removeAttribute().
     if (color) {
-      this.el.style.setProperty("--tint", color);
+      this.cell.style.setProperty("--tint", color);
       this.el.classList.add("tinted");
     } else {
-      this.el.style.removeProperty("--tint");
+      this.cell.style.removeProperty("--tint");
       this.el.classList.remove("tinted");
     }
   }
