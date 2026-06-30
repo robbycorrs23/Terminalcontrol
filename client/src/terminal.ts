@@ -60,7 +60,7 @@ export class Term {
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
       `<button class="ctl img" title="Add image to prompt">🖼</button>` +
-      `<button class="ctl color" title="Color-code this terminal">●</button>` +
+      `<button class="ctl color" title="Color-code this terminal"></button>` +
       `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;

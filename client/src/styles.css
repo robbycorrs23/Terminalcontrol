@@ -386,18 +386,30 @@ body.big .task .tedit {
   display: flex;
   flex-direction: column;
   background: var(--term-bg);
-  /* `--tint` is the user's color-code (set per box); falls back to the default. */
-  border: 1px solid var(--tint, var(--line));
+  border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
   transition: box-shadow 0.2s, border-color 0.2s;
 }
-.term.tinted {
-  border-width: 2px;
+/* Color-code: tint the title bar (the interior header), NOT the border — the
+   border is reserved for the needs-you / done / flagged / zoomed alert glows.
+   `--tint` is set per box; it inherits down to the title. */
+.term.tinted .title {
+  background: color-mix(in srgb, var(--tint) 40%, var(--panel));
 }
-/* The ● control glows in the current tint (dim when none). */
-.term .ctl.color {
-  color: var(--tint, var(--text-dim));
+/* The color control: a rainbow wheel when no tint is set, a solid dot of the
+   chosen color once one is — so it reads as "pick a color" and shows the state. */
+.term .ctl.color::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(127, 127, 127, 0.45);
+  background: conic-gradient(from 0deg, #f85149, #e3b341, #3fb950, #58a6ff, #bc8cff, #f85149);
+}
+.term.tinted .ctl.color::before {
+  background: var(--tint);
+  border-color: var(--tint);
 }
 
 /* Color-picker popover */
