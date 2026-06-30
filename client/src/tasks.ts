@@ -135,6 +135,7 @@ function render() {
 function renderNode(node: TaskNode, depth: number) {
   const row = el("div", "task" + (node.done ? " done" : ""));
   row.dataset.id = node.id;
+  row.draggable = true; // native drag-and-drop to reorder / re-nest
   row.style.paddingLeft = 6 + depth * 16 + "px";
 
   const hasKids = node.children.length > 0;
@@ -199,6 +200,9 @@ function renderNode(node: TaskNode, depth: number) {
 
 function startEdit(node: TaskNode, span: HTMLElement) {
   editing = true;
+  // A draggable ancestor blocks text selection in the input on some browsers —
+  // turn it off while editing (render() restores it on commit/cancel).
+  (span.closest(".task") as HTMLElement | null)?.setAttribute("draggable", "false");
   const input = el("input", "tedit") as HTMLInputElement;
   input.value = node.text;
   span.replaceWith(input);
@@ -225,10 +229,12 @@ function startEdit(node: TaskNode, span: HTMLElement) {
 }
 
 // ---- drag to reorder / re-nest ---------------------------------------
+// Native HTML5 drag-and-drop: rows are `draggable`, so the browser provides a
+// real drag image. Drop on the top/bottom third of a row to place before/after
+// it, or the middle to make it a child. Delegated on the list so it survives
+// re-renders.
 function wireDrag() {
   let dragId: string | null = null;
-  let startY = 0;
-  let dragging = false;
   let target: HTMLElement | null = null;
   let mode: "before" | "after" | "child" = "before";
 
@@ -237,54 +243,44 @@ function wireDrag() {
     target = null;
   };
 
-  const onMove = (ev: PointerEvent) => {
-    if (dragId == null) return;
-    if (!dragging) {
-      if (Math.abs(ev.clientY - startY) < 5) return;
-      dragging = true;
-      const src = listEl.querySelector(`.task[data-id="${dragId}"]`);
-      src?.classList.add("dragging");
+  listEl.addEventListener("dragstart", (e) => {
+    const row = (e.target as HTMLElement).closest(".task") as HTMLElement | null;
+    if (!row) return;
+    dragId = row.dataset.id!;
+    row.classList.add("dragging");
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", dragId); // Firefox won't start a drag without data
     }
-    const under = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
-    const row = under?.closest(".task") as HTMLElement | null;
+  });
+
+  listEl.addEventListener("dragover", (e) => {
+    if (dragId == null) return;
+    const row = (e.target as HTMLElement).closest(".task") as HTMLElement | null;
     clearIndicator();
     if (!row || row.dataset.id === dragId) return;
-    const tid = row.dataset.id!;
     const node = findNode(model, dragId);
-    if (node && contains(node, tid)) return; // can't drop into its own subtree
+    if (node && contains(node, row.dataset.id!)) return; // can't drop into its own subtree
+    e.preventDefault(); // calling preventDefault marks this a valid drop target
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
     const r = row.getBoundingClientRect();
-    const frac = (ev.clientY - r.top) / r.height;
+    const frac = (e.clientY - r.top) / r.height;
     mode = frac < 0.3 ? "before" : frac > 0.7 ? "after" : "child";
     target = row;
     row.classList.add(mode === "before" ? "drop-before" : mode === "after" ? "drop-after" : "drop-child");
-  };
+  });
 
-  const onUp = () => {
-    document.removeEventListener("pointermove", onMove);
-    document.removeEventListener("pointerup", onUp);
+  listEl.addEventListener("drop", (e) => {
+    e.preventDefault();
     const tid = target?.dataset.id;
-    const wasDragging = dragging;
+    clearIndicator();
+    if (dragId && tid) moveNode(dragId, tid, mode);
+  });
+
+  listEl.addEventListener("dragend", () => {
     listEl.querySelector(".task.dragging")?.classList.remove("dragging");
     clearIndicator();
-    if (wasDragging && dragId && tid) moveNode(dragId, tid, mode);
     dragId = null;
-    dragging = false;
-    if (wasDragging) {
-      justDragged = true; // swallow the trailing click so it doesn't open an editor
-      setTimeout(() => (justDragged = false), 0);
-    }
-  };
-
-  listEl.addEventListener("pointerdown", (e) => {
-    const t = e.target as HTMLElement;
-    if (t.closest(".tcheck, .tbtn, .tcaret, .tedit")) return; // those have their own behavior
-    const row = t.closest(".task") as HTMLElement | null;
-    if (!row || e.button !== 0) return;
-    dragId = row.dataset.id!;
-    startY = e.clientY;
-    dragging = false;
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
   });
 }
 
