@@ -11,8 +11,7 @@ interface TaskNode {
 }
 
 let model: TaskNode[] = [];
-let editing = false; // an inline edit is in progress — don't clobber it with remote updates
-let justDragged = false; // suppress the click-to-edit that follows a drag
+let editing = false; // a task modal is open — don't clobber it with remote updates
 
 let aside: HTMLElement;
 let listEl: HTMLElement;
@@ -29,11 +28,12 @@ export function initTasks() {
   btn.addEventListener("click", () => setOpen(!aside.classList.contains("open")));
   closeBtn.addEventListener("click", () => setOpen(false));
 
-  // Click anywhere outside the sidebar (but not on its toggle button) closes it.
+  // Click anywhere outside the sidebar (but not on its toggle button or the task
+  // modal) closes it.
   document.addEventListener("pointerdown", (e) => {
     if (!aside.classList.contains("open")) return;
     const t = e.target as HTMLElement;
-    if (t.closest("#tasks") || t.closest("#tasksBtn")) return;
+    if (t.closest("#tasks") || t.closest("#tasksBtn") || t.closest(".taskmodal")) return;
     setOpen(false);
   });
 
@@ -47,6 +47,7 @@ export function initTasks() {
   });
 
   wireDrag();
+  buildTaskModal();
   setOpen(localStorage.getItem(OPEN_KEY) === "1"); // closed by default; remembers your choice
   render();
 }
@@ -161,10 +162,8 @@ function renderNode(node: TaskNode, depth: number) {
 
   const text = el("span", "ttext");
   text.textContent = node.text || "(untitled)";
-  text.addEventListener("click", () => {
-    if (justDragged) return;
-    startEdit(node, text);
-  });
+  text.title = node.text; // hover peek
+  text.addEventListener("click", () => openTaskModal(node)); // click → full-text modal
 
   const add = el("button", "tbtn tadd") as HTMLButtonElement;
   add.textContent = "＋";
@@ -175,8 +174,7 @@ function renderNode(node: TaskNode, depth: number) {
     node.children.push(child);
     node.collapsed = false;
     render();
-    const newRow = listEl.querySelector(`.task[data-id="${child.id}"] .ttext`) as HTMLElement;
-    if (newRow) startEdit(child, newRow);
+    openTaskModal(child); // type the subtask in the modal (blank cancel removes it)
   });
 
   const del = el("button", "tbtn tdel") as HTMLButtonElement;
@@ -198,34 +196,74 @@ function renderNode(node: TaskNode, depth: number) {
   }
 }
 
-function startEdit(node: TaskNode, span: HTMLElement) {
-  editing = true;
-  // A draggable ancestor blocks text selection in the input on some browsers —
-  // turn it off while editing (render() restores it on commit/cancel).
-  (span.closest(".task") as HTMLElement | null)?.setAttribute("draggable", "false");
-  const input = el("input", "tedit") as HTMLInputElement;
-  input.value = node.text;
-  span.replaceWith(input);
-  input.focus();
-  input.select();
-  const commit = () => {
-    if (!editing) return;
-    editing = false;
-    node.text = input.value.trim();
-    if (!node.text) removeById(model, node.id); // empty = drop it (e.g. a blank new subtask)
-    render();
-    save();
-  };
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
+// ---- task modal (view / edit the full text) ---------------------------
+let modalEl: HTMLElement;
+let modalTa: HTMLTextAreaElement;
+let modalNode: TaskNode | null = null;
+
+function buildTaskModal() {
+  modalEl = el("div", "taskmodal");
+  modalEl.hidden = true;
+  modalEl.innerHTML =
+    `<div class="panel">` +
+    `<div class="phead"><span class="ptitle">Task</span></div>` +
+    `<textarea class="tm-text" placeholder="Task…"></textarea>` +
+    `<div class="pfoot"><span class="spacer"></span>` +
+    `<button class="tm-cancel">Cancel</button>` +
+    `<button class="tm-save primary">Save</button></div>` +
+    `</div>`;
+  document.body.append(modalEl);
+  modalTa = modalEl.querySelector(".tm-text") as HTMLTextAreaElement;
+  modalEl.querySelector(".tm-save")!.addEventListener("click", saveModal);
+  modalEl.querySelector(".tm-cancel")!.addEventListener("click", cancelModal);
+  modalEl.addEventListener("click", (e) => {
+    if (e.target === modalEl) cancelModal(); // click the backdrop
+  });
+  modalTa.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
       e.preventDefault();
-      commit();
-    } else if (e.key === "Escape") {
-      editing = false;
-      render(); // discard edit
+      e.stopPropagation(); // don't let the global Esc also close the sidebar/zoom
+      cancelModal();
+    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      saveModal(); // ⌘/Ctrl+Enter to save; plain Enter makes a newline
     }
   });
-  input.addEventListener("blur", commit);
+}
+
+function openTaskModal(node: TaskNode) {
+  modalNode = node;
+  editing = true; // pause remote updates while open
+  modalTa.value = node.text;
+  modalEl.hidden = false;
+  setTimeout(() => {
+    modalTa.focus();
+    modalTa.select();
+  }, 0);
+}
+
+function closeModal() {
+  modalEl.hidden = true;
+  modalNode = null;
+  editing = false;
+}
+
+function saveModal() {
+  if (!modalNode) return;
+  modalNode.text = modalTa.value.trim();
+  if (!modalNode.text) removeById(model, modalNode.id);
+  closeModal();
+  render();
+  save();
+}
+
+function cancelModal() {
+  if (!modalNode) return;
+  // Discard a blank task (e.g. a just-added subtask the user cancelled).
+  const removed = !modalNode.text && removeById(model, modalNode.id);
+  closeModal();
+  render();
+  if (removed) save();
 }
 
 // ---- drag to reorder / re-nest ---------------------------------------

@@ -694,6 +694,44 @@ body.big .term .pinned {
 }
 
 /* ---- Open-layout chooser modal ---- */
+/* Task view/edit modal */
+.taskmodal {
+  position: fixed;
+  inset: 0;
+  z-index: 73;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+.taskmodal .panel {
+  width: min(560px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.taskmodal .tm-text {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 180px;
+  max-height: 60vh;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+  border: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.taskmodal .tm-text:focus {
+  outline: none;
+}
+
 #openmode {
   position: fixed;
   inset: 0;
