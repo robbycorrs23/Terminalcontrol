@@ -12,11 +12,19 @@ interface TaskNode {
 
 let model: TaskNode[] = [];
 let editing = false; // a task modal is open — don't clobber it with remote updates
+let hideCompleted = false; // view filter: hide fully-completed tasks
 
 let aside: HTMLElement;
 let listEl: HTMLElement;
 
 const OPEN_KEY = "fleet-tasks-open";
+const HIDE_KEY = "fleet-tasks-hide-done";
+
+// A task is "fully done" only if it's checked AND every descendant is done. So a
+// completed parent with an unfinished subtask stays visible.
+function isFullyDone(node: TaskNode): boolean {
+  return node.done && node.children.every(isFullyDone);
+}
 
 export function initTasks() {
   aside = document.getElementById("tasks")!;
@@ -44,6 +52,15 @@ export function initTasks() {
       render();
       save();
     }
+  });
+
+  const hideToggle = document.getElementById("tasksHideDone") as HTMLInputElement;
+  hideCompleted = localStorage.getItem(HIDE_KEY) === "1";
+  hideToggle.checked = hideCompleted;
+  hideToggle.addEventListener("change", () => {
+    hideCompleted = hideToggle.checked;
+    localStorage.setItem(HIDE_KEY, hideCompleted ? "1" : "0");
+    render();
   });
 
   wireDrag();
@@ -131,9 +148,16 @@ function render() {
     return;
   }
   for (const node of model) renderNode(node, 0);
+  if (!listEl.children.length) {
+    // model has tasks but they're all hidden by the "hide done" filter
+    const note = el("div", "tasks-empty");
+    note.textContent = "All tasks completed — hidden.";
+    listEl.append(note);
+  }
 }
 
 function renderNode(node: TaskNode, depth: number) {
+  if (hideCompleted && isFullyDone(node)) return; // hide a fully-completed subtree
   const row = el("div", "task" + (node.done ? " done" : ""));
   row.dataset.id = node.id;
   row.draggable = true; // native drag-and-drop to reorder / re-nest

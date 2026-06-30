@@ -238,6 +238,18 @@ body {
   color: var(--text);
   flex: 1;
 }
+.tasks-hidedone {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.tasks-hidedone input {
+  cursor: pointer;
+}
 .tasks-add {
   padding: 8px 10px;
 }
