@@ -10,6 +10,7 @@ export interface PaneInfo {
   attention?: { waiting: boolean; kind: "question" | "done" | null };
   followUp?: boolean;
   lastInput?: string;
+  color?: string;
   createdAt: number;
 }
 
@@ -18,7 +19,11 @@ export interface TermHost {
   onClose(t: Term): void; // × → kill it
   onMinimize(t: Term): void; // – → send to tray
   onToggleFollowUp(t: Term): void; // 🚩 → toggle the follow-up flag
+  onSetColor(t: Term, color: string): void; // ● → tint the border ("" = clear)
 }
+
+// The five border tints offered in the color popover.
+export const TINT_COLORS = ["#f85149", "#e3b341", "#3fb950", "#58a6ff", "#bc8cff"];
 
 /**
  * One terminal box: a DOM cell + an xterm bound to a WebSocket to its PTY.
@@ -55,6 +60,7 @@ export class Term {
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
       `<button class="ctl img" title="Add image to prompt">🖼</button>` +
+      `<button class="ctl color" title="Color-code this terminal">●</button>` +
       `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
@@ -93,6 +99,7 @@ export class Term {
       e.stopPropagation();
       host.onToggleFollowUp(this);
     });
+    this.buildColorPopover(host);
     // 🖼 opens a file picker — the same path-injection flow as drag-and-drop.
     const fileInput = el("input", "img-input") as HTMLInputElement;
     fileInput.type = "file";
@@ -130,6 +137,62 @@ export class Term {
     }
     if (info.followUp) this.setFollowUp(true);
     if (info.lastInput) this.setLastInput(info.lastInput);
+    if (info.color) this.setColor(info.color);
+  }
+
+  /** Tint this box's border with a color (a hex string), or "" to clear it. */
+  setColor(color: string) {
+    this.info.color = color;
+    if (color) {
+      this.el.style.setProperty("--tint", color);
+      this.el.classList.add("tinted");
+    } else {
+      this.el.style.removeProperty("--tint");
+      this.el.classList.remove("tinted");
+    }
+  }
+
+  // The ● control: a popover of 5 swatches + a clear button.
+  private buildColorPopover(host: TermHost) {
+    const btn = this.titleBar.querySelector(".color") as HTMLElement;
+    const pop = el("div", "cpop");
+    pop.hidden = true;
+    pop.addEventListener("click", (e) => e.stopPropagation()); // don't zoom the box
+    for (const c of TINT_COLORS) {
+      const sw = el("button", "sw") as HTMLButtonElement;
+      sw.style.setProperty("--c", c);
+      sw.title = c;
+      sw.addEventListener("click", () => {
+        this.setColor(c); // optimistic; server broadcast confirms
+        host.onSetColor(this, c);
+        pop.hidden = true;
+      });
+      pop.append(sw);
+    }
+    const clear = el("button", "sw clear") as HTMLButtonElement;
+    clear.textContent = "⊘";
+    clear.title = "Clear color";
+    clear.addEventListener("click", () => {
+      this.setColor("");
+      host.onSetColor(this, "");
+      pop.hidden = true;
+    });
+    pop.append(clear);
+    this.el.append(pop);
+
+    // Toggle on the ● button; close on an outside click.
+    const onDoc = (ev: PointerEvent) => {
+      const t = ev.target as HTMLElement;
+      if (pop.contains(t) || t === btn) return;
+      pop.hidden = true;
+      document.removeEventListener("pointerdown", onDoc);
+    };
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      pop.hidden = !pop.hidden;
+      if (!pop.hidden) document.addEventListener("pointerdown", onDoc);
+      else document.removeEventListener("pointerdown", onDoc);
+    });
   }
 
   /** Pin the last prompt sent to this window's Claude (from the server). */

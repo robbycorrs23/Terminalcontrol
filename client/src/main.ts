@@ -67,6 +67,14 @@ const host: TermHost = {
       body: JSON.stringify({ on }),
     });
   },
+  onSetColor: (t, color) => {
+    // The box already applied the tint optimistically; persist + sync to others.
+    fetch(`/api/panes/${t.id}/color`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ color }),
+    });
+  },
 };
 
 // ---- Grid -------------------------------------------------------------
@@ -720,6 +728,9 @@ function connectControl() {
         break;
       case "tasks":
         applyRemoteTasks(m.tasks);
+        break;
+      case "color":
+        terms.get(m.pane)?.setColor(m.color);
         break;
       case "attention":
         onAttention(m.pane, m.kind);

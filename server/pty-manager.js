@@ -134,6 +134,7 @@ export class PtyManager extends EventEmitter {
       cmd: p.cmd,
       followUp: p.followUp,
       lastInput: p.lastInput || "",
+      color: p.color || "",
       createdAt: p.createdAt,
       sock: p.sock ?? null,
       dormant,
@@ -166,6 +167,7 @@ export class PtyManager extends EventEmitter {
       attention: { waiting: false, kind: null },
       followUp: !!m.followUp,
       lastInput: m.lastInput || "",
+      color: m.color || "",
       createdAt: m.createdAt || Date.now(),
       sessionAlive: false,
       _intentional: false,
@@ -312,6 +314,7 @@ export class PtyManager extends EventEmitter {
       attention: { waiting: false, kind: null },
       followUp: false,
       lastInput: "",
+      color: "",
       createdAt: Date.now(),
       sock: this.sock, // new sessions always live on the stable socket
       sessionAlive: false,
@@ -432,6 +435,14 @@ export class PtyManager extends EventEmitter {
     return (this.panes.get(id) || this.dormant.get(id))?.lastInput || "";
   }
 
+  // A user-chosen tint for this pane's border (a hex string, or "" to clear).
+  setColor(id, color) {
+    const pane = this.panes.get(id) || this.dormant.get(id);
+    if (!pane) return;
+    pane.color = String(color || "").slice(0, 32);
+    this._persistState();
+  }
+
   /** User closed the pane (×) — destroy it for good. */
   kill(id) {
     const pane = this.panes.get(id);
@@ -487,6 +498,7 @@ export class PtyManager extends EventEmitter {
       attention: p.attention,
       followUp: p.followUp,
       lastInput: p.lastInput || "",
+      color: p.color || "",
       createdAt: p.createdAt,
     };
   }

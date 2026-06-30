@@ -214,6 +214,15 @@ app.post("/api/panes/:id/followup", (req, res) => {
   res.status(204).end();
 });
 
+app.post("/api/panes/:id/color", (req, res) => {
+  const id = req.params.id;
+  if (!ptys.info(id)) return res.status(404).json({ error: "no such pane" });
+  const color = (req.body && typeof req.body.color === "string" ? req.body.color : "").trim();
+  ptys.setColor(id, color);
+  broadcast(ptys.sessionOf(id), { t: "color", pane: id, color });
+  res.status(204).end();
+});
+
 // --- Layouts -------------------------------------------------------------
 app.get("/api/layouts", (_req, res) => res.json(layouts.list()));
 

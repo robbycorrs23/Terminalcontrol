@@ -386,10 +386,57 @@ body.big .task .tedit {
   display: flex;
   flex-direction: column;
   background: var(--term-bg);
-  border: 1px solid var(--line);
+  /* `--tint` is the user's color-code (set per box); falls back to the default. */
+  border: 1px solid var(--tint, var(--line));
   border-radius: 8px;
   overflow: hidden;
   transition: box-shadow 0.2s, border-color 0.2s;
+}
+.term.tinted {
+  border-width: 2px;
+}
+/* The ● control glows in the current tint (dim when none). */
+.term .ctl.color {
+  color: var(--tint, var(--text-dim));
+}
+
+/* Color-picker popover */
+.term .cpop {
+  position: absolute;
+  top: 23px;
+  right: 6px;
+  z-index: 6;
+  display: flex;
+  gap: 6px;
+  padding: 6px 7px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.term .cpop .sw {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: var(--c);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.term .cpop .sw:hover {
+  transform: scale(1.18);
+}
+.term .cpop .sw.clear {
+  background: transparent;
+  color: var(--text-dim);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  line-height: 1;
+}
+.term .cpop .sw.clear:hover {
+  color: var(--text);
 }
 .term .title {
   display: flex;
