@@ -58,6 +58,39 @@ FLEET_HOST=0.0.0.0 npm run go   # reachable from the network — you accept the 
 It prints a warning when bound to anything other than loopback. There is still no
 auth, so put it behind a VPN/SSH tunnel/reverse proxy if you go this route.
 
+Also enforced for any browser request: a **same-origin / anti-DNS-rebind guard**.
+A request carrying an `Origin` must have it match the `Host`, and (in loopback mode
+or when an allowlist is set) the `Host` must be a trusted authority — so a website
+you visit can't drive `localhost:4280` (cross-site `fetch`/WebSocket → your shells).
+The local `curl` hooks send no `Origin` and are allowed.
+
+## Remote access (securely)
+
+Because there's no app auth, **never expose FleetView with a public URL** (no
+`tailscale funnel`, ngrok-to-public, or open port). Reach it over a private,
+authenticated network instead. Recommended: **Tailscale** (WireGuard mesh).
+
+1. Install Tailscale on the host **and** each device you'll connect from; sign in;
+   **enable 2FA** on the Tailscale account (an authenticator app is fine).
+2. Keep FleetView on the default **loopback** bind.
+3. Front it with a tailnet-only proxy (HTTPS, never public):
+   ```bash
+   tailscale serve --bg 4280
+   ```
+4. Tell FleetView's guard to trust your tailnet name, and bake it into the
+   login service so it survives reboots:
+   ```bash
+   FLEET_ALLOWED_HOSTS=<machine>.<tailnet>.ts.net npm run service:install
+   ```
+   (find the name with `tailscale status` / the admin console). Without this, the
+   guard rejects proxied requests with a 403.
+5. Harden the tailnet in the admin console: turn on **device approval**, and add an
+   **ACL** allowing only your devices to reach this host on `:4280`.
+
+Then browse to `https://<machine>.<tailnet>.ts.net` from any approved device,
+anywhere. Nothing is ever exposed to the public internet; access requires a
+signed-in, approved device on your tailnet.
+
 ## Interactions
 
 - **Open a terminal** — `+ Terminal` opens an in-browser folder browser: drill in

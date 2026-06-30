@@ -79,23 +79,45 @@ const app = express();
 // WebSockets and does NOT enforce for cross-site POST *processing*. So we do it
 // ourselves. The curl alert hooks send no Origin and are allowed (they can only
 // reach us from this machine); any browser request must be same-origin.
+//
+// Extra trusted Host/Origin authorities beyond loopback. Set this to your tailnet
+// name when fronting FleetView with `tailscale serve` (the proxied request arrives
+// with that hostname, not localhost), e.g.
+//   FLEET_ALLOWED_HOSTS=mymac.tailnet-1234.ts.net
+// Comma-separated; hostnames only (ports ignored).
+const ALLOWED_HOSTS = (process.env.FLEET_ALLOWED_HOSTS || "")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+function hostnameOf(h) {
+  return String(h || "").replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
+}
+function trustedHost(h) {
+  const hn = hostnameOf(h);
+  return hn === "localhost" || hn === "127.0.0.1" || hn === "::1" || ALLOWED_HOSTS.includes(hn);
+}
+
 function sameOrigin(req) {
-  const host = req.headers.host; // e.g. "127.0.0.1:4280"
+  const host = req.headers.host;
   const origin = req.headers.origin;
   if (origin != null) {
-    // Browser request → its Origin host:port must equal our own Host. A
-    // cross-site attacker can't forge a matching Origin.
+    let oHost;
     try {
-      if (new URL(origin).host !== host) return false;
+      oHost = new URL(origin).host;
     } catch {
       return false;
     }
+    // CSRF: a browser request's Origin must equal our Host — OR both must be
+    // hosts we explicitly trust (a reverse proxy like `tailscale serve` may
+    // present a Host that differs from the browser's Origin). A cross-site
+    // attacker can't forge either.
+    if (oHost !== host && !(trustedHost(oHost) && trustedHost(host))) return false;
   }
-  if (isLoopback) {
-    // Anti-DNS-rebinding: in loopback mode the Host authority must be loopback.
-    const hostname = String(host).replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
-    if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) return false;
-  }
+  // Anti-DNS-rebinding: when bound to loopback, or whenever an allowlist is set,
+  // the Host authority must be one we trust. (An explicit non-loopback bind with
+  // no allowlist means the operator opted into open binding — we don't second-guess.)
+  if ((isLoopback || ALLOWED_HOSTS.length) && !trustedHost(host)) return false;
   return true;
 }
 app.use((req, res, next) =>

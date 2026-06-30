@@ -49,6 +49,7 @@ const PATH = capturePath();
 const envPass = {};
 if (process.env.FLEET_PORT) envPass.FLEET_PORT = process.env.FLEET_PORT;
 if (process.env.FLEET_HOST) envPass.FLEET_HOST = process.env.FLEET_HOST;
+if (process.env.FLEET_ALLOWED_HOSTS) envPass.FLEET_ALLOWED_HOSTS = process.env.FLEET_ALLOWED_HOSTS;
 
 if (process.platform === "darwin") installMac();
 else if (process.platform === "linux") installLinux();
