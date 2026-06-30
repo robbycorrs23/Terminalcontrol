@@ -266,6 +266,7 @@ addEventListener("resize", () => {
 
 // ---- Drag to reorder --------------------------------------------------
 let dropTarget: HTMLElement | null = null;
+let dropAfter = false; // insert after (vs before) the drop target
 
 function enableDrag(t: Term) {
   t.titleBar.addEventListener("pointerdown", (e) => {
@@ -293,8 +294,7 @@ function enableDrag(t: Term) {
         width: t.el.offsetWidth,
         height: t.el.offsetHeight,
       });
-      const target = cellUnder(ev, t);
-      setDropTarget(target);
+      setDropTarget(dropSlot(ev, t));
     };
 
     const onUp = (ev: PointerEvent) => {
@@ -302,12 +302,11 @@ function enableDrag(t: Term) {
       document.removeEventListener("pointerup", onUp);
       if (!dragging) return;
       const target = dropTarget;
+      const after = dropAfter;
       setDropTarget(null);
       t.el.classList.remove("dragging");
       t.el.removeAttribute("style");
       if (target && target !== t.cell) {
-        const tr = target.getBoundingClientRect();
-        const after = ev.clientX > tr.left + tr.width / 2;
         if (after) target.after(t.cell);
         else target.before(t.cell);
         reflow();
@@ -324,13 +323,30 @@ function enableDrag(t: Term) {
   });
 }
 
-function cellUnder(ev: PointerEvent, t: Term): HTMLElement | null {
-  t.el.style.pointerEvents = "none";
-  const under = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
-  t.el.style.pointerEvents = "";
-  const cell = under?.closest(".cell") as HTMLElement | null;
-  if (cell && cell !== t.cell && cell.parentElement === grid) return cell;
-  return null;
+// The cell to drop next to: the one whose center is nearest the cursor. Nearest-
+// cell (rather than requiring the cursor to land exactly on a cell via
+// elementFromPoint) makes dragging across rows reliable — gaps and the floating
+// drag box no longer block the drop. Also sets `dropAfter` (left/right of center).
+function dropSlot(ev: PointerEvent, t: Term): HTMLElement | null {
+  let best: HTMLElement | null = null;
+  let bestDist = Infinity;
+  for (const child of grid.children) {
+    const cell = child as HTMLElement;
+    if (cell === t.cell) continue;
+    const r = cell.getBoundingClientRect();
+    const dx = ev.clientX - (r.left + r.width / 2);
+    const dy = ev.clientY - (r.top + r.height / 2);
+    const dist = Math.hypot(dx, dy);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = cell;
+    }
+  }
+  if (best) {
+    const r = best.getBoundingClientRect();
+    dropAfter = ev.clientX > r.left + r.width / 2;
+  }
+  return best;
 }
 
 function setDropTarget(cell: HTMLElement | null) {
