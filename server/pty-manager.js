@@ -90,6 +90,32 @@ export class PtyManager extends EventEmitter {
     );
   }
 
+  /**
+   * Force tmux to re-emit the pane's authoritative current screen to its attached
+   * client (our pty bridge). When a browser reconnects to a still-running server it
+   * just re-hooks the existing pty buffer — tmux never sees a new attach, so a
+   * full-screen TUI (Claude) that paints only via cursor moves would leave the box
+   * blank until the next output. The raw `pane.buffer` replay can't reliably rebuild
+   * that screen (sliced escape sequences / alternate-screen state), so we ask tmux
+   * to repaint. No-op without tmux — a plain shell's buffer replay is enough.
+   */
+  _forceRedraw(pane) {
+    if (!this.tmux || !pane || !pane.pty) return;
+    try {
+      const r = spawnSync(
+        this.tmuxBin,
+        this._tx(["list-clients", "-t", "fleet_" + pane.id, "-F", "#{client_tty}"], pane.sock),
+        { stdio: ["ignore", "pipe", "ignore"] }
+      );
+      const tty = String(r.stdout || "")
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean)[0];
+      if (!tty) return;
+      spawnSync(this.tmuxBin, this._tx(["refresh-client", "-t", tty], pane.sock), { stdio: "ignore" });
+    } catch {}
+  }
+
   // Block synchronously without burning CPU (constructor-time only).
   _sleepSync(ms) {
     try {
@@ -383,6 +409,10 @@ export class PtyManager extends EventEmitter {
     }
     pane.clients.add(ws);
     safeSend(ws, { t: "d", d: pane.buffer });
+    // Replaying pane.buffer alone can't rebuild a full-screen TUI's screen on a
+    // fresh reconnect (the box would show blank). Give the client a beat to open
+    // and send its size, then have tmux repaint the authoritative current screen.
+    setTimeout(() => this._forceRedraw(pane), 60);
     ws.on("message", (raw) => {
       let m;
       try {
