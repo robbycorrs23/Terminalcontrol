@@ -1,7 +1,7 @@
 import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { xtermTheme, xtermFontSize, getAppearance } from "./theme";
+import { xtermTheme, xtermFontSize } from "./theme";
 
 export interface PaneInfo {
   id: string;
@@ -46,9 +46,6 @@ export class Term {
   private reconnectTimer?: number;
   private connectedOnce = false; // have we ever had an open socket?
   private disposed = false;
-  // false: mouse selects terminal text (drag to copy). true: mouse events go to the
-  // app (Claude) so a click positions the cursor — but then drag-select needs Shift.
-  private mouseToApp = getAppearance().mouse;
 
   constructor(info: PaneInfo, host: TermHost) {
     this.id = info.id;
@@ -233,7 +230,7 @@ export class Term {
     };
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
-      if (m.t === "d") this.term.write(this.filterMouse(m.d));
+      if (m.t === "d") this.term.write(m.d);
     };
     // The PTY socket previously never reconnected, so after the laptop slept
     // (which silently kills the socket) the box looked alive but its terminal was
@@ -368,37 +365,6 @@ export class Term {
     // the user adds their message and hits Enter.
     this.send({ t: "d", d: paths.join(" ") + " " });
     this.focusTerm();
-  }
-
-  // The DEC private mode toggles apps use to (un)request mouse tracking.
-  private static MOUSE_ENABLE = /\x1b\[\?(1000|1002|1003|1005|1006|1015|1016)h/g;
-  private static MOUSE_OFF =
-    "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l";
-
-  /**
-   * In select/copy mode we don't want the app (Claude) to put xterm into
-   * mouse-reporting mode — that hijacks drag-to-select. Strip the tracking-enable
-   * sequences from the stream so xterm never enters mouse mode; in navigate mode we
-   * pass them through untouched so click-to-position (etc.) works.
-   */
-  private filterMouse(d: string): string {
-    return this.mouseToApp ? d : d.replace(Term.MOUSE_ENABLE, "");
-  }
-
-  /** Switch what the mouse does: false = select text (copy), true = drive the app. */
-  setMouseMode(on: boolean) {
-    if (on === this.mouseToApp) return;
-    this.mouseToApp = on;
-    if (on) {
-      // Re-pull the app's real mouse state from the server (it re-sends the enables
-      // on attach), so xterm enters exactly the mode Claude wants.
-      this.reconnectNow();
-    } else {
-      // Leave mouse mode now; future enables get stripped by filterMouse.
-      try {
-        this.term.write(Term.MOUSE_OFF);
-      } catch {}
-    }
   }
 
   /** Re-theme / resize the xterm when the user toggles appearance. */

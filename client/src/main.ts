@@ -927,25 +927,17 @@ async function loadLayouts() {
 // ---- Appearance (light/dark + large text) -----------------------------
 const themeBtn = document.getElementById("themeBtn")!;
 const textBtn = document.getElementById("textBtn")!;
-const mouseBtn = document.getElementById("mouseBtn")!;
 function applyAppearance() {
   const a = getAppearance();
   document.body.classList.toggle("light", a.light);
   document.body.classList.toggle("big", a.big);
   const theme = xtermTheme(a.light);
   const fs = xtermFontSize(a.big);
-  for (const t of terms.values()) {
-    t.setAppearance(theme, fs);
-    t.setMouseMode(a.mouse);
-  }
+  for (const t of terms.values()) t.setAppearance(theme, fs);
   themeBtn.textContent = a.light ? "☾" : "☀";
   themeBtn.title = a.light ? "Switch to dark" : "Switch to light";
   textBtn.textContent = a.big ? "A−" : "A⁺";
   textBtn.title = a.big ? "Switch to normal text" : "Switch to large text";
-  mouseBtn.classList.toggle("active", a.mouse);
-  mouseBtn.title = a.mouse
-    ? "Mouse drives Claude: click moves the cursor / clicks menus. Select text with Shift+drag. Click to switch back to selecting."
-    : "Mouse selects text: drag to highlight & copy. Click to let the mouse drive Claude (click to move the cursor).";
 }
 themeBtn.addEventListener("click", () => {
   const a = getAppearance();
@@ -955,11 +947,6 @@ themeBtn.addEventListener("click", () => {
 textBtn.addEventListener("click", () => {
   const a = getAppearance();
   setAppearance({ ...a, big: !a.big });
-  applyAppearance();
-});
-mouseBtn.addEventListener("click", () => {
-  const a = getAppearance();
-  setAppearance({ ...a, mouse: !a.mouse });
   applyAppearance();
 });
 

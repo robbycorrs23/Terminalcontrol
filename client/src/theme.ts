@@ -5,29 +5,22 @@
 
 const KEY_THEME = "fleet-theme"; // "light" | "dark"
 const KEY_TEXT = "fleet-text"; // "big" | "normal"
-const KEY_MOUSE = "fleet-mouse"; // "app" | "select"
 
 export interface Appearance {
   light: boolean;
   big: boolean;
-  // false (default): the mouse selects terminal text (drag to highlight & copy).
-  // true: the mouse drives the app (Claude) — click moves the cursor / clicks menus,
-  // and native text selection needs Shift. See Term.setMouseMode.
-  mouse: boolean;
 }
 
 export function getAppearance(): Appearance {
   return {
     light: localStorage.getItem(KEY_THEME) === "light",
     big: localStorage.getItem(KEY_TEXT) === "big",
-    mouse: localStorage.getItem(KEY_MOUSE) === "app",
   };
 }
 
 export function setAppearance(a: Appearance) {
   localStorage.setItem(KEY_THEME, a.light ? "light" : "dark");
   localStorage.setItem(KEY_TEXT, a.big ? "big" : "normal");
-  localStorage.setItem(KEY_MOUSE, a.mouse ? "app" : "select");
 }
 
 export function xtermTheme(light = getAppearance().light) {
