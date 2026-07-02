@@ -116,6 +116,42 @@ export class PtyManager extends EventEmitter {
     } catch {}
   }
 
+  /**
+   * The DECSET mouse-tracking sequences the pane's app currently wants, or "" if
+   * none. A fullscreen TUI (Claude) enables mouse mode once, long before a browser
+   * connects; that enable scrolls out of the replayed buffer, so a fresh xterm never
+   * enters mouse mode and silently drops every click (tmux would route it to the app,
+   * but it never leaves the browser). tmux tracks the app's requested modes as pane
+   * flags, so we read them and hand the client the exact enables to catch it up. A
+   * plain shell has no flags set → "" → we leave xterm's native selection alone.
+   */
+  _mouseEnables(pane) {
+    if (!this.tmux || !pane || !pane.pty) return "";
+    try {
+      const r = spawnSync(
+        this.tmuxBin,
+        this._tx(
+          ["display-message", "-p", "-t", "fleet_" + pane.id,
+            "#{mouse_any_flag}#{mouse_all_flag}#{mouse_button_flag}#{mouse_standard_flag}#{mouse_sgr_flag}#{mouse_utf8_flag}"],
+          pane.sock
+        ),
+        { stdio: ["ignore", "pipe", "ignore"] }
+      );
+      const [any, all, button, standard, sgr, utf8] = String(r.stdout || "").trim().split("").map((c) => c === "1");
+      if (!any) return ""; // no mouse mode active — don't touch xterm's selection
+      let seq = "";
+      // Only one tracking level is meaningful at a time; send the most specific set.
+      if (all) seq += "\x1b[?1003h";
+      else if (button) seq += "\x1b[?1002h";
+      else if (standard) seq += "\x1b[?1000h";
+      if (sgr) seq += "\x1b[?1006h";
+      else if (utf8) seq += "\x1b[?1005h";
+      return seq;
+    } catch {
+      return "";
+    }
+  }
+
   // Block synchronously without burning CPU (constructor-time only).
   _sleepSync(ms) {
     try {
@@ -409,6 +445,10 @@ export class PtyManager extends EventEmitter {
     }
     pane.clients.add(ws);
     safeSend(ws, { t: "d", d: pane.buffer });
+    // Catch this fresh client up to the app's current mouse-tracking mode; without
+    // it, clicks in a full-screen TUI (Claude) go nowhere (see _mouseEnables).
+    const mouse = this._mouseEnables(pane);
+    if (mouse) safeSend(ws, { t: "d", d: mouse });
     // Replaying pane.buffer alone can't rebuild a full-screen TUI's screen on a
     // fresh reconnect (the box would show blank). Give the client a beat to open
     // and send its size, then have tmux repaint the authoritative current screen.
