@@ -152,30 +152,6 @@ export class PtyManager extends EventEmitter {
     }
   }
 
-  /**
-   * The pane's current on-screen text as clean, plain text (no escape codes),
-   * with wrapped lines rejoined (`-J`) so prose copies without hard breaks. Used
-   * by the per-box "copy" button — a non-invasive way to grab a terminal's text
-   * without touching how the app renders. For a fullscreen TUI (Claude) this is the
-   * visible screen; for a plain shell tmux also has scrollback, but we keep it to the
-   * visible screen for predictable "copy what I see" behavior. null if not capturable.
-   */
-  captureText(id) {
-    const pane = this.panes.get(id);
-    if (!pane || !this.tmux) return null;
-    try {
-      const r = spawnSync(
-        this.tmuxBin,
-        this._tx(["capture-pane", "-p", "-J", "-t", "fleet_" + id], pane.sock),
-        { stdio: ["ignore", "pipe", "ignore"], maxBuffer: 4 * 1024 * 1024 }
-      );
-      if (r.status !== 0) return null;
-      return String(r.stdout || "").replace(/\s+$/, "") + "\n";
-    } catch {
-      return null;
-    }
-  }
-
   // Block synchronously without burning CPU (constructor-time only).
   _sleepSync(ms) {
     try {
