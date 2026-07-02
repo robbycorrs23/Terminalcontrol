@@ -14,9 +14,9 @@ the one that's waiting on you.
 ![Local-only](https://img.shields.io/badge/runs-localhost%20only-3fb950)
 ![No accounts](https://img.shields.io/badge/telemetry-none-8b949e)
 
-<img src="docs/assets/screenshot-grid.png" alt="FleetView: a grid of terminals, one box glowing 'needs you', another 'done'" width="920">
+<img src="docs/assets/demo.gif" alt="FleetView: a grid of terminals; one box glows 'needs you' and a chip appears in the top bar, a click flies it to center, then another finishes 'done'" width="920">
 
-<em>Five live shells at a glance — the orange box <strong>needs you</strong>, the green one is <strong>done</strong>, and both show as chips up top.</em>
+<em>A box <strong>needs you</strong> → a chip jumps to the top bar → click to fly it to center → another finishes <strong>done</strong>. (<a href="docs/assets/screenshot-grid.png">still shot</a>)</em>
 
 </div>
 
