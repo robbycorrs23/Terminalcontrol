@@ -1,5 +1,6 @@
 import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import { xtermTheme, xtermFontSize } from "./theme";
 
@@ -84,6 +85,12 @@ export class Term {
       scrollback: 5000,
       theme: xtermTheme(),
     });
+    // Use Unicode 11 character widths so emoji (and other post-Unicode-6 glyphs)
+    // are measured as 2 cells to match tmux/Claude. Without this, xterm's default
+    // Unicode 6 table sizes them at 1 cell, desyncing its grid from the screen and
+    // breaking text selection at the first emoji. Must be active before any output.
+    this.term.loadAddon(new Unicode11Addon());
+    this.term.unicode.activeVersion = "11";
     this.fit = new FitAddon();
     this.term.loadAddon(this.fit);
     this.term.open(this.xtEl);
