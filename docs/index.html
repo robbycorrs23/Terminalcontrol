@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FleetView — Terminal Control</title>
+<meta name="description" content="One browser window, a grid of real terminals, a Claude in every box. When one needs you, it glows, dings, and jumps to the top bar." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='1' y='1' width='30' height='30' rx='6' fill='%231f6feb'/%3E%3Cg fill='%23eaf2ff'%3E%3Crect x='7' y='7' width='7.5' height='7.5'/%3E%3Crect x='17.5' y='7' width='7.5' height='7.5'/%3E%3Crect x='7' y='17.5' width='7.5' height='7.5'/%3E%3Crect x='17.5' y='17.5' width='7.5' height='7.5'/%3E%3C/g%3E%3C/svg%3E" />
+<!-- Open Graph -->
+<meta property="og:title" content="FleetView — Terminal Control" />
+<meta property="og:description" content="A grid of real terminals in one browser window. Run a Claude in every box — when one needs you, it glows, dings, and jumps to the top bar." />
+<meta property="og:type" content="website" />
+<meta property="og:image" content="assets/screenshot-grid.png" />
+<style>
+  :root {
+    --bg: #0b0e14;
+    --bg-soft: #11151f;
+    --panel: #151a24;
+    --border: #232a37;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --blue: #58a6ff;
+    --blue-deep: #1f6feb;
+    --green: #3fb950;
+    --orange: #f0883e;
+    --purple: #bc8cff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, "Cascadia Code", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  /* subtle grid glow backdrop */
+  body::before {
+    content: "";
+    position: fixed; inset: 0; z-index: -1;
+    background:
+      radial-gradient(900px 500px at 50% -10%, rgba(31,111,235,.22), transparent 70%),
+      linear-gradient(rgba(88,166,255,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(88,166,255,.04) 1px, transparent 1px);
+    background-size: auto, 34px 34px, 34px 34px;
+  }
+
+  header.nav {
+    position: sticky; top: 0; z-index: 10;
+    backdrop-filter: blur(10px);
+    background: rgba(11,14,20,.72);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav .wrap { display: flex; align-items: center; gap: 16px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .2px; }
+  .brand .glyph {
+    width: 26px; height: 26px; border-radius: 7px; background: var(--blue-deep);
+    display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 3px; padding: 5px;
+  }
+  .brand .glyph i { background: #eaf2ff; border-radius: 1px; }
+  .nav .spacer { flex: 1; }
+  .nav a.navlink { color: var(--muted); font-size: 14px; }
+  .nav a.navlink:hover { color: var(--text); text-decoration: none; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 16px; border-radius: 9px; font-weight: 600; font-size: 14px;
+    border: 1px solid var(--border); color: var(--text); background: var(--panel);
+    transition: border-color .15s, transform .05s;
+  }
+  .btn:hover { text-decoration: none; border-color: #3a4658; }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--blue-deep); border-color: var(--blue-deep); color: #fff; }
+  .btn.primary:hover { background: #2b7bf3; }
+
+  section { padding: 72px 0; }
+  .hero { padding: 84px 0 40px; text-align: center; }
+  .hero h1 { font-size: clamp(34px, 6vw, 60px); line-height: 1.05; margin: 0 0 8px; letter-spacing: -1px; }
+  .hero h1 .accent {
+    background: linear-gradient(100deg, var(--blue), var(--purple));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero p.lede { font-size: clamp(17px, 2.4vw, 21px); color: var(--muted); max-width: 720px; margin: 0 auto 28px; }
+  .hero p.lede strong { color: var(--text); }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 22px; }
+  .badges { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .badges img { height: 20px; }
+
+  .shot { margin: 40px 0 0; }
+  .shot img {
+    width: 100%; height: auto; display: block; border-radius: 12px;
+    border: 1px solid var(--border);
+    box-shadow: 0 30px 80px -30px rgba(31,111,235,.5), 0 8px 30px rgba(0,0,0,.5);
+  }
+  .shot figcaption { text-align: center; color: var(--muted); font-size: 14px; margin-top: 14px; }
+  figure { margin: 0; }
+
+  h2.section-title { font-size: clamp(24px, 3.4vw, 34px); text-align: center; margin: 0 0 8px; letter-spacing: -.5px; }
+  p.section-sub { text-align: center; color: var(--muted); max-width: 640px; margin: 0 auto 44px; }
+
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card {
+    background: linear-gradient(180deg, var(--panel), var(--bg-soft));
+    border: 1px solid var(--border); border-radius: 14px; padding: 22px;
+    transition: border-color .15s, transform .15s;
+  }
+  .card:hover { border-color: #34506e; transform: translateY(-2px); }
+  .card .ico { font-size: 22px; margin-bottom: 10px; display: block; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .card code { color: var(--blue); background: rgba(88,166,255,.1); padding: 1px 5px; border-radius: 5px; font-family: var(--mono); font-size: 12.5px; }
+
+  .split { display: grid; grid-template-columns: 1.1fr 1fr; gap: 40px; align-items: center; }
+  @media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
+  .split h2 { font-size: clamp(23px, 3vw, 30px); margin: 0 0 14px; letter-spacing: -.5px; }
+  .split p { color: var(--muted); margin: 0 0 14px; }
+  .flow { font-family: var(--mono); font-size: 13px; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 12px; padding: 18px; color: var(--muted); overflow-x: auto; }
+  .flow b { color: var(--green); }
+
+  pre.code {
+    background: #0d1117; border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px 22px; overflow-x: auto; font-family: var(--mono); font-size: 14px; line-height: 1.7;
+    max-width: 720px; margin: 0 auto;
+  }
+  pre.code .c { color: var(--muted); }
+  pre.code .p { color: var(--green); }
+
+  .callout {
+    max-width: 760px; margin: 40px auto 0; display: flex; gap: 14px;
+    border: 1px solid #3a3320; background: linear-gradient(180deg, rgba(240,136,62,.08), transparent);
+    border-radius: 12px; padding: 18px 20px;
+  }
+  .callout .ico { font-size: 20px; }
+  .callout p { margin: 0; color: var(--text); font-size: 14.5px; }
+  .callout p strong { color: var(--orange); }
+
+  footer { border-top: 1px solid var(--border); padding: 40px 0 60px; color: var(--muted); font-size: 14px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: center; }
+  .tags { display: flex; gap: 8px; flex-wrap: wrap; }
+  .tag { border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px; font-size: 12.5px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <span class="brand"><span class="glyph"><i></i><i></i><i></i><i></i></span> FleetView</span>
+    <span class="spacer"></span>
+    <a class="navlink" href="#features">Features</a>
+    <a class="navlink" href="#attention">How it works</a>
+    <a class="navlink" href="#start">Quick start</a>
+    <a class="btn" href="https://github.com/schoppllc/Terminalcontrol">GitHub ↗</a>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <h1>One window.<br>A grid of <span class="accent">real terminals</span>.</h1>
+      <p class="lede">Run a <strong>Claude in every box</strong>. When one needs your approval or finishes,
+        its box <strong>glows</strong>, <strong>dings</strong>, and a chip jumps to the top bar — so you can drive
+        a whole fleet of agents and never miss the one waiting on you.</p>
+      <div class="cta">
+        <a class="btn primary" href="#start">Get started</a>
+        <a class="btn" href="https://github.com/schoppllc/Terminalcontrol">View on GitHub ↗</a>
+      </div>
+      <div class="badges">
+        <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-1f6feb" alt="Platform: macOS or Linux" />
+        <img src="https://img.shields.io/badge/runs-localhost%20only-3fb950" alt="Runs on localhost only" />
+        <img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License" />
+        <img src="https://img.shields.io/badge/telemetry-none-8b949e" alt="No telemetry" />
+      </div>
+      <figure class="shot">
+        <img src="assets/screenshot-grid.png" alt="FleetView: a grid of five terminals, one box glowing orange 'needs you', another green 'done', both shown as chips in the top bar" />
+        <figcaption>Five live shells at a glance — the orange box <strong style="color:var(--orange)">needs you</strong>, the green one is <strong style="color:var(--green)">done</strong>.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <h2 class="section-title">Built for running many agents at once</h2>
+      <p class="section-sub">Real shells, real durability, and alerting that comes straight from Claude — not from scraping the screen.</p>
+      <div class="features">
+        <div class="card">
+          <span class="ico">🖥️</span>
+          <h3>A grid of real shells</h3>
+          <p>One <code>node-pty</code> terminal per box — the actual <code>claude</code>, or any shell. Not a wrapper, not a mock.</p>
+        </div>
+        <div class="card">
+          <span class="ico">🔔</span>
+          <h3>Attention, not scraping</h3>
+          <p>Claude Code <em>hooks</em> tell FleetView exactly which box needs you. Glow, ding, and a browser-tab badge — nothing parsed from terminal text.</p>
+        </div>
+        <div class="card">
+          <span class="ico">🔍</span>
+          <h3>Zoom to focus</h3>
+          <p>Click a box and it flies to the center over a dimmed grid. Click away or hit <code>Esc</code> and it flies home.</p>
+        </div>
+        <div class="card">
+          <span class="ico">💾</span>
+          <h3>Sleep-safe &amp; restart-proof</h3>
+          <p>Every box runs in a detached <code>tmux</code> session, so your Claudes survive a server restart and auto-reconnect after the laptop sleeps.</p>
+        </div>
+        <div class="card">
+          <span class="ico">↩️</span>
+          <h3>Never lose a session</h3>
+          <p>If a session dies or you set it aside, the box lands in a recovery bar — reattachable with full state, never silently dropped.</p>
+        </div>
+        <div class="card">
+          <span class="ico">🗂️</span>
+          <h3>Layouts &amp; tasks</h3>
+          <p>Save and restore whole sets of terminals. Plus a nestable, drag-to-reorder task list synced live across every window.</p>
+        </div>
+        <div class="card">
+          <span class="ico">🎨</span>
+          <h3>Make it yours</h3>
+          <p>Light/dark, large-text mode, and per-box border color-coding — all persisted across reloads.</p>
+        </div>
+        <div class="card">
+          <span class="ico">🔒</span>
+          <h3>Local-only by default</h3>
+          <p>Binds to <code>127.0.0.1</code> with a same-origin / anti-DNS-rebind guard. No accounts, no telemetry, no public surface.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="zoom" style="padding-top:0;">
+    <div class="wrap">
+      <figure class="shot">
+        <img src="assets/screenshot-zoom.png" alt="Clicking a terminal zooms it to the center of the screen while the rest of the grid dims behind it" />
+        <figcaption>Click any box to zoom it to center; the rest of the fleet dims behind it.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="attention" style="background:var(--bg-soft); border-top:1px solid var(--border); border-bottom:1px solid var(--border);">
+    <div class="wrap split">
+      <div>
+        <h2>The alert comes from Claude itself</h2>
+        <p>Each terminal is spawned with a unique <code style="color:var(--blue)">FLEET_PANE_ID</code>. FleetView installs three guarded Claude Code hooks, so Claude reports <em>exactly</em> which box needs attention.</p>
+        <p>Nothing is parsed from the terminal. The hooks are a <strong>no-op</strong> in any shell that isn't a FleetView terminal, and you can remove them any time.</p>
+        <a class="btn" href="https://github.com/schoppllc/Terminalcontrol#how-the-alerting-works-no-output-scraping">Read the details ↗</a>
+      </div>
+      <div class="flow">
+Browser (per window)          Node server · localhost:4280
+  xterm.js grid  ──WS /term──►  PtyManager → node-pty shell/box
+  zoom-to-center                LayoutStore → layouts.json
+  glow · ding ◄─WS /control──   grid events
+                                POST /hook ◄── <b>Claude Code hooks</b>
+      </div>
+    </div>
+  </section>
+
+  <section id="start">
+    <div class="wrap">
+      <h2 class="section-title">Quick start</h2>
+      <p class="section-sub">Needs Node.js on macOS or Linux. tmux is strongly recommended (it's what makes terminals durable).</p>
+<pre class="code"><span class="c"># clone, then:</span>
+npm install      <span class="c"># builds node-pty (native) + pulls xterm/vite</span>
+npm run doctor   <span class="c"># checks tmux / curl / claude; offers to install tmux</span>
+npm run go       <span class="c"># build the client, then start the server</span>
+
+<span class="c"># open http://localhost:4280 → click "+ Terminal" → pick a folder</span></pre>
+      <div class="callout">
+        <span class="ico">⚠️</span>
+        <p><strong>Local tool, no auth.</strong> Reaching the port means running shells on the host, so FleetView binds to loopback only. Never expose it publicly — front remote access with a private tailnet (Tailscale). See the <a href="https://github.com/schoppllc/Terminalcontrol#security">Security</a> and <a href="https://github.com/schoppllc/Terminalcontrol#remote-access-securely">Remote access</a> docs.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <span class="brand" style="font-size:15px;"><span class="glyph" style="width:22px;height:22px;padding:4px;"><i></i><i></i><i></i><i></i></span> FleetView — Terminal Control</span>
+      <div style="margin-top:8px;">MIT-licensed · built with node-pty, xterm.js &amp; Vite · by <a href="https://github.com/schoppllc">Steve Schopp</a></div>
+    </div>
+    <div class="tags">
+      <span class="tag">localhost only</span>
+      <span class="tag">no telemetry</span>
+      <span class="tag">macOS · Linux</span>
+      <a class="tag" href="https://github.com/schoppllc/Terminalcontrol">GitHub ↗</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

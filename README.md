@@ -1,14 +1,60 @@
-# ▦ FleetView
+<div align="center">
 
-A single browser window holding a **grid of real terminals**. Click one and it
-flies to the center of the screen; click the dimmed background (or press `Esc`)
-and it flies home. Run a `claude` in each box — when one **needs your approval or
-asks a question**, its box glows and dings, and a chip appears in the top bar so
-you can jump straight to it.
+# ▦ FleetView — Terminal Control
 
-It's a local tool: the server spawns real shells on your machine (macOS or Linux,
-via `node-pty`) and binds to `localhost` only — it's not meant for the cloud or a
-shared network. See [Security](#security) before changing that.
+### One browser window. A grid of real terminals. A Claude in every box.
+
+When a Claude **needs your approval or finishes**, its box **glows**, **dings**, and a
+chip jumps to the top bar — so you can run a fleet of agents at once and never miss
+the one that's waiting on you.
+
+[![CI](https://github.com/schoppllc/Terminalcontrol/actions/workflows/ci.yml/badge.svg)](https://github.com/schoppllc/Terminalcontrol/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Platform: macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-1f6feb)
+![Local-only](https://img.shields.io/badge/runs-localhost%20only-3fb950)
+![No accounts](https://img.shields.io/badge/telemetry-none-8b949e)
+
+<img src="docs/assets/screenshot-grid.png" alt="FleetView: a grid of terminals, one box glowing 'needs you', another 'done'" width="920">
+
+<em>Five live shells at a glance — the orange box <strong>needs you</strong>, the green one is <strong>done</strong>, and both show as chips up top.</em>
+
+</div>
+
+---
+
+FleetView is a **local tool**. A tiny Node server on `localhost` spawns real shells on
+your machine (macOS or Linux, via `node-pty`) and a single-page app renders them as a
+grid of [xterm.js](https://xtermjs.org/) boxes. Point each one at a folder, run `claude`
+in it, and drive a whole fleet from one window. It binds to `127.0.0.1` only — it is
+**not** for the cloud or a shared network. See [Security](#security).
+
+## Why FleetView
+
+- 🖥️ **A grid of real shells** — one `node-pty` terminal per box, the actual `claude`
+  (or any shell), not a wrapper or a fake. Click a box and it **flies to the center**
+  over a dimmed backdrop; click away or press `Esc` and it flies home.
+- 🔔 **Attention without output-scraping** — each shell carries a unique
+  `FLEET_PANE_ID`, and Claude Code **hooks** tell FleetView *exactly* which box needs
+  you. Nothing is parsed from terminal text; the hooks are a **no-op** in any shell
+  that isn't a FleetView terminal. Glow + ding + browser-tab badge.
+- 💾 **Sleep-safe & restart-proof** — every box runs inside a detached `tmux` session,
+  so your Claudes **survive a server restart or crash** and **auto-reconnect** after
+  the laptop sleeps. No lost context, no manual refresh.
+- ↩️ **Never silently lose a session** — if a session dies or you set it aside, the box
+  isn't dropped: it lands in a **recovery bar**, reattachable with full state.
+- 🗂️ **Layouts** — save and restore whole sets of terminals (folders + order); reorder
+  by dragging; open a layout to **add** to the window or **replace** (non-destructively).
+- ✅ **Shared task list** — a nestable, drag-to-reorder checklist synced live across
+  every window.
+- 🎨 **Make it yours** — light/dark, large-text mode, and per-box border **color-coding**,
+  all persisted.
+- 🔒 **Local-only by default** — loopback bind, a same-origin / anti-DNS-rebind guard,
+  and honest docs for the one safe way to reach it remotely (a private tailnet).
+
+<div align="center">
+<img src="docs/assets/screenshot-zoom.png" alt="Clicking a box zooms it to the center of the screen over a dimmed grid" width="820">
+<br><em>Click any box to zoom it to center; the rest of the fleet dims behind it.</em>
+</div>
 
 ## Quick start
 
@@ -18,8 +64,10 @@ npm run doctor   # checks tmux / curl / claude; offers to install tmux
 npm run go       # build the client, then start the server
 ```
 
-Open **http://localhost:4280**. Click **+ Terminal**, pick a folder, and a shell
-opens there running `claude` (untick "run claude" for a plain shell).
+Open **http://localhost:4280**. Click **+ Terminal**, pick a folder, and a shell opens
+there running `claude` (untick "run claude" for a plain shell).
+
+> 🌐 A visual tour lives at **[schoppllc.github.io/Terminalcontrol](https://schoppllc.github.io/Terminalcontrol/)**.
 
 ### Dependencies
 
@@ -230,6 +278,14 @@ Browser (per window)                 Node server (localhost:4280)
 | `client/src/tasks.ts` | the task-list sidebar (tree, drag, debounced save) |
 | `client/src/tab.ts` | browser-tab title + favicon attention indicator |
 | `client/src/sound.ts` | generated alert tones (WebAudio) |
+
+## Contributing
+
+Issues and PRs welcome. Before opening a PR: `npm run typecheck` and `npm run build`
+should pass (CI runs typecheck + build + `node --check`). There's no test framework —
+verify changes with throwaway Node scripts against isolated temp state (never boot a
+real server for a test; it reads/writes live `sessions.json` / `layouts.json` /
+`tasks.json` and reattaches real tmux sessions).
 
 ## License
 
