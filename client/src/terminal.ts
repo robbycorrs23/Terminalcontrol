@@ -62,6 +62,7 @@ export class Term {
       `<span class="path"></span>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
+      `<button class="ctl copy" title="Copy this box's visible text">⧉</button>` +
       `<button class="ctl img" title="Add image to prompt">🖼</button>` +
       `<button class="ctl color" title="Color-code this terminal"></button>` +
       `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
@@ -104,6 +105,10 @@ export class Term {
     this.titleBar.querySelector(".flag")!.addEventListener("click", (e) => {
       e.stopPropagation();
       host.onToggleFollowUp(this);
+    });
+    this.titleBar.querySelector(".copy")!.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void this.copyVisibleText(e.currentTarget as HTMLElement);
     });
     this.buildColorPopover(host);
     // 🖼 opens a file picker — the same path-injection flow as drag-and-drop.
@@ -300,6 +305,26 @@ export class Term {
   }
 
   /**
+   * Copy the box's current on-screen text to the clipboard. The text comes from the
+   * server (tmux capture-pane), so it works even for a fullscreen app whose output
+   * xterm can't cleanly select. Flashes the button ✓/✕ for quick feedback.
+   */
+  private async copyVisibleText(btn: HTMLElement) {
+    const original = btn.textContent;
+    let ok = false;
+    try {
+      const res = await fetch(`/api/panes/${this.id}/text`);
+      if (res.ok) ok = await copyToClipboard(await res.text());
+    } catch {}
+    btn.textContent = ok ? "✓" : "✕";
+    btn.title = ok ? "Copied!" : "Copy failed";
+    window.setTimeout(() => {
+      btn.textContent = original;
+      btn.title = "Copy this box's visible text";
+    }, 1000);
+  }
+
+  /**
    * Let users drop image files onto the box. We intercept the drop (otherwise the
    * browser just navigates to the image), upload each to the server, and type the
    * returned absolute path into the prompt — the same thing dragging an image into
@@ -457,6 +482,31 @@ function readAsDataURL(file: Blob): Promise<string> {
     r.onerror = () => reject(r.error);
     r.readAsDataURL(file);
   });
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  // Fallback for non-secure contexts (e.g. reached over plain http on a LAN/tailnet).
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 function el(tag: string, cls: string): HTMLElement {

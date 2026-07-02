@@ -227,6 +227,14 @@ app.post("/api/panes/:id/clear", (req, res) => {
   res.status(204).end();
 });
 
+// The pane's current on-screen text (clean, wrapped lines rejoined) for the
+// per-box copy button. Plain text so the client can drop it on the clipboard.
+app.get("/api/panes/:id/text", (req, res) => {
+  const text = ptys.captureText(req.params.id);
+  if (text == null) return res.status(404).json({ error: "cannot capture pane text" });
+  res.type("text/plain; charset=utf-8").send(text);
+});
+
 app.post("/api/panes/:id/followup", (req, res) => {
   const id = req.params.id;
   if (!ptys.info(id)) return res.status(404).json({ error: "no such pane" });
