@@ -265,10 +265,6 @@ export class PtyManager extends EventEmitter {
       }
       if (alive) {
         this._bridge(pane);
-        // Inject the inline-render env into pre-existing sessions too, so restarting
-        // Claude in an already-open box (exit + re-run) picks up inline rendering.
-        if (this.tmux)
-          spawnSync(this.tmuxBin, this._tx(["set-environment", "-t", "fleet_" + pane.id, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1"], pane.sock), { stdio: "ignore" });
         this.panes.set(pane.id, pane);
         restored++;
       } else {
@@ -293,11 +289,6 @@ export class PtyManager extends EventEmitter {
       FLEET_PANE_ID: pane.id,
       FLEET_PORT: String(this.port),
       TERM: "xterm-256color",
-      // Render Claude inline (no fullscreen/alternate-screen) so its output flows
-      // into normal scrollback — you can drag-select and copy any of it. Fullscreen
-      // mode repaints the screen and owns its own scroll, which breaks text
-      // selection. (Claude-only var; harmless to other programs.)
-      CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN: "1",
     };
     const term = this.tmux
       ? pty.spawn(this.tmuxBin, this._tx(["attach-session", "-t", "fleet_" + pane.id], pane.sock), {
@@ -345,8 +336,6 @@ export class PtyManager extends EventEmitter {
       this._tx([
         "new-session", "-d", "-s", name, "-x", "220", "-y", "50", "-c", dir,
         "-e", "FLEET_PANE_ID=" + id, "-e", "FLEET_PORT=" + this.port,
-        // Inline Claude rendering (see _bridge) so its output is selectable/copyable.
-        "-e", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1",
       ], sock),
       { stdio: "ignore" }
     );
