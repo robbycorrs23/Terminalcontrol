@@ -47,6 +47,12 @@ export class Term {
   private reconnectTimer?: number;
   private connectedOnce = false; // have we ever had an open socket?
   private disposed = false;
+  // While the server's scrollback replay is being parsed, xterm auto-answers any
+  // terminal queries it contains (DA/DSR/…). Those answers must NOT reach the
+  // live shell — they'd be typed as junk ("1;2c0;276;0c") at the prompt. The
+  // server strips known queries from the replay; this mute catches the rest.
+  private muteInput = false;
+  private replayGen = 0; // guards against a stale replay callback unmuting a newer one
 
   constructor(info: PaneInfo, host: TermHost) {
     this.id = info.id;
@@ -98,7 +104,10 @@ export class Term {
     this.fit = new FitAddon();
     this.term.loadAddon(this.fit);
     this.term.open(this.xtEl);
-    this.term.onData((d) => this.send({ t: "d", d }));
+    this.term.onData((d) => {
+      if (this.muteInput) return; // replay-triggered query answers, not the user
+      this.send({ t: "d", d });
+    });
 
     // Window controls. (Drag-to-reorder is wired by the orchestrator on titleBar.)
     this.titleBar.querySelector(".min")!.addEventListener("click", (e) => {
@@ -225,6 +234,10 @@ export class Term {
 
   private connect() {
     if (this.disposed) return;
+    // A fresh connection starts unmuted (its own replay will re-mute); this
+    // clears a mute left dangling if the previous socket died mid-replay.
+    this.replayGen++;
+    this.muteInput = false;
     // On a reconnect the box already shows the old output; the server replays the
     // full scrollback on attach, so clear first to avoid stacking it on top.
     if (this.connectedOnce) {
@@ -239,9 +252,24 @@ export class Term {
       this.connectedOnce = true;
       this.refit();
     };
+    // The first "d" on a fresh socket is the server's scrollback replay (sent
+    // unconditionally on attach). Mute input until xterm has finished parsing
+    // it, so any query answers it provokes are dropped instead of typed into
+    // the shell. Live output after that flows (and unmutes) normally.
+    let sawReplay = false;
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
-      if (m.t === "d") this.term.write(m.d);
+      if (m.t !== "d") return;
+      if (!sawReplay) {
+        sawReplay = true;
+        const gen = ++this.replayGen;
+        this.muteInput = true;
+        this.term.write(m.d, () => {
+          if (gen === this.replayGen) this.muteInput = false;
+        });
+      } else {
+        this.term.write(m.d);
+      }
     };
     // The PTY socket previously never reconnected, so after the laptop slept
     // (which silently kills the socket) the box looked alive but its terminal was

@@ -14,6 +14,23 @@ const SHELL =
 // can repaint the screen (scrollback) without the live process noticing.
 const SCROLLBACK = 256 * 1024;
 
+// Terminal-identity *queries* that programs (claude, tmux) emit to ask "what
+// terminal is this?": Device Attributes (CSI c / > c / = c), XTVERSION (CSI > q),
+// DSR cursor/status reports (CSI n), DECRQM mode queries (CSI $ p), and OSC
+// color queries (payload ending in ";?"). They end up in pane.buffer, and if
+// replayed verbatim on (re)attach, xterm.js in the browser answers each one
+// AGAIN — and those answers get forwarded to the live shell as if typed,
+// echoing junk like "1;2c0;276;0c" at the prompt. History never needs to
+// re-ask, so strip queries from the replay. Responses (e.g. CSI ? 1;2 c) are
+// inert to xterm.js and are left alone.
+const TERM_QUERY_RE =
+  // eslint-disable-next-line no-control-regex
+  /\x1b\[(?:[0-9;]*c|=[0-9;]*c|>[0-9;]*[cq]|[0-9;]*n|\?[0-9;]*n|\??[0-9;]*\$p)|\x1b\][0-9;]*;\?(?:\x07|\x1b\\)/g;
+
+export function stripTermQueries(s) {
+  return s.replace(TERM_QUERY_RE, "");
+}
+
 // Find a usable tmux. When present, shells run *inside* tmux so they survive the
 // FleetView server restarting/crashing — we just reattach. Without tmux we fall
 // back to spawning shells directly (they die with the server, as before).
@@ -408,7 +425,9 @@ export class PtyManager extends EventEmitter {
       return;
     }
     pane.clients.add(ws);
-    safeSend(ws, { t: "d", d: pane.buffer });
+    // Strip at replay time (not as chunks arrive) so a query split across two
+    // pty data events still matches once assembled.
+    safeSend(ws, { t: "d", d: stripTermQueries(pane.buffer) });
     // Replaying pane.buffer alone can't rebuild a full-screen TUI's screen on a
     // fresh reconnect (the box would show blank). Give the client a beat to open
     // and send its size, then have tmux repaint the authoritative current screen.
