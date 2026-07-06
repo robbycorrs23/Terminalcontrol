@@ -76,6 +76,10 @@ export class Term {
     this.cell.append(this.el);
 
     this.term = new Xterm({
+      // Required to load the Unicode11 addon below — it's an xterm "proposed API".
+      // Without this, loadAddon(Unicode11Addon) throws and the whole Term ctor
+      // fails, so no terminal box ever mounts (blank grid, recover does nothing).
+      allowProposedApi: true,
       // Monospace first, then symbol/emoji fallbacks so Claude's TUI glyphs
       // (e.g. ⏵ U+23F5, arrows) render instead of showing missing-glyph marks.
       fontFamily:
