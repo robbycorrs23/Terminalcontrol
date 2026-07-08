@@ -66,7 +66,7 @@ export class Term {
       `<span class="path"></span>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
-      `<button class="ctl img" title="Add image to prompt">🖼</button>` +
+      `<button class="ctl attach" title="Add file(s) to prompt">📎</button>` +
       `<button class="ctl color" title="Color-code this terminal"></button>` +
       `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
@@ -123,23 +123,20 @@ export class Term {
       host.onToggleFollowUp(this);
     });
     this.buildColorPopover(host);
-    // 🖼 opens a file picker — the same path-injection flow as drag-and-drop.
-    const fileInput = el("input", "img-input") as HTMLInputElement;
+    // 📎 opens a file picker — the same path-injection flow as drag-and-drop.
+    const fileInput = el("input", "file-input") as HTMLInputElement;
     fileInput.type = "file";
-    fileInput.accept = "image/*";
     fileInput.multiple = true;
     fileInput.hidden = true;
     this.el.append(fileInput);
-    this.titleBar.querySelector(".img")!.addEventListener("click", (e) => {
+    this.titleBar.querySelector(".attach")!.addEventListener("click", (e) => {
       e.stopPropagation();
       fileInput.click();
     });
     fileInput.addEventListener("change", () => {
-      const files = Array.from(fileInput.files || []).filter((f) =>
-        f.type.startsWith("image/")
-      );
+      const files = Array.from(fileInput.files || []);
       fileInput.value = ""; // let the same file be re-picked next time
-      if (files.length) void this.dropImages(files);
+      if (files.length) void this.dropFiles(files);
     });
 
     // Click the box (outside the controls) opens/zooms it.
@@ -149,7 +146,7 @@ export class Term {
       host.onOpen(this);
     });
 
-    this.wireImageDrop();
+    this.wireFileDrop();
 
     this.ro = new ResizeObserver(() => this.refit());
     this.ro.observe(this.xtEl);
@@ -336,12 +333,12 @@ export class Term {
   }
 
   /**
-   * Let users drop image files onto the box. We intercept the drop (otherwise the
-   * browser just navigates to the image), upload each to the server, and type the
-   * returned absolute path into the prompt — the same thing dragging an image into
-   * a native terminal does, which is how Claude picks up images.
+   * Let users drop files onto the box. We intercept the drop (otherwise the
+   * browser just navigates to the file), upload each to the server, and type the
+   * returned absolute path into the prompt — the same thing dragging a file into
+   * a native terminal does, which is how Claude picks up images and documents.
    */
-  private wireImageDrop() {
+  private wireFileDrop() {
     const target = this.el;
     let depth = 0; // dragenter/leave fire per child; count to know when we truly left
 
@@ -369,22 +366,36 @@ export class Term {
     target.addEventListener("drop", (e) => {
       depth = 0;
       target.classList.remove("dropping");
-      const files = Array.from(e.dataTransfer?.files || []).filter((f) =>
-        f.type.startsWith("image/")
+      const items = Array.from(e.dataTransfer?.items || []).filter(
+        (it) => it.kind === "file"
       );
-      if (!files.length) return; // not images → let the browser/xterm do its thing
-      e.preventDefault();
+      if (!items.length) return; // not a file drop → let the browser/xterm do its thing
+      e.preventDefault(); // even a folders-only drop must not navigate the page
       e.stopPropagation();
-      void this.dropImages(files);
+      const files: File[] = [];
+      for (const it of items) {
+        // Folders arrive as zero-byte phantom "files" — detect and skip them
+        // rather than upload garbage. (Folder upload is deliberately unsupported.)
+        if (it.webkitGetAsEntry?.()?.isDirectory) continue;
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+      if (files.length) void this.dropFiles(files);
     });
   }
 
-  private async dropImages(files: File[]) {
+  private async dropFiles(files: File[]) {
     const paths: string[] = [];
     for (const f of files) {
+      // Base64-over-JSON transport caps out ~20MB real bytes (30MB body limit);
+      // bigger files would 413 anyway, so skip them up front.
+      if (f.size > 20 * 1024 * 1024) {
+        console.error(`file too large to attach (>20MB): ${f.name}`);
+        continue;
+      }
       try {
         const dataUrl = await readAsDataURL(f);
-        const res = await fetch(`/api/panes/${this.id}/image`, {
+        const res = await fetch(`/api/panes/${this.id}/file`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ name: f.name, dataUrl }),

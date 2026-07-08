@@ -66,7 +66,7 @@ ptys.on("died", (pane, session, info) => broadcast(session, { t: "died", pane: i
 
 // Dropped images are written here so Claude can read them by absolute path —
 // the same contract as dragging a file into a native terminal.
-const UPLOAD_DIR = join(tmpdir(), "fleetview-images");
+const UPLOAD_DIR = join(tmpdir(), "fleetview-uploads");
 try {
   mkdirSync(UPLOAD_DIR, { recursive: true });
 } catch {}
@@ -195,30 +195,54 @@ app.post("/api/order", (req, res) => {
   res.status(204).end();
 });
 
-// A dropped image: save it to a temp file and hand back the absolute path. The
+// A dropped file: save it to a temp file and hand back the absolute path. The
 // client then types that path into the pane's prompt (see terminal.ts), exactly
-// like dragging an image into a real terminal. We don't touch the PTY here.
-app.post("/api/panes/:id/image", (req, res) => {
+// like dragging a file into a real terminal. We don't touch the PTY here.
+// Any file type is accepted — Claude Code reads images, PDFs, text, code, etc.
+function saveDroppedFile(req, res) {
   if (!ptys.info(req.params.id)) return res.status(404).json({ error: "no such pane" });
   const { name, dataUrl } = req.body || {};
-  const m = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl || "");
-  if (!m) return res.status(400).json({ error: "expected a base64 image data URL" });
+  // Mime may be empty ("data:;base64,…") — browsers emit that for unknown types.
+  const m = /^data:([^;]*);base64,(.+)$/s.exec(dataUrl || "");
+  if (!m) return res.status(400).json({ error: "expected a base64 data URL" });
   const [, mime, b64] = m;
-  if (!mime.startsWith("image/")) return res.status(400).json({ error: "not an image" });
 
   // Keep the original name (sanitized) for a readable path, but give each drop a
   // unique sub-dir so identical filenames never clobber each other.
-  const ext = extname(name || "") || "." + mime.split("/")[1].replace("+xml", "");
-  const base = (name || "image").replace(/[^a-zA-Z0-9._-]/g, "_").replace(/\.[^.]*$/, "");
+  const rawExt = extname(name || "");
+  const ext = rawExt || mimeExt(mime);
+  let base = (name || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
+  if (rawExt) base = base.slice(0, -rawExt.length);
   const dir = mkdtempSync(join(UPLOAD_DIR, "drop-"));
-  const file = join(dir, (base || "image") + ext);
+  const file = join(dir, (base || "file") + ext);
   try {
     writeFileSync(file, Buffer.from(b64, "base64"));
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
   res.json({ path: file });
-});
+}
+app.post("/api/panes/:id/file", saveDroppedFile);
+// Alias: browser tabs still running the pre-upgrade client bundle post here.
+app.post("/api/panes/:id/image", saveDroppedFile);
+
+// Derive an extension from the mime type only when the name had none and the
+// type is unambiguous; otherwise leave the filename extension-less.
+function mimeExt(mime) {
+  return (
+    {
+      "image/png": ".png",
+      "image/jpeg": ".jpg",
+      "image/gif": ".gif",
+      "image/webp": ".webp",
+      "image/svg+xml": ".svg",
+      "application/pdf": ".pdf",
+      "application/json": ".json",
+      "text/plain": ".txt",
+      "text/csv": ".csv",
+    }[mime] || ""
+  );
+}
 
 app.post("/api/panes/:id/clear", (req, res) => {
   const session = ptys.sessionOf(req.params.id);
