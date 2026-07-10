@@ -269,6 +269,18 @@ app.post("/api/panes/:id/color", (req, res) => {
   res.status(204).end();
 });
 
+// A user-chosen display name for the pane ("" reverts to the cwd basename).
+app.post("/api/panes/:id/name", (req, res) => {
+  const id = req.params.id;
+  if (!ptys.info(id)) return res.status(404).json({ error: "no such pane" });
+  const name = (req.body && typeof req.body.name === "string" ? req.body.name : "")
+    .trim()
+    .slice(0, 60);
+  ptys.setName(id, name);
+  broadcast(ptys.sessionOf(id), { t: "renamed", pane: id, name });
+  res.status(204).end();
+});
+
 // --- Layouts -------------------------------------------------------------
 app.get("/api/layouts", (_req, res) => res.json(layouts.list()));
 

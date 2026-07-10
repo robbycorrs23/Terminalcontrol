@@ -178,6 +178,7 @@ export class PtyManager extends EventEmitter {
       followUp: p.followUp,
       lastInput: p.lastInput || "",
       color: p.color || "",
+      name: p.name || "",
       createdAt: p.createdAt,
       sock: p.sock ?? null,
       dormant,
@@ -211,6 +212,7 @@ export class PtyManager extends EventEmitter {
       followUp: !!m.followUp,
       lastInput: m.lastInput || "",
       color: m.color || "",
+      name: m.name || "",
       createdAt: m.createdAt || Date.now(),
       sessionAlive: false,
       _intentional: false,
@@ -358,6 +360,7 @@ export class PtyManager extends EventEmitter {
       followUp: false,
       lastInput: "",
       color: "",
+      name: "",
       createdAt: Date.now(),
       sock: this.sock, // new sessions always live on the stable socket
       sessionAlive: false,
@@ -492,6 +495,14 @@ export class PtyManager extends EventEmitter {
     this._persistState();
   }
 
+  // A user-chosen display name ("" = fall back to the cwd basename in the UI).
+  setName(id, name) {
+    const pane = this.panes.get(id) || this.dormant.get(id);
+    if (!pane) return;
+    pane.name = String(name || "").trim().slice(0, 60);
+    this._persistState();
+  }
+
   /** User closed the pane (×) — destroy it for good. */
   kill(id) {
     const pane = this.panes.get(id);
@@ -548,6 +559,7 @@ export class PtyManager extends EventEmitter {
       followUp: p.followUp,
       lastInput: p.lastInput || "",
       color: p.color || "",
+      name: p.name || "",
       createdAt: p.createdAt,
     };
   }
@@ -559,6 +571,7 @@ export class PtyManager extends EventEmitter {
       cmd: p.cmd,
       session: p.session,
       followUp: p.followUp,
+      name: p.name || "",
       createdAt: p.createdAt,
       order: p.order,
       sessionAlive: !!p.sessionAlive,

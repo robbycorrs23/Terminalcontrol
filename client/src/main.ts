@@ -1,4 +1,4 @@
-import { Term, PaneInfo, TermHost } from "./terminal";
+import { Term, PaneInfo, TermHost, displayName } from "./terminal";
 import { play } from "./sound";
 import { setTabAttention } from "./tab";
 import { initTasks, applyRemoteTasks, closeTasksIfOpen } from "./tasks";
@@ -73,6 +73,18 @@ const host: TermHost = {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ color }),
+    });
+  },
+  onRename: (t, name) => {
+    // The box already shows the new name optimistically; refresh the chips that
+    // show it too, then persist + sync to other windows.
+    renderTray();
+    renderQueue();
+    renderFollowups();
+    fetch(`/api/panes/${t.id}/name`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
     });
   },
 };
@@ -171,7 +183,7 @@ function renderTray() {
     chip.className =
       "tchip" + (t.isWaiting() ? " waiting" + (t.waitingKind() === "done" ? " done" : "") : "");
     chip.innerHTML = `<span class="tname"></span><span class="tclose" title="Close">✕</span>`;
-    (chip.querySelector(".tname") as HTMLElement).textContent = basenameOf(t.info.cwd);
+    (chip.querySelector(".tname") as HTMLElement).textContent = displayName(t.info);
     chip.addEventListener("click", (e) => {
       if ((e.target as HTMLElement).classList.contains("tclose")) {
         e.stopPropagation();
@@ -394,7 +406,7 @@ function renderQueue() {
     const chip = document.createElement("span");
     const kind = t?.waitingKind() === "done" ? "done" : "question";
     chip.className = "qchip" + (kind === "done" ? " done" : "");
-    chip.textContent = t ? basenameOf(t.info.cwd) : id;
+    chip.textContent = t ? displayName(t.info) : id;
     chip.onclick = () => t && zoom(t);
     queueEl.append(chip);
   }
@@ -406,7 +418,7 @@ function renderQueue() {
   const head = queue[0] ? terms.get(queue[0]) : undefined;
   setTabAttention(
     queue.length,
-    head ? basenameOf(head.info.cwd) : "",
+    head ? displayName(head.info) : "",
     head ? head.waitingKind() : null
   );
 }
@@ -414,11 +426,6 @@ nextBtn.onclick = () => {
   const t = queue[0] && terms.get(queue[0]);
   if (t) zoom(t);
 };
-
-function basenameOf(p: string): string {
-  const parts = p.replace(/\/+$/, "").split("/");
-  return parts[parts.length - 1] || p;
-}
 
 function setFlagged(id: string, on: boolean) {
   if (on) flagged.add(id);
@@ -433,7 +440,7 @@ function renderFollowups() {
     if (!t) continue;
     const chip = document.createElement("span");
     chip.className = "fchip";
-    chip.textContent = basenameOf(t.info.cwd);
+    chip.textContent = displayName(t.info);
     chip.title = "Follow-up — click to jump";
     chip.onclick = () => zoom(t);
     followupsEl.append(chip);
@@ -482,7 +489,7 @@ function renderRecovery() {
       : `${info.cwd} — terminal died, click to respawn a fresh shell here`;
     const name = document.createElement("span");
     name.className = "rname";
-    name.textContent = basenameOf(info.cwd);
+    name.textContent = displayName(info);
     name.onclick = () => respawnPane(info.id);
     const x = document.createElement("span");
     x.className = "rx";
@@ -748,6 +755,19 @@ function connectControl() {
       case "color":
         terms.get(m.pane)?.setColor(m.color);
         break;
+      case "renamed": {
+        terms.get(m.pane)?.setName(m.name);
+        const d = dormant.get(m.pane);
+        if (d) {
+          d.name = m.name;
+          renderRecovery();
+        }
+        // Chips (tray / attention / follow-up) show the name too — redraw them.
+        renderTray();
+        renderQueue();
+        renderFollowups();
+        break;
+      }
       case "attention":
         onAttention(m.pane, m.kind);
         break;

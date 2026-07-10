@@ -12,7 +12,13 @@ export interface PaneInfo {
   followUp?: boolean;
   lastInput?: string;
   color?: string;
+  name?: string; // user-chosen display name; ""/absent = show the cwd basename
   createdAt: number;
+}
+
+/** What to call this pane everywhere it's shown: custom name, else folder name. */
+export function displayName(info: { name?: string; cwd: string }): string {
+  return info.name || basename(info.cwd);
 }
 
 export interface TermHost {
@@ -21,6 +27,7 @@ export interface TermHost {
   onMinimize(t: Term): void; // – → send to tray
   onToggleFollowUp(t: Term): void; // 🚩 → toggle the follow-up flag
   onSetColor(t: Term, color: string): void; // ● → tint the border ("" = clear)
+  onRename(t: Term, name: string): void; // title text edited ("" = revert to folder)
 }
 
 // The five border tints offered in the color popover.
@@ -72,8 +79,9 @@ export class Term {
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
     (this.titleBar.querySelector(".path") as HTMLElement).textContent =
-      basename(info.cwd);
+      displayName(info);
     (this.titleBar.querySelector(".path") as HTMLElement).title = info.cwd;
+    this.wireRename(host);
     this.badgeSlot = this.titleBar.querySelector(".badge-slot") as HTMLElement;
     this.pinnedEl = el("div", "pinned");
     this.pinnedEl.hidden = true;
@@ -158,6 +166,56 @@ export class Term {
     if (info.followUp) this.setFollowUp(true);
     if (info.lastInput) this.setLastInput(info.lastInput);
     if (info.color) this.setColor(info.color);
+  }
+
+  /** Set the custom display name ("" reverts to the folder name). */
+  setName(name: string) {
+    this.info.name = name;
+    const pathEl = this.titleBar.querySelector(".path") as HTMLElement;
+    pathEl.textContent = displayName(this.info);
+  }
+
+  /**
+   * Click the title text → edit it in place. Enter/blur saves, Esc cancels;
+   * saving empty (or the folder's own name) clears the custom name.
+   */
+  private wireRename(host: TermHost) {
+    const pathEl = this.titleBar.querySelector(".path") as HTMLElement;
+    pathEl.addEventListener("click", (e) => {
+      e.stopPropagation(); // the name is an edit target, not a zoom trigger
+      if (this.titleBar.querySelector(".rename")) return; // already editing
+      const input = el("input", "rename") as HTMLInputElement;
+      input.type = "text";
+      input.maxLength = 60;
+      input.value = displayName(this.info);
+      input.placeholder = basename(this.info.cwd);
+      pathEl.hidden = true;
+      pathEl.after(input);
+      input.focus();
+      input.select();
+      let done = false;
+      const finish = (save: boolean) => {
+        if (done) return;
+        done = true;
+        input.remove();
+        pathEl.hidden = false;
+        if (!save) return;
+        let name = input.value.trim();
+        if (name === basename(this.info.cwd)) name = ""; // typing the default = no custom name
+        if (name === (this.info.name || "")) return;
+        this.setName(name); // optimistic; server broadcast confirms
+        host.onRename(this, name);
+      };
+      input.addEventListener("keydown", (ev) => {
+        ev.stopPropagation(); // Esc must cancel the edit, not un-zoom the box
+        if (ev.key === "Enter") finish(true);
+        else if (ev.key === "Escape") finish(false);
+      });
+      input.addEventListener("blur", () => finish(true));
+      // Clicks/drag-selection inside the input must not zoom or drag the box.
+      input.addEventListener("click", (ev) => ev.stopPropagation());
+      input.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    });
   }
 
   /** Tint this box (a hex string), or "" to clear it. */
