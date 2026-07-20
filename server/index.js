@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
 import { openInEditor, openFolder } from "./open-file.js";
+import { findPathLinks } from "./path-links.js";
 import { LayoutStore } from "./layout-store.js";
 import { TaskStore } from "./task-store.js";
 import { ensureHooks } from "./setup-hooks.js";
@@ -304,6 +305,18 @@ app.post("/api/panes/:id/open", (req, res) => {
   if (st.isFile()) openInEditor(abs, line);
   else if (st.isDirectory()) openFolder(abs);
   res.status(204).end(); // sockets/devices/etc. fall through as a no-op
+});
+
+// Resolve the clickable file/dir paths in a line of terminal text. Used by the
+// client only for lines where a path may contain spaces (which it can't split
+// on its own): the filesystem is the only reliable arbiter of where such a path
+// ends, so we validate candidates against the pane's cwd. Returns half-open
+// [start, end) string indices into the same `line` the client sent.
+app.post("/api/panes/:id/resolve", (req, res) => {
+  const info = ptys.info(req.params.id);
+  if (!info) return res.status(404).json({ error: "no such pane" });
+  const line = req.body && typeof req.body.line === "string" ? req.body.line : "";
+  res.json({ links: line ? findPathLinks(line, info.cwd) : [] });
 });
 
 // --- Layouts -------------------------------------------------------------

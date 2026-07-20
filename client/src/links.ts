@@ -36,14 +36,33 @@ export function parseFileLink(
   return { file, line, text };
 }
 
+// A line needs server validation only when it has a space AND a path signal (a
+// "/" or a file-extension-like token). Without a space the client can match on
+// its own; with one, only the filesystem can say where the path ends.
+const NEEDS_SERVER =
+  /(?:\/|\.[A-Za-z0-9]{2,8}(?=$|[\s:)\]}]))/;
+
 class FileLinkProvider implements ILinkProvider {
-  constructor(private term: Terminal, private open: OpenFile) {}
+  constructor(
+    private term: Terminal,
+    private paneId: string,
+    private open: OpenFile
+  ) {}
 
   provideLinks(y: number, cb: (links: ILink[] | undefined) => void): void {
     const bufLine = this.term.buffer.active.getLine(y - 1);
     if (!bufLine) return cb(undefined);
     // Keep trailing spaces so string indices line up with terminal columns.
     const text = bufLine.translateToString(false);
+    if (text.includes(" ") && NEEDS_SERVER.test(text)) {
+      void this.serverLinks(text, y, cb); // spaces → let the server validate
+    } else {
+      cb(this.clientLinks(text, y)); // fast path, no round-trip
+    }
+  }
+
+  // Whitespace-delimited tokens matched purely client-side (no spaces in paths).
+  private clientLinks(text: string, y: number): ILink[] {
     const links: ILink[] = [];
     const tokenRe = /\S+/g;
     let m: RegExpExecArray | null;
@@ -53,22 +72,63 @@ class FileLinkProvider implements ILinkProvider {
       const off = lead ? lead[0].length : 0;
       const parsed = parseFileLink(m[0].slice(off));
       if (!parsed) continue;
-      const startIdx = m.index + off; // 0-based string index of the link's first char
-      links.push({
-        text: parsed.text,
-        // xterm columns are 1-based; end.x is the (inclusive) last cell.
-        range: {
-          start: { x: startIdx + 1, y },
-          end: { x: startIdx + parsed.text.length, y },
-        },
-        activate: () => this.open(parsed.file, parsed.line),
-      });
+      const startIdx = m.index + off; // 0-based index of the link's first char
+      links.push(this.link(parsed.text, startIdx, y, parsed.file, parsed.line));
     }
-    cb(links);
+    return links;
+  }
+
+  // Ask the server which spans of this line are real files/dirs (spaces and all).
+  private async serverLinks(
+    text: string,
+    y: number,
+    cb: (links: ILink[] | undefined) => void
+  ): Promise<void> {
+    try {
+      const res = await fetch(`/api/panes/${this.paneId}/resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ line: text }),
+      });
+      if (!res.ok) return cb(undefined);
+      const { links } = (await res.json()) as {
+        links: { start: number; end: number; path: string; line?: number }[];
+      };
+      cb(
+        links.map((l) =>
+          this.link(text.slice(l.start, l.end), l.start, y, l.path, l.line)
+        )
+      );
+    } catch {
+      cb(undefined);
+    }
+  }
+
+  // Build one xterm link. `startIdx` is a 0-based string index; xterm columns
+  // are 1-based and range.end.x is the inclusive last cell.
+  private link(
+    label: string,
+    startIdx: number,
+    y: number,
+    file: string,
+    line?: number
+  ): ILink {
+    return {
+      text: label,
+      range: {
+        start: { x: startIdx + 1, y },
+        end: { x: startIdx + label.length, y },
+      },
+      activate: () => this.open(file, line),
+    };
   }
 }
 
 /** Register the file-path link provider on a terminal. */
-export function installFileLinks(term: Terminal, open: OpenFile): void {
-  term.registerLinkProvider(new FileLinkProvider(term, open));
+export function installFileLinks(
+  term: Terminal,
+  paneId: string,
+  open: OpenFile
+): void {
+  term.registerLinkProvider(new FileLinkProvider(term, paneId, open));
 }

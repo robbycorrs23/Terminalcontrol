@@ -117,7 +117,7 @@ export class Term {
     // Make URLs clickable (open in a new tab) and file paths clickable (open in
     // an editor via the server). Must come after open() so the DOM layer exists.
     this.term.loadAddon(new WebLinksAddon());
-    installFileLinks(this.term, (path, line) => this.openFile(path, line));
+    installFileLinks(this.term, this.id, (path, line) => this.openFile(path, line));
     this.term.onData((d) => {
       if (this.muteInput) return; // replay-triggered query answers, not the user
       this.send({ t: "d", d });
