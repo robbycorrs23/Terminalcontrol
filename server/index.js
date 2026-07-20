@@ -6,7 +6,7 @@ import { dirname, join, extname, resolve } from "node:path";
 import { mkdtempSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
-import { openInEditor } from "./open-file.js";
+import { openInEditor, openFolder } from "./open-file.js";
 import { LayoutStore } from "./layout-store.js";
 import { TaskStore } from "./task-store.js";
 import { ensureHooks } from "./setup-hooks.js";
@@ -294,13 +294,16 @@ app.post("/api/panes/:id/open", (req, res) => {
   const line = req.body && Number.isInteger(req.body.line) ? req.body.line : undefined;
   const expanded = raw.startsWith("~") ? join(homedir(), raw.slice(1)) : raw;
   const abs = resolve(info.cwd, expanded);
+  let st;
   try {
-    if (!statSync(abs).isFile()) return res.status(204).end(); // dir/other → no-op
+    st = statSync(abs);
   } catch {
     return res.status(204).end(); // doesn't exist → no-op (absorbs bad matches)
   }
-  openInEditor(abs, line);
-  res.status(204).end();
+  // Files open in the editor (at the line); directories reveal in Finder.
+  if (st.isFile()) openInEditor(abs, line);
+  else if (st.isDirectory()) openFolder(abs);
+  res.status(204).end(); // sockets/devices/etc. fall through as a no-op
 });
 
 // --- Layouts -------------------------------------------------------------

@@ -48,3 +48,10 @@ export function openInEditor(absPath, line) {
   child.on("error", () => {}); // a missing editor must never throw into the request
   child.unref();
 }
+
+/** Reveal a directory in the macOS Finder (`open <dir>`), detached. */
+export function openFolder(absPath) {
+  const child = spawn("open", [absPath], { detached: true, stdio: "ignore" });
+  child.on("error", () => {});
+  child.unref();
+}
