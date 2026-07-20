@@ -1,6 +1,8 @@
 import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { installFileLinks } from "./links";
 import "@xterm/xterm/css/xterm.css";
 import { xtermTheme, xtermFontSize } from "./theme";
 
@@ -112,6 +114,10 @@ export class Term {
     this.fit = new FitAddon();
     this.term.loadAddon(this.fit);
     this.term.open(this.xtEl);
+    // Make URLs clickable (open in a new tab) and file paths clickable (open in
+    // an editor via the server). Must come after open() so the DOM layer exists.
+    this.term.loadAddon(new WebLinksAddon());
+    installFileLinks(this.term, (path, line) => this.openFile(path, line));
     this.term.onData((d) => {
       if (this.muteInput) return; // replay-triggered query answers, not the user
       this.send({ t: "d", d });
@@ -473,6 +479,19 @@ export class Term {
     // the user adds their message and hits Enter.
     this.send({ t: "d", d: paths.join(" ") + " " });
     this.focusTerm();
+  }
+
+  /**
+   * A file path was clicked in the terminal. Ask the server to open it in an
+   * editor; the server resolves it against this pane's cwd and stats it, so a
+   * bad match is a silent no-op. Any failure here is ignored on purpose.
+   */
+  private openFile(path: string, line?: number) {
+    fetch(`/api/panes/${this.id}/open`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, line }),
+    }).catch(() => {});
   }
 
   /** Re-theme / resize the xterm when the user toggles appearance. */
