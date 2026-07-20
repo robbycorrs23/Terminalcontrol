@@ -2,10 +2,11 @@ import express from "express";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
-import { dirname, join, extname } from "node:path";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { dirname, join, extname, resolve } from "node:path";
+import { mkdtempSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
+import { openInEditor } from "./open-file.js";
 import { LayoutStore } from "./layout-store.js";
 import { TaskStore } from "./task-store.js";
 import { ensureHooks } from "./setup-hooks.js";
@@ -278,6 +279,27 @@ app.post("/api/panes/:id/name", (req, res) => {
     .slice(0, 60);
   ptys.setName(id, name);
   broadcast(ptys.sessionOf(id), { t: "renamed", pane: id, name });
+  res.status(204).end();
+});
+
+// A file path clicked in the terminal → open it in an editor. The path is
+// resolved against the pane's cwd (Claude prints relative paths like
+// "server/index.js:42"); a non-existent target is a silent no-op so a
+// false-positive link match never launches anything. See server/open-file.js.
+app.post("/api/panes/:id/open", (req, res) => {
+  const info = ptys.info(req.params.id);
+  if (!info) return res.status(404).json({ error: "no such pane" });
+  const raw = req.body && typeof req.body.path === "string" ? req.body.path : "";
+  if (!raw) return res.status(400).json({ error: "no path" });
+  const line = req.body && Number.isInteger(req.body.line) ? req.body.line : undefined;
+  const expanded = raw.startsWith("~") ? join(homedir(), raw.slice(1)) : raw;
+  const abs = resolve(info.cwd, expanded);
+  try {
+    if (!statSync(abs).isFile()) return res.status(204).end(); // dir/other → no-op
+  } catch {
+    return res.status(204).end(); // doesn't exist → no-op (absorbs bad matches)
+  }
+  openInEditor(abs, line);
   res.status(204).end();
 });
 
