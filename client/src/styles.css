@@ -209,7 +209,10 @@ body {
 /* ---- Task list sidebar ---- */
 #tasks {
   position: fixed;
-  top: 0;
+  /* Start below the 40px top bar (#bar, z-index 60). At top:0 the sidebar's
+     header row (title, "hide done" toggle, ✕) slid under the taller, higher-
+     stacked bar and was invisible. */
+  top: 40px;
   right: 0;
   bottom: 0;
   width: 300px;
