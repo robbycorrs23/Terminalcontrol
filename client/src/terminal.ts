@@ -132,6 +132,7 @@ export class Term {
     // an editor via the server). Must come after open() so the DOM layer exists.
     this.term.loadAddon(new WebLinksAddon());
     installFileLinks(this.term, this.id, (path, line) => this.openFile(path, line));
+    this.wireCursorClick();
     this.term.onData((d) => {
       if (this.muteInput) return; // replay-triggered query answers, not the user
       this.send({ t: "d", d });
@@ -493,6 +494,63 @@ export class Term {
     // the user adds their message and hits Enter.
     this.send({ t: "d", d: paths.join(" ") + " " });
     this.focusTerm();
+  }
+
+  /**
+   * A terminal has no concept of "click to move the cursor" — the shell/CLI
+   * owns cursor position and only moves it in response to actual arrow-key
+   * bytes, so a mouse click is normally a no-op there (unlike a real text
+   * field, where the browser handles it for free). This fakes it: a plain
+   * click on the line the cursor is currently sitting on is translated into
+   * however many left/right arrow presses close the gap — the same bytes a
+   * physical arrow key would send, so it works with readline, Claude's TUI,
+   * anything that already supports arrow-key editing. Deliberately scoped
+   * tight to avoid misfiring: only while zoomed (typing, not just glancing at
+   * a background box), only a plain unmodified single click (not a
+   * text-selection drag, not a double-click for word-select), only on the
+   * cursor's own row (clicking on scrollback output above it shouldn't jump
+   * anything), and never while scrolled up into history.
+   */
+  private wireCursorClick() {
+    let downX = 0;
+    let downY = 0;
+    this.xtEl.addEventListener("pointerdown", (e) => {
+      downX = e.clientX;
+      downY = e.clientY;
+    });
+    this.xtEl.addEventListener("pointerup", (e) => {
+      if (
+        e.button !== 0 ||
+        e.detail > 1 || // double/triple click = word/line select, not "go here"
+        e.shiftKey ||
+        e.altKey ||
+        e.metaKey ||
+        e.ctrlKey ||
+        !this.el.classList.contains("zoomed") ||
+        Math.hypot(e.clientX - downX, e.clientY - downY) > 4 || // was a selection drag
+        (window.getSelection()?.toString() ?? "") // click landed inside selected text
+      ) {
+        return;
+      }
+      this.jumpCursorTo(e.clientX, e.clientY);
+    });
+  }
+
+  private jumpCursorTo(clientX: number, clientY: number) {
+    const screen = this.term.element;
+    if (!screen) return;
+    const buf = this.term.buffer.active;
+    if (buf.viewportY !== buf.baseY) return; // scrolled into history — the live cursor isn't even on screen
+    const rect = screen.getBoundingClientRect();
+    const cellW = rect.width / this.term.cols;
+    const cellH = rect.height / this.term.rows;
+    const col = Math.max(0, Math.floor((clientX - rect.left) / cellW));
+    const row = Math.floor((clientY - rect.top) / cellH);
+    if (row !== buf.cursorY) return; // only the line actually being edited
+    const delta = col - buf.cursorX;
+    if (delta === 0) return;
+    const key = delta > 0 ? "\x1b[C" : "\x1b[D"; // the exact bytes a physical arrow key sends
+    this.send({ t: "d", d: key.repeat(Math.abs(delta)) });
   }
 
   /**
