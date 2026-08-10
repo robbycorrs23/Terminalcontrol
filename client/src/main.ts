@@ -261,10 +261,29 @@ function unzoom() {
   });
 }
 
+// `visualViewport` (not innerWidth/innerHeight) is what actually shrinks when
+// the on-screen keyboard opens on mobile — innerHeight stays the full-screen
+// value, so sizing off it would let the keyboard cover the bottom of a zoomed
+// terminal (including the prompt you're typing into). On mobile we also skip
+// the floating-card margins entirely and go edge-to-edge: a phone screen is
+// too small to spare for a decorative border.
 function centerRect(): DOMRect {
-  const w = Math.min(1200, innerWidth * 0.92);
-  const h = innerHeight * 0.86;
-  return new DOMRect((innerWidth - w) / 2, (innerHeight - h) / 2 + 20, w, h);
+  const vv = window.visualViewport;
+  const vw = vv?.width ?? innerWidth;
+  const vh = vv?.height ?? innerHeight;
+  const vx = vv?.offsetLeft ?? 0;
+  const vy = vv?.offsetTop ?? 0;
+  if (mobileQuery.matches) {
+    // "Edge-to-edge" means filling everything below FleetView's own #bar, not
+    // literally y:0 — #bar is a normal in-flow element (not fixed) with a
+    // higher z-index than a zoomed terminal, so a rect starting at y:0 would
+    // render the terminal's own title bar hidden underneath it.
+    const barH = document.getElementById("bar")?.offsetHeight ?? 0;
+    return new DOMRect(vx, vy + barH, vw, vh - barH);
+  }
+  const w = Math.min(1200, vw * 0.92);
+  const h = vh * 0.86;
+  return new DOMRect(vx + (vw - w) / 2, vy + (vh - h) / 2 + 20, w, h);
 }
 function setRect(el: HTMLElement, r: { left: number; top: number; width: number; height: number }) {
   el.style.left = r.left + "px";
@@ -303,13 +322,18 @@ addEventListener("resize", () => {
 // on-screen keyboard opens/closes, shrinking the usable area without changing
 // innerHeight — without this, a zoomed terminal's fit()/rect can end up wrong
 // (partly hidden behind the keyboard) until something else forces a reflow.
-window.visualViewport?.addEventListener("resize", () => {
+function onVisualViewportChange() {
   if (zoomed) {
     setRect(zoomed.el, centerRect());
     zoomed.refit();
   }
   reflow();
-});
+}
+// `resize` catches the keyboard opening/closing (height change); `scroll`
+// catches iOS panning the page to keep the focused input above the keyboard
+// (can fire without a resize) — both need the zoomed rect recomputed.
+window.visualViewport?.addEventListener("resize", onVisualViewportChange);
+window.visualViewport?.addEventListener("scroll", onVisualViewportChange);
 
 // ---- Drag to reorder --------------------------------------------------
 let dropTarget: HTMLElement | null = null;

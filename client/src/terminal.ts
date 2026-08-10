@@ -85,10 +85,12 @@ export class Term {
     (this.titleBar.querySelector(".path") as HTMLElement).title = info.cwd;
     this.wireRename(host);
     this.badgeSlot = this.titleBar.querySelector(".badge-slot") as HTMLElement;
+    const cwdline = el("div", "cwdline");
+    cwdline.textContent = info.cwd;
     this.pinnedEl = el("div", "pinned");
     this.pinnedEl.hidden = true;
     this.xtEl = el("div", "xt");
-    this.el.append(this.titleBar, this.pinnedEl, this.xtEl);
+    this.el.append(this.titleBar, cwdline, this.pinnedEl, this.xtEl);
     this.cell.append(this.el);
     // Boxes opened via the "claude (work)" picker option get a dark-green title
     // tint + a faint logo watermark centered over the terminal, so they're

@@ -472,10 +472,19 @@ body.big .task .tedit {
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    gap: 10px;
   }
   .cell {
-    flex: 0 0 48px; /* matches the title bar's own height (44px buttons + border) so a
-                        collapsed row doesn't show dead space below its content */
+    flex: 0 0 auto; /* content-sized: a card is as tall as its title (+ cwd line, + last-prompt
+                        preview when present) — no fixed row height to leave dead space under
+                        cards that don't have every line */
+  }
+  /* Collapsed cards aren't absolutely positioned to fill their cell — they size
+     to their own content instead, which is what makes the line above work.
+     `.term.zoomed` keeps `position: fixed` from the base rule (higher
+     specificity — more classes — so it wins here regardless of this block). */
+  .term:not(.zoomed) {
+    position: static;
   }
   /* The row for whatever's currently zoomed is a redundant empty gap — its
      content is already showing full-screen via the fixed-position overlay
@@ -488,9 +497,17 @@ body.big .task .tedit {
     flex-basis: 0;
     overflow: hidden;
   }
-  .term:not(.zoomed) .xt,
-  .term:not(.zoomed) .pinned {
+  .term:not(.zoomed) .xt {
     display: none;
+  }
+  /* .pinned (last prompt sent) and .cwdline (full path) turn a collapsed row
+     into an actual card: name + where it is + what you last asked — reusing
+     data the app already tracks rather than inventing a new "preview" concept.
+     Neither shows at all when there's nothing to show (.pinned is hidden via
+     its own `hidden` attribute when there's no last input; .cwdline always
+     has content). */
+  .term:not(.zoomed) .cwdline {
+    display: block;
   }
   /* Minimizing doesn't mean anything here — every unzoomed terminal is
      already a compact row — and attach/color only matter once you're
@@ -515,6 +532,13 @@ body.big .task .tedit {
   .term .cpop .sw {
     width: 32px;
     height: 32px;
+  }
+  /* Zoomed = the whole visible screen (see centerRect() in main.ts, which
+     goes edge-to-edge on mobile) — a floating card's rounded corners/margins
+     just waste space you don't have on a phone. */
+  .term.zoomed {
+    border-radius: 0;
+    border-width: 0;
   }
 }
 
@@ -709,6 +733,18 @@ body.big .task .tedit {
 }
 body.big .term .pinned {
   font-size: 13px;
+}
+/* Full cwd path — a mobile-only "where is this" line for collapsed cards
+   (see the @media block above). Hidden everywhere else: desktop already has
+   the path in the title's hover tooltip, and it'd be redundant once zoomed. */
+.term .cwdline {
+  display: none;
+  padding: 0 8px 3px 30px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .term .xt {
   position: relative; /* anchors .work-logo to the terminal viewport, not the whole box */
