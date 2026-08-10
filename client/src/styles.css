@@ -474,21 +474,20 @@ body.big .task .tedit {
   transition: box-shadow 0.2s, border-color 0.2s;
 }
 /* Work-account boxes (opened via "claude (work)"): dark-green title tint +
-   a small logo pinned in the corner, so they read as "work" at a glance.
+   a large, very faint logo watermark centered over the terminal — big enough
+   to always catch your eye, faint enough to never fight with reading output.
    `.tinted` is declared after this, so a manual color-code still wins if set. */
 .term.work .title {
   background: color-mix(in srgb, #0d3b2e 55%, var(--panel));
 }
 .term.work .work-logo {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
-  width: 26px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: clamp(300px, 50%, 480px);
   height: auto;
-  padding: 4px 5px;
-  border-radius: 6px;
-  background: #0d3b2e;
-  opacity: 0.9;
+  opacity: 0.06;
   pointer-events: none;
   z-index: 5;
 }
@@ -655,6 +654,7 @@ body.big .term .pinned {
   font-size: 13px;
 }
 .term .xt {
+  position: relative; /* anchors .work-logo to the terminal viewport, not the whole box */
   flex: 1;
   min-height: 0;
   padding: 2px 4px;
