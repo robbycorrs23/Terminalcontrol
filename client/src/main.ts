@@ -281,7 +281,13 @@ function centerRect(): DOMRect {
     const barH = document.getElementById("bar")?.offsetHeight ?? 0;
     return new DOMRect(vx, vy + barH, vw, vh - barH);
   }
-  const w = Math.min(1200, vw * 0.92);
+  // No fixed max width: on a normal laptop 92% is already under any sane cap,
+  // but a hardcoded px cap (there used to be one at 1200) means a zoomed
+  // terminal stays pinned to that same width regardless of screen size — on
+  // a wide/HiDPI monitor that reads as "stuck in a small fraction of the
+  // screen." A terminal benefits from width (wide diffs, long lines, tables)
+  // the way prose doesn't, so there's no readability reason to cap it either.
+  const w = vw * 0.92;
   const h = vh * 0.86;
   return new DOMRect(vx + (vw - w) / 2, vy + (vh - h) / 2 + 20, w, h);
 }
