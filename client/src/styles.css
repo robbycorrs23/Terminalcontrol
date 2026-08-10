@@ -473,12 +473,12 @@ body.big .task .tedit {
   overflow: hidden;
   transition: box-shadow 0.2s, border-color 0.2s;
 }
-/* Work-account boxes (opened via "claude (work)"): dark-green title tint +
-   a large, very faint logo watermark centered over the terminal — big enough
-   to always catch your eye, faint enough to never fight with reading output.
+/* Work-account boxes (opened via "claude (work)"): didit-blue title tint +
+   a large, faint logo watermark centered over the terminal — big enough to
+   always catch your eye, faint enough to never fight with reading output.
    `.tinted` is declared after this, so a manual color-code still wins if set. */
 .term.work .title {
-  background: color-mix(in srgb, #0d3b2e 55%, var(--panel));
+  background: color-mix(in srgb, #00adec 55%, var(--panel));
 }
 .term.work .work-logo {
   position: absolute;
@@ -487,7 +487,7 @@ body.big .task .tedit {
   transform: translate(-50%, -50%);
   width: clamp(300px, 50%, 480px);
   height: auto;
-  opacity: 0.06;
+  opacity: 0.1;
   pointer-events: none;
   z-index: 5;
 }
