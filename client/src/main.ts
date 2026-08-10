@@ -16,11 +16,18 @@ const layoutSel = document.getElementById("layoutSel") as HTMLSelectElement;
 // This browser window's workspace id. sessionStorage is per-window and survives
 // refresh, so a refresh reconnects to the same terminals but a NEW window starts
 // its own empty workspace — letting different windows hold different layouts.
+// A `?session=` URL param joins an EXISTING workspace instead (e.g. copy the
+// address bar from one device to another to see the same live terminals there);
+// we also mirror the id back into the URL so any open window's link is always
+// copyable, not just ones that arrived via a shared link.
 const SESSION = (() => {
-  let s = sessionStorage.getItem("fleet-session");
-  if (!s) {
-    s = (crypto.randomUUID?.() || String(Math.random()).slice(2)) as string;
-    sessionStorage.setItem("fleet-session", s);
+  const params = new URLSearchParams(location.search);
+  let s = params.get("session") || sessionStorage.getItem("fleet-session");
+  if (!s) s = (crypto.randomUUID?.() || String(Math.random()).slice(2)) as string;
+  sessionStorage.setItem("fleet-session", s);
+  if (params.get("session") !== s) {
+    params.set("session", s);
+    history.replaceState(null, "", `${location.pathname}?${params}`);
   }
   return s;
 })();
