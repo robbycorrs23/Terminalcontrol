@@ -1,9 +1,9 @@
 # FleetView — agent guide
 
 A single browser window holding a **grid of real terminals** (one `node-pty` shell
-per box), each typically running `claude`. Click a box to zoom it; when a Claude
-needs approval or finishes, its box glows/dings and a chip appears in the top bar.
-Local-only tool: a Node server on `localhost` spawns the shells.
+per box), each typically running `claude` or `codex`. Click a box to zoom it; when
+an agent needs approval or finishes, its box glows/dings and a chip appears in the
+top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 
 ## Prerequisites (on any machine that runs this)
 - **Node.js** (project uses ESM; `node-pty` ships prebuilds for macOS/Linux x64/arm64).
@@ -11,8 +11,9 @@ Local-only tool: a Node server on `localhost` spawns the shells.
   so they survive server restarts/crashes. Without it, shells die with the server.
   Install: `brew install tmux` / `apt install tmux`.
 - **curl** — the Claude Code hooks use it to phone home. Usually preinstalled.
-- **`claude`** (Claude Code CLI) — for the per-box agents (untick "run claude" for a
-  plain shell).
+- **`claude`** (Claude Code CLI) and/or **`codex`** (Codex CLI, `npm install -g
+  @openai/codex`) — for the per-box agents (the picker's "run on open" select
+  chooses claude / codex / plain shell).
 - macOS or Linux. `$SHELL` should be set (falls back to `/bin/zsh`; see
   `server/pty-manager.js`).
 
@@ -73,6 +74,15 @@ Local-only tool: a Node server on `localhost` spawns the shells.
   on every server start: **Notification**→needs-you, **Stop**→done, **UserPromptSubmit**
   →pins the prompt. All no-op unless `$FLEET_PANE_ID` is set (i.e., inside a FleetView
   shell). Stripped-and-re-added idempotently (marker = `FLEET_PANE_ID`).
+  `setup-codex-hooks.js` does the same into `~/.codex/hooks.json`, mapping Codex's
+  **PermissionRequest**→needs-you, **Stop**→done, **UserPromptSubmit**→pins the
+  prompt (same `.prompt` field name Claude Code uses, so `/hook/prompt` needs no
+  agent-specific branching). Unlike Claude Code, Codex requires non-managed command
+  hooks to be reviewed/trusted once per machine before they fire — run `/hooks`
+  inside a `codex` session, or launch Codex panes with
+  `codex --dangerously-bypass-hook-trust` (bypasses trust review for ALL enabled
+  hooks that session, not just FleetView's — a real tradeoff, not a default we set
+  for you).
 - **WebSockets:** `/term?pane=` (per box, reconnects after sleep) and `/control?session=`
   (per browser window; grid events + initial panes/dormant/tasks snapshot).
 - **Tasks** are one global tree in `tasks.json`, broadcast to ALL windows on change.

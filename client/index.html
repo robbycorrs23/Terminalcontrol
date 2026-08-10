@@ -83,8 +83,13 @@
         <div class="precent" id="precent"></div>
         <div class="pfoot">
           <label class="runclaude">
-            <input type="checkbox" id="runClaude" checked />
-            run <code>claude</code> on open
+            run
+            <select id="agentSelect">
+              <option value="claude" selected>claude</option>
+              <option value="codex">codex</option>
+              <option value="">plain shell</option>
+            </select>
+            on open
           </label>
           <span class="spacer"></span>
           <button id="pcancel">Cancel</button>

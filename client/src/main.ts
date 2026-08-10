@@ -485,7 +485,7 @@ function renderRecovery() {
     const chip = document.createElement("span");
     chip.className = "rchip recover" + (info.sessionAlive ? " alive" : "");
     chip.title = info.sessionAlive
-      ? `${info.cwd} — set aside, click to restore (Claude session intact)`
+      ? `${info.cwd} — set aside, click to restore (session intact)`
       : `${info.cwd} — terminal died, click to respawn a fresh shell here`;
     const name = document.createElement("span");
     name.className = "rname";
@@ -516,7 +516,7 @@ const picker = document.getElementById("picker") as HTMLElement;
 const crumbsEl = document.getElementById("crumbs")!;
 const plistEl = document.getElementById("plist")!;
 const precentEl = document.getElementById("precent")!;
-const runClaude = document.getElementById("runClaude") as HTMLInputElement;
+const agentSelect = document.getElementById("agentSelect") as HTMLSelectElement;
 const searchEl = document.getElementById("psearch") as HTMLInputElement;
 const sortEl = document.getElementById("psort") as HTMLSelectElement;
 const mkdirBtn = document.getElementById("pmkdir")!;
@@ -689,7 +689,7 @@ async function loadPickerRecents() {
 }
 
 function choose(path: string) {
-  openTermAt(path, runClaude.checked ? "claude" : "");
+  openTermAt(path, agentSelect.value);
   closePicker();
 }
 async function openTermAt(cwd: string, cmd: string) {
@@ -890,8 +890,8 @@ document.getElementById("openBtn")!.addEventListener("click", () => {
   }
   pendingOpen = name;
   const n = terms.size;
-  const live = [...terms.values()].filter((t) => t.info.cmd?.includes("claude")).length;
-  const livePart = live ? ` (${live} running <code>claude</code>)` : "";
+  const live = [...terms.values()].filter((t) => /\b(claude|codex)\b/.test(t.info.cmd || "")).length;
+  const livePart = live ? ` (${live} running an agent)` : "";
   omMsg.innerHTML =
     `Open <b>${name}</b> — <b>Add</b> its terminals alongside the ${n} here, ` +
     `or <b>Replace</b>?<br><span class="omnote">Replace sets aside the current ` +

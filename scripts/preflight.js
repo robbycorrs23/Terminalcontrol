@@ -59,6 +59,13 @@ const DEPS = [
     why: "windows can't run `claude` (plain shells still work)",
     installCmd: "npm install -g @anthropic-ai/claude-code",
   },
+  {
+    bin: "codex",
+    pkg: null,
+    level: "agents",
+    why: "windows can't run `codex` (plain shells still work)",
+    installCmd: "npm install -g @openai/codex",
+  },
 ];
 
 export function checkDeps() {
@@ -84,7 +91,8 @@ export function preflight({ quietIfOk = false } = {}) {
   const results = checkDeps();
   const missing = results.filter((r) => !r.present);
   if (missing.length === 0) {
-    if (!quietIfOk) console.log("[fleetview] preflight ✓  tmux, curl, claude all found.");
+    if (!quietIfOk)
+      console.log(`[fleetview] preflight ✓  ${DEPS.map((d) => d.bin).join(", ")} all found.`);
     return results;
   }
   const bar = "─".repeat(66);

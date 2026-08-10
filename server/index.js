@@ -11,10 +11,11 @@ import { findPathLinks } from "./path-links.js";
 import { LayoutStore } from "./layout-store.js";
 import { TaskStore } from "./task-store.js";
 import { ensureHooks } from "./setup-hooks.js";
+import { ensureCodexHooks } from "./setup-codex-hooks.js";
 import { listDirs, makeDir } from "./fs-browse.js";
 import { preflight } from "../scripts/preflight.js";
 
-// Check for tmux / curl / claude FIRST, so any missing-dependency warning is the
+// Check for tmux / curl / claude / codex FIRST, so any missing-dependency warning is the
 // most prominent thing the user sees — not buried under later startup logs.
 preflight({ quietIfOk: true });
 
@@ -29,8 +30,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const DIST = join(ROOT, "dist");
 
-// Make sure Claude Code knows how to phone home before any terminal starts.
+// Make sure Claude Code / Codex know how to phone home before any terminal starts.
 ensureHooks(PORT);
+ensureCodexHooks(PORT);
 
 const ptys = new PtyManager(PORT, join(ROOT, "sessions.json"));
 const layouts = new LayoutStore(join(ROOT, "layouts.json"));
@@ -369,14 +371,14 @@ app.put("/api/tasks", (req, res) => {
   res.json(tree);
 });
 
-// --- Hook endpoint (Claude Code phones home here) ------------------------
+// --- Hook endpoint (Claude Code / Codex phone home here) -----------------
 app.post("/hook", (req, res) => {
   const { pane, kind } = req.body || {};
   if (pane) ptys.setAttention(pane, kind || "question");
   res.status(204).end();
 });
 
-// UserPromptSubmit hook forwards Claude's raw hook JSON here (the prompt is in
+// UserPromptSubmit hook forwards the agent's raw hook JSON here (the prompt is in
 // `.prompt`); we pin it as this window's "last input".
 app.post("/hook/prompt", (req, res) => {
   const id = req.query.pane;
