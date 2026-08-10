@@ -78,6 +78,7 @@ body {
   height: 40px;
   flex: none;
   padding: 0 10px;
+  padding-top: env(safe-area-inset-top); /* clears the iPhone notch; 0 elsewhere */
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   position: relative;
@@ -166,6 +167,12 @@ body {
   #barMenu select,
   #barMenu button {
     width: 100%;
+    min-height: 44px; /* touch target */
+  }
+  #menuBtn,
+  #addBtn {
+    min-width: 44px;
+    min-height: 44px;
   }
 }
 
@@ -439,6 +446,7 @@ body.big .task .tedit {
   display: grid;
   gap: 8px;
   padding: 8px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom)); /* clears the home indicator; 0 elsewhere */
   grid-auto-rows: 1fr;
 }
 .cell {
@@ -447,17 +455,66 @@ body.big .task .tedit {
   min-height: 0;
 }
 
-/* Narrow screens: one full-height terminal per "page", scroll for the next.
-   JS forces a single column (see reflow()) and orders needs-you terminals
-   first (see reflowMobileOrder()) — this just sizes/scrolls the rows. */
+/* Narrow screens: every terminal collapses to a compact row (just its
+   title bar — see the .xt/.pinned hiding rule below); tapping a row zooms it
+   full-screen via the existing zoom()/unzoom() in main.ts, completely
+   unchanged. `.term.zoomed` is `position: fixed` (see that rule below), so
+   it's already fully decoupled from its `.cell`'s box — shrinking the cell
+   doesn't affect the zoomed terminal's own rendering at all. JS forces a
+   single column (see reflow()) and floats needs-you terminals to the top of
+   this list (see reflowMobileOrder()) — with short rows, many are visible at
+   once without scrolling, which is the actual point. */
 @media (max-width: 640px) {
+  /* A plain flex list, not grid: grid-auto-rows forces every row in the
+     implicit track to share one size, which would fight the "collapse the
+     zoomed row's placeholder" rule below (flex items size independently). */
   #grid {
-    grid-auto-rows: 100%;
+    display: flex;
+    flex-direction: column;
     overflow-y: auto;
-    scroll-snap-type: y proximity;
   }
   .cell {
-    scroll-snap-align: start;
+    flex: 0 0 48px; /* matches the title bar's own height (44px buttons + border) so a
+                        collapsed row doesn't show dead space below its content */
+  }
+  /* The row for whatever's currently zoomed is a redundant empty gap — its
+     content is already showing full-screen via the fixed-position overlay
+     below, so collapse the placeholder instead of leaving a blank strip.
+     NOT display:none: that hides the whole subtree regardless of position,
+     which would take the position:fixed zoomed terminal down with it — fixed
+     positioning only escapes layout/clipping (flex-basis:0 + overflow:hidden
+     here), never the display cascade. */
+  .cell:has(.term.zoomed) {
+    flex-basis: 0;
+    overflow: hidden;
+  }
+  .term:not(.zoomed) .xt,
+  .term:not(.zoomed) .pinned {
+    display: none;
+  }
+  /* Minimizing doesn't mean anything here — every unzoomed terminal is
+     already a compact row — and attach/color only matter once you're
+     actually looking at a terminal, so declutter the collapsed row down to
+     just status + name + badge + close. Full toolset returns on zoom. */
+  .term:not(.zoomed) .ctl.attach,
+  .term:not(.zoomed) .ctl.color,
+  .term:not(.zoomed) .ctl.min {
+    display: none;
+  }
+  .term .title .path {
+    font-size: 16px; /* also keeps this row's rename input off the 14px iOS-zoom threshold */
+  }
+  .term .title .rename {
+    font-size: 16px;
+  }
+  .term .ctl,
+  .term .ctl.attach {
+    width: 44px;
+    height: 40px;
+  }
+  .term .cpop .sw {
+    width: 32px;
+    height: 32px;
   }
 }
 
@@ -1063,4 +1120,23 @@ body.big .term .pinned {
   border-color: var(--accent);
   color: #ffffff;
   font-weight: 700;
+}
+
+/* Neither row wraps by default — on a phone the search input, sort select,
+   +Folder/★Start buttons (.ptools) or the run-on-open select + Cancel/Open
+   here (.pfoot) just clip instead. Also bump to 16px: below that, iOS Safari
+   zooms the whole page in on focus, which is disorienting mid-type. */
+@media (max-width: 640px) {
+  .ptools,
+  .pfoot {
+    flex-wrap: wrap;
+  }
+  .ptools input,
+  .ptools select,
+  .ptools button,
+  .pfoot button,
+  #agentSelect {
+    font-size: 16px;
+    padding: 8px 10px;
+  }
 }

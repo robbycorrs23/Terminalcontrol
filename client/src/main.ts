@@ -299,6 +299,17 @@ addEventListener("resize", () => {
   if (zoomed) setRect(zoomed.el, centerRect());
   reflow();
 });
+// Mobile Safari fires visualViewport resize (not always window resize) when the
+// on-screen keyboard opens/closes, shrinking the usable area without changing
+// innerHeight — without this, a zoomed terminal's fit()/rect can end up wrong
+// (partly hidden behind the keyboard) until something else forces a reflow.
+window.visualViewport?.addEventListener("resize", () => {
+  if (zoomed) {
+    setRect(zoomed.el, centerRect());
+    zoomed.refit();
+  }
+  reflow();
+});
 
 // ---- Drag to reorder --------------------------------------------------
 let dropTarget: HTMLElement | null = null;
@@ -307,6 +318,10 @@ let dropAfter = false; // insert after (vs before) the drop target
 function enableDrag(t: Term) {
   t.titleBar.addEventListener("pointerdown", (e) => {
     if ((e.target as HTMLElement).closest(".ctl")) return; // controls aren't a handle
+    // On mobile a title bar IS a row in the list — a touch-drag there is meant
+    // to scroll the list, not reorder it (and reflowMobileOrder() already
+    // handles needs-you ordering automatically), so don't hijack the gesture.
+    if (mobileQuery.matches) return;
     if (e.button !== 0 || zoomed) return;
     const startX = e.clientX;
     const startY = e.clientY;
