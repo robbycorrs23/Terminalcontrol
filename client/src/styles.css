@@ -116,6 +116,59 @@ body {
   font-size: 14px;
 }
 
+/* Chip row scrolls horizontally instead of pushing "+ Terminal" / the menu
+   off-screen when many attention/recovery chips pile up on a narrow bar. */
+.bar-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  min-width: 0;
+  scrollbar-width: none;
+}
+.bar-chips::-webkit-scrollbar {
+  display: none;
+}
+
+/* On wide screens #barMenu's children lay out as if they were direct #bar
+   children (identical to pre-mobile-menu markup) — `menuBtn` stays display:none
+   so it takes no space and doesn't shift anything. */
+#barMenu {
+  display: contents;
+}
+#menuBtn {
+  display: none;
+}
+
+/* ---- Narrow / mobile: collapse secondary controls behind a menu button ---- */
+@media (max-width: 640px) {
+  #menuBtn {
+    display: inline-block;
+  }
+  #barMenu {
+    display: none;
+    position: absolute;
+    top: 40px;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    z-index: 59;
+  }
+  #barMenu.open {
+    display: flex;
+  }
+  #barMenu select,
+  #barMenu button {
+    width: 100%;
+  }
+}
+
 /* Current-layout indicator */
 .current {
   color: var(--text-dim);
@@ -392,6 +445,20 @@ body.big .task .tedit {
   position: relative;
   min-width: 0;
   min-height: 0;
+}
+
+/* Narrow screens: one full-height terminal per "page", scroll for the next.
+   JS forces a single column (see reflow()) and orders needs-you terminals
+   first (see reflowMobileOrder()) — this just sizes/scrolls the rows. */
+@media (max-width: 640px) {
+  #grid {
+    grid-auto-rows: 100%;
+    overflow-y: auto;
+    scroll-snap-type: y proximity;
+  }
+  .cell {
+    scroll-snap-align: start;
+  }
 }
 
 /* ---- A terminal box ---- */

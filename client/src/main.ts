@@ -124,13 +124,30 @@ async function closeTerm(id: string) {
 }
 
 // Square-ish auto grid based on how many cells are actually in the grid
-// (minimized ones are pulled out, so they don't count).
+// (minimized ones are pulled out, so they don't count). On narrow screens we
+// switch to one full-height terminal per "page" (scroll for the next) instead
+// — see the (max-width: 640px) rules in styles.css for the row sizing.
+const mobileQuery = matchMedia("(max-width: 640px)");
 function reflow() {
   const n = Math.max(grid.children.length, 1);
-  const cols = Math.ceil(Math.sqrt(n));
+  const cols = mobileQuery.matches ? 1 : Math.ceil(Math.sqrt(n));
   grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
   for (const t of terms.values()) if (!minimized.has(t.id)) t.refit();
+  reflowMobileOrder();
 }
+
+// Mobile-only visual ordering: terminals needing you float to the top of the
+// scroll stack (question > done > idle), stable otherwise. Pure presentation —
+// doesn't touch the underlying grid order that drag-to-reorder persists, so
+// desktop layouts and saved layouts are unaffected.
+function reflowMobileOrder() {
+  for (const t of terms.values()) {
+    t.cell.style.order = mobileQuery.matches
+      ? String(t.isWaiting() ? (t.waitingKind() === "done" ? 1 : 0) : 2)
+      : "";
+  }
+}
+mobileQuery.addEventListener("change", reflow);
 
 // ---- Minimize / tray --------------------------------------------------
 function minimize(t: Term) {
@@ -400,6 +417,7 @@ function clearAttention(id: string) {
   setCleared(id);
 }
 function renderQueue() {
+  reflowMobileOrder();
   queueEl.innerHTML = "";
   for (const id of queue) {
     const t = terms.get(id);
@@ -707,6 +725,24 @@ function prettyPath(p: string): string {
 
 document.getElementById("addBtn")!.addEventListener("click", openPicker);
 document.getElementById("pcancel")!.addEventListener("click", closePicker);
+
+// ---- Mobile menu (narrow screens collapse secondary bar controls here) ----
+const barMenu = document.getElementById("barMenu")!;
+const menuBtn = document.getElementById("menuBtn")!;
+menuBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  barMenu.classList.toggle("open");
+});
+barMenu.addEventListener("click", (e) => {
+  // Let the click's own handler (theme toggle, open layout, etc.) run first,
+  // then close — except selects, which need to stay open through the choice.
+  if ((e.target as HTMLElement).tagName !== "SELECT") barMenu.classList.remove("open");
+});
+document.addEventListener("click", (e) => {
+  if (!barMenu.classList.contains("open")) return;
+  if (e.target === menuBtn || barMenu.contains(e.target as Node)) return;
+  barMenu.classList.remove("open");
+});
 document.getElementById("popen")!.addEventListener("click", () => pickPath && choose(pickPath));
 picker.addEventListener("click", (e) => {
   if (e.target === picker) closePicker(); // click backdrop to dismiss
