@@ -916,9 +916,19 @@ addEventListener("pageshow", (e) => {
   if ((e as PageTransitionEvent).persisted) recoverConnections();
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && controlWs?.readyState !== WebSocket.OPEN) {
+  if (document.visibilityState !== "visible") return;
+  if (controlWs?.readyState !== WebSocket.OPEN) {
     recoverConnections();
+    return;
   }
+  // The socket survived, but browsers throttle/pause ResizeObserver and layout
+  // work in background tabs — a grid resize that happened while this tab
+  // wasn't visible (another terminal opened/closed, window moved to a
+  // different-size display) can get measured wrong or missed entirely, and
+  // nothing since would have re-checked it. Cheap and idempotent, so just
+  // always re-verify every terminal's fit on regaining focus rather than
+  // trying to detect whether a resize was actually missed.
+  reflow();
 });
 
 // ---- Current layout + autosave ----------------------------------------
