@@ -84,6 +84,16 @@ export class Term {
       displayName(info);
     (this.titleBar.querySelector(".path") as HTMLElement).title = info.cwd;
     this.wireRename(host);
+    // Boxes opened via the "claude (work)" picker option get a dark-green tint
+    // + corner logo so they're visually distinct from personal-account boxes
+    // at a glance, with no manual step (survives respawn since `cmd` persists).
+    if (info.cmd === "claude-work") {
+      this.el.classList.add("work");
+      const logo = el("img", "work-logo") as HTMLImageElement;
+      logo.src = "/didit-logo-white.png";
+      logo.alt = "";
+      this.el.append(logo);
+    }
     this.badgeSlot = this.titleBar.querySelector(".badge-slot") as HTMLElement;
     this.pinnedEl = el("div", "pinned");
     this.pinnedEl.hidden = true;

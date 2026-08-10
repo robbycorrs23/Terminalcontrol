@@ -473,6 +473,25 @@ body.big .task .tedit {
   overflow: hidden;
   transition: box-shadow 0.2s, border-color 0.2s;
 }
+/* Work-account boxes (opened via "claude (work)"): dark-green title tint +
+   a small logo pinned in the corner, so they read as "work" at a glance.
+   `.tinted` is declared after this, so a manual color-code still wins if set. */
+.term.work .title {
+  background: color-mix(in srgb, #0d3b2e 55%, var(--panel));
+}
+.term.work .work-logo {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 26px;
+  height: auto;
+  padding: 4px 5px;
+  border-radius: 6px;
+  background: #0d3b2e;
+  opacity: 0.9;
+  pointer-events: none;
+  z-index: 5;
+}
 /* Color-code: tint the title bar (the interior header), NOT the border — the
    border is reserved for the needs-you / done / flagged / zoomed alert glows.
    `--tint` is set per box; it inherits down to the title. */
