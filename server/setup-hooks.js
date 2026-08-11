@@ -40,12 +40,18 @@ function promptHookCommand() {
 
 /**
  * Idempotently merge the Notification (needs-you) and Stop (turn-finished) hooks
- * into ~/.claude/settings.json. Safe to run every server start: it strips any
+ * into <configDir>/settings.json. Safe to run every server start: it strips any
  * previously-installed FleetView hooks first, then re-adds the current ones, and
  * never touches unrelated hooks or settings.
+ *
+ * `configDir` defaults to `~/.claude`, but any `claude` process launched with
+ * `CLAUDE_CONFIG_DIR` pointed elsewhere (e.g. the "claude (work)" picker option,
+ * which uses `~/.claude-work` to keep a second account's login separate) reads
+ * its settings.json from THAT directory instead — so it needs its own copy of
+ * these hooks, or that account's terminals never get attention notifications.
  */
-export function ensureHooks(port = 4280) {
-  const dir = join(os.homedir(), ".claude");
+export function ensureHooks(port = 4280, configDir = join(os.homedir(), ".claude")) {
+  const dir = configDir;
   const file = join(dir, "settings.json");
 
   let settings = {};
@@ -82,7 +88,7 @@ export function ensureHooks(port = 4280) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(file, JSON.stringify(settings, null, 2));
   console.log(
-    "[fleetview] NOTE: updated your global ~/.claude/settings.json with 3 hooks\n" +
+    `[fleetview] NOTE: updated ${file} with 3 hooks\n` +
       "           (Notification / Stop / UserPromptSubmit). They are guarded and a\n" +
       "           no-op outside FleetView terminals. To remove them, see the README\n" +
       "           section \"Removing the hooks\"."

@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname, resolve } from "node:path";
-import { mkdtempSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, statSync, existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
 import { openInEditor, openFolder } from "./open-file.js";
@@ -32,6 +32,12 @@ const DIST = join(ROOT, "dist");
 
 // Make sure Claude Code / Codex know how to phone home before any terminal starts.
 ensureHooks(PORT);
+// A second Claude Code account (the "claude (work)" picker option) reads its own
+// settings.json from an isolated CLAUDE_CONFIG_DIR — only install hooks there if
+// that directory already exists, so machines that never set up a work account
+// don't get a ~/.claude-work directory created out of nowhere.
+const workConfigDir = join(homedir(), ".claude-work");
+if (existsSync(workConfigDir)) ensureHooks(PORT, workConfigDir);
 ensureCodexHooks(PORT);
 
 const ptys = new PtyManager(PORT, join(ROOT, "sessions.json"));
