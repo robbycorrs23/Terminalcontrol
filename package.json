@@ -35,11 +35,15 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "start": "node server/index.js",
-    "go": "npm run build && npm start"
+    "go": "npm run build && npm start",
+    "gate": "node server/gate.js"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/server": "^13.3.2",
     "@xterm/addon-unicode11": "^0.8.0",
     "express": "^4.21.2",
+    "http-proxy": "^1.18.1",
     "node-pty": "^1.0.0",
     "ws": "^8.18.0"
   },

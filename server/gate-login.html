@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FleetView — sign in</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0d1117;
+        color: #e6edf3;
+        font: 15px ui-monospace, Menlo, Monaco, monospace;
+      }
+      .panel {
+        width: min(340px, 90vw);
+        padding: 28px 24px;
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        text-align: center;
+      }
+      h1 { font-size: 16px; margin: 0 0 4px; color: #58a6ff; }
+      p.sub { color: #8b949e; margin: 0 0 20px; font-size: 13px; }
+      button {
+        width: 100%;
+        padding: 12px;
+        margin-top: 10px;
+        background: #21262d;
+        color: #e6edf3;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        font: inherit;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button:hover { border-color: #58a6ff; }
+      button.primary { background: #58a6ff; color: #0d1117; border-color: #58a6ff; font-weight: 700; }
+      #msg { min-height: 18px; margin-top: 14px; font-size: 12px; color: #f85149; }
+      #msg.ok { color: #3fb950; }
+      label { display: block; margin-top: 12px; font-size: 12px; color: #8b949e; text-align: left; }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 4px;
+        padding: 8px;
+        background: #0d1117;
+        color: #e6edf3;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        font: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <h1>▦ FleetView</h1>
+      <p class="sub" id="sub">Loading…</p>
+      <div id="ui" hidden>
+        <button id="loginBtn" class="primary" hidden>Sign in with passkey</button>
+        <label id="labelWrap" hidden
+          >Label this passkey (e.g. "laptop")
+          <input id="labelInput" type="text" maxlength="40" placeholder="this device" />
+        </label>
+        <button id="registerBtn" hidden>Register a passkey</button>
+      </div>
+      <div id="msg"></div>
+    </div>
+    <script src="/gate/webauthn-browser.js"></script>
+    <script>
+      const sub = document.getElementById("sub");
+      const ui = document.getElementById("ui");
+      const msg = document.getElementById("msg");
+      const loginBtn = document.getElementById("loginBtn");
+      const registerBtn = document.getElementById("registerBtn");
+      const labelWrap = document.getElementById("labelWrap");
+      const labelInput = document.getElementById("labelInput");
+
+      function say(text, ok) {
+        msg.textContent = text;
+        msg.className = ok ? "ok" : "";
+      }
+
+      async function api(path, body) {
+        const res = await fetch(path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `${path} failed (${res.status})`);
+        return data;
+      }
+
+      async function doLogin() {
+        say("");
+        try {
+          const options = await api("/gate/login/start");
+          const response = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: options });
+          await api("/gate/login/finish", response);
+          say("Signed in — loading FleetView…", true);
+          location.href = "/";
+        } catch (e) {
+          say(e.message || "Sign-in failed");
+        }
+      }
+
+      async function doRegister() {
+        say("");
+        try {
+          const label = labelInput.value.trim() || undefined;
+          const options = await api("/gate/register/start", { label });
+          const response = await SimpleWebAuthnBrowser.startRegistration({ optionsJSON: options });
+          await api("/gate/register/finish", { response, label });
+          say("Passkey registered — loading FleetView…", true);
+          location.href = "/";
+        } catch (e) {
+          say(e.message || "Registration failed");
+        }
+      }
+
+      loginBtn.addEventListener("click", doLogin);
+      registerBtn.addEventListener("click", doRegister);
+
+      (async () => {
+        try {
+          const res = await fetch("/gate/status");
+          const status = await res.json();
+          if (status.loggedIn) {
+            location.href = "/";
+            return;
+          }
+          if (status.hasPasskeys) {
+            sub.textContent = "Sign in to continue.";
+            loginBtn.hidden = false;
+          } else {
+            sub.textContent = "No passkey registered yet — set one up to continue.";
+            labelWrap.hidden = false;
+            registerBtn.hidden = false;
+            registerBtn.textContent = "Register your first passkey";
+            registerBtn.className = "primary";
+          }
+          // Once at least one passkey exists, registering another requires
+          // already being signed in — server enforces this; showing the
+          // button unconditionally here just means a logged-out visitor
+          // seeing the "add a passkey" option gets a clear error if they try.
+          if (status.hasPasskeys) {
+            labelWrap.hidden = false;
+            registerBtn.hidden = false;
+            registerBtn.textContent = "Register another passkey (requires sign-in)";
+          }
+          ui.hidden = false;
+        } catch {
+          sub.textContent = "Couldn't reach FleetView's gate.";
+        }
+      })();
+    </script>
+  </body>
+</html>
