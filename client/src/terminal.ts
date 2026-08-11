@@ -62,6 +62,8 @@ export class Term {
   // server strips known queries from the replay; this mute catches the rest.
   private muteInput = false;
   private replayGen = 0; // guards against a stale replay callback unmuting a newer one
+  private ctrlArmed = false; // mobile soft-key "Ctrl" toggle — see wireSoftKeys()
+  private ctrlKeyBtn?: HTMLElement;
 
   constructor(info: PaneInfo, host: TermHost) {
     this.id = info.id;
@@ -90,8 +92,23 @@ export class Term {
     this.pinnedEl = el("div", "pinned");
     this.pinnedEl.hidden = true;
     this.xtEl = el("div", "xt");
-    this.el.append(this.titleBar, cwdline, this.pinnedEl, this.xtEl);
+    // Mobile-only, shown while zoomed (see styles.css): a phone's on-screen
+    // keyboard has no Esc or Ctrl, and without Esc there's no way to interrupt
+    // Claude Code from a phone at all. Sits at the bottom of the (already
+    // keyboard-aware-sized, see centerRect() in main.ts) zoomed box, so it
+    // naturally ends up right above the keyboard when one is open.
+    const softkeys = el("div", "softkeys");
+    softkeys.innerHTML =
+      `<button data-key="Escape">Esc</button>` +
+      `<button data-key="Ctrl" class="ctrl-key">Ctrl</button>` +
+      `<button data-key="Tab">Tab</button>` +
+      `<button data-key="Up">↑</button>` +
+      `<button data-key="Down">↓</button>` +
+      `<button data-key="Left">←</button>` +
+      `<button data-key="Right">→</button>`;
+    this.el.append(this.titleBar, cwdline, this.pinnedEl, this.xtEl, softkeys);
     this.cell.append(this.el);
+    this.wireSoftKeys(softkeys);
     // Boxes opened via the "claude (work)" picker option get a dark-green title
     // tint + a faint logo watermark centered over the terminal, so they're
     // visually distinct from personal-account boxes without getting in the way
@@ -134,6 +151,11 @@ export class Term {
     installFileLinks(this.term, this.id, (path, line) => this.openFile(path, line));
     this.term.onData((d) => {
       if (this.muteInput) return; // replay-triggered query answers, not the user
+      if (this.ctrlArmed) {
+        this.ctrlArmed = false;
+        this.ctrlKeyBtn?.classList.remove("active");
+        d = this.applyCtrl(d);
+      }
       this.send({ t: "d", d });
     });
 
@@ -493,6 +515,48 @@ export class Term {
     // the user adds their message and hits Enter.
     this.send({ t: "d", d: paths.join(" ") + " " });
     this.focusTerm();
+  }
+
+  /**
+   * Esc/Tab/arrows send their real bytes immediately — identical to a
+   * physical keypress, so there's no ambiguity risk the way translating a
+   * tap position into keystrokes had. Ctrl is the one two-step key: tapping
+   * it arms a one-shot modifier that transforms the next character typed on
+   * the real (on-screen) keyboard — e.g. arm Ctrl, then type "c", and "c"
+   * arrives as Ctrl-C instead. Tapping Ctrl again while armed cancels it.
+   */
+  private wireSoftKeys(container: HTMLElement) {
+    const KEYS: Record<string, string> = {
+      Escape: "\x1b",
+      Tab: "\t",
+      Up: "\x1b[A",
+      Down: "\x1b[B",
+      Left: "\x1b[D",
+      Right: "\x1b[C",
+    };
+    this.ctrlKeyBtn = container.querySelector(".ctrl-key") as HTMLElement;
+    container.querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation(); // don't let the box's own click-to-zoom/unzoom fire
+        const key = (btn as HTMLElement).dataset.key!;
+        if (key === "Ctrl") {
+          this.ctrlArmed = !this.ctrlArmed;
+          this.ctrlKeyBtn?.classList.toggle("active", this.ctrlArmed);
+          return;
+        }
+        this.send({ t: "d", d: KEYS[key] });
+        this.focusTerm();
+      });
+    });
+  }
+
+  /** Ctrl-<letter> → the standard control code (Ctrl-C = 0x03, etc). Only
+   * transforms the first character; anything else passes through untouched
+   * so this is a no-op for non-letter input instead of doing something odd. */
+  private applyCtrl(d: string): string {
+    const c = d[0];
+    if (!c || !/[a-zA-Z]/.test(c)) return d;
+    return String.fromCharCode(c.toUpperCase().charCodeAt(0) - 64) + d.slice(1);
   }
 
   /**

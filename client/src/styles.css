@@ -509,6 +509,9 @@ body.big .task .tedit {
   .term:not(.zoomed) .cwdline {
     display: block;
   }
+  .term.zoomed .softkeys {
+    display: flex;
+  }
   /* Minimizing doesn't mean anything here — every unzoomed terminal is
      already a compact row — and attach/color only matter once you're
      actually looking at a terminal, so declutter the collapsed row down to
@@ -751,6 +754,37 @@ body.big .term .pinned {
   flex: 1;
   min-height: 0;
   padding: 2px 4px;
+}
+/* Mobile-only soft-key row (Esc/Ctrl/Tab/arrows) — a phone's on-screen keyboard
+   has none of these. Hidden by default; shown only under the mobile media
+   query, and only while zoomed (see there) — a physical keyboard already has
+   real versions of all of these, so desktop never needs this row at all. */
+.term .softkeys {
+  display: none;
+  flex: 0 0 auto;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+.term .softkeys button {
+  flex: 1;
+  min-height: 40px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.term .softkeys button:hover {
+  border-color: var(--accent);
+}
+.term .softkeys button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 .badge {
   background: var(--waiting);
