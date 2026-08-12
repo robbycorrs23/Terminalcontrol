@@ -39,6 +39,11 @@ ensureHooks(PORT);
 const workConfigDir = join(homedir(), ".claude-work");
 if (existsSync(workConfigDir)) ensureHooks(PORT, workConfigDir);
 ensureCodexHooks(PORT);
+// Same idea for a second Codex account (the "codex (work)" picker option):
+// only install hooks into ~/.codex-work if that directory already exists, so
+// machines that never set up a work account don't get one created out of nowhere.
+const codexWorkConfigDir = join(homedir(), ".codex-work");
+if (existsSync(codexWorkConfigDir)) ensureCodexHooks(PORT, codexWorkConfigDir);
 
 const ptys = new PtyManager(PORT, join(ROOT, "sessions.json"));
 const layouts = new LayoutStore(join(ROOT, "layouts.json"));

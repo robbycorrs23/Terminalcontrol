@@ -39,18 +39,24 @@ function promptHookCommand() {
 }
 
 /**
- * Idempotently merge FleetView's hooks into ~/.codex/hooks.json. Mirrors
+ * Idempotently merge FleetView's hooks into <configDir>/hooks.json. Mirrors
  * ensureHooks() in setup-hooks.js: Codex's PermissionRequest ~= Claude Code's
  * Notification (approval needed), Stop and UserPromptSubmit are named the
  * same in both. Safe to run every server start; never touches unrelated hooks.
+ *
+ * `configDir` defaults to `~/.codex`, but a `codex` process launched with
+ * `CODEX_HOME` pointed elsewhere (e.g. the "codex (work)" picker option,
+ * which uses `~/.codex-work` to keep a second account's auth.json separate)
+ * reads its hooks.json from THAT directory instead — so it needs its own copy
+ * of these hooks, or that account's terminals never get attention notifications.
  *
  * NOTE: Codex requires non-managed command hooks to be reviewed and trusted
  * once per machine (`/hooks` inside a `codex` session, or launch with
  * `codex --dangerously-bypass-hook-trust`) before they fire — writing this
  * file alone does not make them active.
  */
-export function ensureCodexHooks(port = 4280) {
-  const dir = join(os.homedir(), ".codex");
+export function ensureCodexHooks(port = 4280, configDir = join(os.homedir(), ".codex")) {
+  const dir = configDir;
   const file = join(dir, "hooks.json");
 
   let config = {};
@@ -59,7 +65,7 @@ export function ensureCodexHooks(port = 4280) {
       config = JSON.parse(readFileSync(file, "utf8"));
     } catch {
       console.warn(
-        "[fleetview] ~/.codex/hooks.json is not valid JSON; skipping Codex hook install."
+        `[fleetview] ${file} is not valid JSON; skipping Codex hook install.`
       );
       return;
     }
@@ -84,7 +90,7 @@ export function ensureCodexHooks(port = 4280) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(file, JSON.stringify(config, null, 2));
   console.log(
-    "[fleetview] NOTE: updated ~/.codex/hooks.json with 3 hooks (PermissionRequest\n" +
+    `[fleetview] NOTE: updated ${file} with 3 hooks (PermissionRequest\n` +
       "           / Stop / UserPromptSubmit). They are guarded and a no-op outside\n" +
       "           FleetView terminals. Codex won't run them until you trust them\n" +
       "           once — run `/hooks` inside a `codex` session, or start Codex\n" +

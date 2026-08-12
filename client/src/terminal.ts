@@ -111,12 +111,12 @@ export class Term {
     this.el.append(this.titleBar, cwdline, this.pinnedEl, this.xtEl, softkeys);
     this.cell.append(this.el);
     this.wireSoftKeys(softkeys);
-    // Boxes opened via the "claude (work)" picker option get a dark-green title
-    // tint + a faint logo watermark centered over the terminal, so they're
-    // visually distinct from personal-account boxes without getting in the way
-    // of reading the actual output. No manual step — `cmd` persists across
-    // respawns, so the tag survives them too.
-    if (info.cmd === "claude-work") {
+    // Boxes opened via the "claude (work)" / "codex (work)" picker options get
+    // a dark-green title tint + a faint logo watermark centered over the
+    // terminal, so they're visually distinct from personal-account boxes
+    // without getting in the way of reading the actual output. No manual
+    // step — `cmd` persists across respawns, so the tag survives them too.
+    if (info.cmd === "claude-work" || info.cmd === "codex-work") {
       this.el.classList.add("work");
       const logo = el("img", "work-logo") as HTMLImageElement;
       logo.src = "/didit-logo-white.png";
