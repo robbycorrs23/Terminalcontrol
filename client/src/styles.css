@@ -512,6 +512,15 @@ body.big .task .tedit {
   .term.zoomed .softkeys {
     display: flex;
   }
+  /* The ✕ already unzooms rather than closing while zoomed, but that's not
+     obvious full-screen on a phone — show an unambiguous back arrow instead.
+     Desktop never needs it: unzooming there is a click on the visible scrim
+     around the (non-edge-to-edge) zoomed card, or Escape. */
+  .term.zoomed .ctl.back {
+    display: grid;
+    font-size: 22px;
+    font-weight: 700;
+  }
   /* Minimizing doesn't mean anything here — every unzoomed terminal is
      already a compact row — and attach/color only matter once you're
      actually looking at a terminal, so declutter the collapsed row down to
@@ -698,6 +707,11 @@ body.big .task .tedit {
 .term .ctl.attach {
   width: 22px;
   font-size: 12px;
+}
+/* Mobile-only "back" affordance for the zoomed view — see the media query
+   below for when it actually shows. */
+.term .ctl.back {
+  display: none;
 }
 .term .ctl:hover {
   background: var(--btn);

@@ -53,6 +53,9 @@ const host: TermHost = {
     if (suppressNextOpen) return;
     zoom(t);
   },
+  onBack: (t) => {
+    if (zoomed === t) unzoom();
+  },
   onClose: (t) => {
     // The ✕ on the focused (zoomed) box closes the modal view, not the terminal —
     // killing a shell you just zoomed into is rarely what you meant. From the grid

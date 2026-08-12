@@ -25,6 +25,7 @@ export function displayName(info: { name?: string; cwd: string }): string {
 
 export interface TermHost {
   onOpen(t: Term): void; // user clicked the box → zoom it
+  onBack(t: Term): void; // ‹ (mobile, zoomed only) → unzoom, unambiguously
   onClose(t: Term): void; // × → kill it
   onMinimize(t: Term): void; // – → send to tray
   onToggleFollowUp(t: Term): void; // 🚩 → toggle the follow-up flag
@@ -73,6 +74,7 @@ export class Term {
     this.el = el("div", "term");
     this.titleBar = el("div", "title");
     this.titleBar.innerHTML =
+      `<button class="ctl back" title="Back">‹</button>` +
       `<span class="dot">●</span>` +
       `<span class="path"></span>` +
       `<span class="badge-slot"></span>` +
@@ -149,6 +151,7 @@ export class Term {
     // an editor via the server). Must come after open() so the DOM layer exists.
     this.term.loadAddon(new WebLinksAddon());
     installFileLinks(this.term, this.id, (path, line) => this.openFile(path, line));
+    this.wireTouchScroll();
     this.term.onData((d) => {
       if (this.muteInput) return; // replay-triggered query answers, not the user
       if (this.ctrlArmed) {
@@ -160,6 +163,14 @@ export class Term {
     });
 
     // Window controls. (Drag-to-reorder is wired by the orchestrator on titleBar.)
+    // Mobile-only (see styles.css): the ✕ already unzooms rather than closing
+    // when zoomed (see onClose below), but on a full-bleed phone screen that's
+    // not obvious — people read ✕ as "close" and avoid it, then have no way
+    // back short of backgrounding the browser. This is an unambiguous "back".
+    this.titleBar.querySelector(".back")!.addEventListener("click", (e) => {
+      e.stopPropagation();
+      host.onBack(this);
+    });
     this.titleBar.querySelector(".min")!.addEventListener("click", (e) => {
       e.stopPropagation();
       host.onMinimize(this);
@@ -548,6 +559,56 @@ export class Term {
         this.focusTerm();
       });
     });
+  }
+
+  /**
+   * xterm.js already turns a touch-drag into scrollback scrolling on its own
+   * — but only while the shell hasn't put the terminal into mouse-tracking
+   * mode (xterm's own touch handler explicitly backs off then, since a touch
+   * is supposed to become a mouse-report byte sequence instead). tmux mouse
+   * mode (`set -g mouse on`, a common tmux default) and some TUI screens in
+   * claude/codex turn mouse tracking on, and at that point touch-drag does
+   * nothing at all — no scroll, no mouse report either, since we never send
+   * touches as synthesized mouse events. This fills that gap: drive
+   * scrollback ourselves whenever mouse tracking is the reason xterm's own
+   * handling is sitting out, so a touch-drag always scrolls something.
+   */
+  private wireTouchScroll() {
+    let lastY: number | null = null;
+    let carry = 0; // fractional line remainder between touchmove events
+    this.xtEl.addEventListener(
+      "touchstart",
+      (e) => {
+        lastY =
+          e.touches.length === 1 && this.term.modes.mouseTrackingMode !== "none"
+            ? e.touches[0].pageY
+            : null;
+        carry = 0;
+      },
+      { passive: true },
+    );
+    this.xtEl.addEventListener(
+      "touchmove",
+      (e) => {
+        if (lastY == null || e.touches.length !== 1) return;
+        const y = e.touches[0].pageY;
+        const deltaPx = lastY - y;
+        lastY = y;
+        const cellH = this.term.element
+          ? this.term.element.getBoundingClientRect().height / this.term.rows
+          : 0;
+        if (!cellH) return;
+        carry += deltaPx / cellH;
+        const lines = Math.trunc(carry);
+        if (lines !== 0) {
+          this.term.scrollLines(lines);
+          carry -= lines;
+        }
+        e.preventDefault(); // we're driving the scroll; don't let the page also rubber-band
+      },
+      { passive: false },
+    );
+    this.xtEl.addEventListener("touchend", () => (lastY = null));
   }
 
   /** Ctrl-<letter> → the standard control code (Ctrl-C = 0x03, etc). Only
