@@ -48,6 +48,17 @@ body.big .rec-label {
 * {
   box-sizing: border-box;
 }
+/* No font-family was ever declared for the app's normal UI text, so it fell
+   back to the browser's default document font — a serif (Times-ish) on
+   mobile Safari/Chrome, whose word-spacing reads as much wider than a system
+   sans-serif. Went unnoticed because UI chrome text is all short labels/
+   buttons; became obvious once the chat bubbles (client/src/agent-chat.ts)
+   added real wrapped prose. The terminal itself is unaffected — xterm sets
+   its own monospace fontFamily in JS (see client/src/theme.ts). */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+}
 /* Ensure the `hidden` attribute always wins over element display rules below
    (e.g. #picker{display:grid}, #tray{display:flex}) — otherwise a hidden
    overlay keeps intercepting clicks. */
@@ -75,7 +86,14 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 40px;
+  /* min-height, not height: on notch/Dynamic-Island phones env(safe-area-inset-top)
+     alone can exceed 40px, and the mobile media query below bumps #addBtn/#menuBtn
+     to a 44px touch target. With a fixed `height` (box-sizing: border-box, see the
+     `*` rule up top) the box cannot grow to fit that content — it stayed pinned at
+     40px total, so the safe-area padding ate the entire box and the buttons'
+     bottoms overflowed past #bar's own border-bottom into the grid below. min-height
+     lets the box grow to whatever its content actually needs. */
+  min-height: 40px;
   flex: none;
   padding: 0 10px;
   padding-top: env(safe-area-inset-top); /* clears the iPhone notch; 0 elsewhere */
@@ -149,7 +167,11 @@ body {
   #barMenu {
     display: none;
     position: absolute;
-    top: 40px;
+    /* 100%, not a hardcoded px: #barMenu is a child of #bar (position: relative),
+       whose own height varies with env(safe-area-inset-top) — a fixed px here
+       drifted out of sync (opened mid-bar or left a gap) whenever that padding
+       made #bar taller than the number below assumed. */
+    top: 100%;
     left: 0;
     right: 0;
     flex-direction: column;
@@ -269,10 +291,14 @@ body {
 /* ---- Task list sidebar ---- */
 #tasks {
   position: fixed;
-  /* Start below the 40px top bar (#bar, z-index 60). At top:0 the sidebar's
-     header row (title, "hide done" toggle, ✕) slid under the taller, higher-
-     stacked bar and was invisible. */
-  top: 40px;
+  /* Start below the top bar (#bar, z-index 60). At top:0 the sidebar's header
+     row (title, "hide done" toggle, ✕) slid under the taller, higher-stacked
+     bar and was invisible. #tasks is `position: fixed`, a sibling of #bar
+     rather than a child, so (unlike #barMenu) it can't use `top: 100%` —
+     --bar-h is kept in sync with #bar's real offsetHeight from main.ts,
+     since env(safe-area-inset-top) and the mobile touch-target buttons make
+     that height vary by device instead of always being 40px. */
+  top: var(--bar-h, 40px);
   right: 0;
   bottom: 0;
   width: 300px;
@@ -847,6 +873,47 @@ body.big .term .pinned {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: ui-monospace, Menlo, Monaco, monospace;
+}
+/* A run of consecutive tool calls (see agent-chat.ts's toolGroup()) collapses
+   into one summary row instead of stacking a full-width card per call —
+   otherwise a turn with several Read/Bash calls buries the actual
+   conversation under a wall of near-identical pills. Individual .tool-card
+   entries still nest inside, each independently expandable once the group
+   itself is opened. */
+.term .tool-group {
+  align-self: flex-start;
+  max-width: 92%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12.5px;
+  overflow: hidden;
+}
+.term .tool-group summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--text-dim);
+  list-style: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.term .tool-group summary::-webkit-details-marker {
+  display: none;
+}
+.term .tool-group.error summary {
+  color: #f85149;
+}
+.term .tool-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-top: 1px solid var(--line);
+  padding: 6px;
+  background: var(--bg);
+}
+.term .tool-group-body .tool-card {
+  max-width: 100%;
 }
 .term .tool-diff .add {
   color: #3fb950;

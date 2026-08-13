@@ -49,6 +49,16 @@ export class AgentChat implements PaneView {
   private permEls = new Map<string, HTMLElement>(); // permission requestId -> card
   private streamingEls = new Map<string, HTMLElement>(); // assistant_delta id -> bubble being built
 
+  // Consecutive tool_call events collapse into a single expandable group
+  // instead of each getting its own full-width row — a turn with 8+ Read/Bash
+  // calls used to render as a wall of near-identical pills before any actual
+  // conversation text. Any non-tool event (bubble, permission card) or a
+  // full replay closes the current group, so grouping only spans one
+  // unbroken run of tool calls.
+  private toolGroupEl: HTMLElement | null = null;
+  private toolGroupBody: HTMLElement | null = null;
+  private toolGroupNames: string[] = [];
+
   constructor(info: PaneInfo, host: TermHost) {
     this.id = info.id;
     this.info = info;
@@ -204,6 +214,7 @@ export class AgentChat implements PaneView {
         this.toolEls.clear();
         this.permEls.clear();
         this.streamingEls.clear();
+        this.endToolGroup();
         for (const ev of m.events) this.applyEvent(ev);
         this.scrollToBottom();
       } else if (m.t === "ev" && m.ev) {
@@ -307,6 +318,7 @@ export class AgentChat implements PaneView {
   }
 
   private appendBubble(role: "user" | "assistant" | "error", text: string): HTMLElement {
+    this.endToolGroup();
     const bubble = el("div", `msg ${role}`);
     bubble.textContent = text;
     this.logEl.append(bubble);
@@ -322,8 +334,40 @@ export class AgentChat implements PaneView {
     const body = document.createElement("pre");
     body.textContent = formatToolInput(input);
     details.append(summary, body);
-    this.logEl.append(details);
+    this.toolGroup().append(details);
     this.toolEls.set(id, details);
+    this.toolGroupNames.push(name);
+    this.renderToolGroupSummary();
+  }
+
+  /** Current run's group container, creating one if the last thing appended wasn't a tool call. */
+  private toolGroup(): HTMLElement {
+    if (this.toolGroupBody) return this.toolGroupBody;
+    const group = document.createElement("details");
+    group.className = "tool-group";
+    group.open = false;
+    const summary = document.createElement("summary");
+    const body = el("div", "tool-group-body");
+    group.append(summary, body);
+    this.logEl.append(group);
+    this.toolGroupEl = group;
+    this.toolGroupBody = body;
+    this.toolGroupNames = [];
+    return body;
+  }
+
+  private renderToolGroupSummary() {
+    if (!this.toolGroupEl) return;
+    const n = this.toolGroupNames.length;
+    const preview = this.toolGroupNames.slice(0, 4).join(", ") + (n > 4 ? `, +${n - 4} more` : "");
+    (this.toolGroupEl.querySelector("summary") as HTMLElement).textContent =
+      `🔧 ${n} tool call${n === 1 ? "" : "s"}: ${preview}`;
+  }
+
+  private endToolGroup() {
+    this.toolGroupEl = null;
+    this.toolGroupBody = null;
+    this.toolGroupNames = [];
   }
 
   private updateToolCard(id: string, output: string, isError: boolean, diff?: string) {
@@ -335,6 +379,9 @@ export class AgentChat implements PaneView {
       card = this.toolEls.get(id)!;
     }
     card.classList.toggle("error", isError);
+    // Surface the error on the (possibly already-collapsed) group too, so a
+    // failed call isn't hidden behind a summary line that only shows names.
+    if (isError) card.closest(".tool-group")?.classList.add("error");
     if (diff) {
       const pre = document.createElement("pre");
       pre.className = "tool-diff";
@@ -358,6 +405,7 @@ export class AgentChat implements PaneView {
   }
 
   private appendPermissionCard(ev: Extract<AgentEvent, { t: "permission_request" }>) {
+    this.endToolGroup();
     const card = el("div", "permission-card");
     const text = el("div", "perm-text");
     text.textContent = ev.title || ev.description || `Allow "${ev.tool}"?`;

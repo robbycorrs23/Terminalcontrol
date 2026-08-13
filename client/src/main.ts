@@ -271,6 +271,19 @@ function unzoom() {
 // terminal (including the prompt you're typing into). On mobile we also skip
 // the floating-card margins entirely and go edge-to-edge: a phone screen is
 // too small to spare for a decorative border.
+// Keeps --bar-h in sync with #bar's real rendered height, for CSS (#tasks'
+// `top`) that can't use `top: 100%` the way #barMenu does because #tasks is
+// `position: fixed`, not a child of #bar. #bar's height isn't a fixed 40px —
+// env(safe-area-inset-top) (notch/Dynamic Island) and the mobile touch-target
+// button sizing both add to it — so a static px in CSS drifts out of sync per
+// device/orientation the same way centerRect()'s barH read below has to be
+// live rather than a constant.
+function syncBarHeightVar() {
+  const barH = document.getElementById("bar")?.offsetHeight ?? 40;
+  document.documentElement.style.setProperty("--bar-h", `${barH}px`);
+}
+syncBarHeightVar();
+
 function centerRect(): DOMRect {
   const vv = window.visualViewport;
   const vw = vv?.width ?? innerWidth;
@@ -325,6 +338,7 @@ addEventListener("keydown", (e) => {
   } else if (zoomed) unzoom();
 });
 addEventListener("resize", () => {
+  syncBarHeightVar();
   if (zoomed) setRect(zoomed.el, centerRect());
   reflow();
 });
