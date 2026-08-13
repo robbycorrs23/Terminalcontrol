@@ -18,6 +18,8 @@ export interface PaneInfo {
   color?: string;
   name?: string; // user-chosen display name; ""/absent = show the cwd basename
   createdAt: number;
+  /** Claude Agent SDK permission mode (agent panes only — see agent-chat.ts's mode selector). */
+  mode?: "default" | "acceptEdits" | "auto" | "plan" | "bypassPermissions";
 }
 
 /** What to call this pane everywhere it's shown: custom name, else folder name. */

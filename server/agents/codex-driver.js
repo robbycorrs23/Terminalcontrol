@@ -254,6 +254,11 @@ export function startCodexSession({ cwd, resume, env, onEvent, onSessionId }) {
       pendingApprovals.delete(requestId);
       rpcRespond(originalId, { decision: DECISION_MAP[decision] || "decline" });
       onEvent({ t: "permission_resolved", requestId, decision });
+      // Same staleness fix as claude-driver.js's approve(): without this the
+      // status line is stuck on "Waiting on your approval…" until the next
+      // unrelated status event overwrites it, even though the item/turn is
+      // genuinely running again immediately after this response.
+      onEvent({ t: "status", state: "working" });
       return true;
     },
     async interrupt() {

@@ -23,7 +23,16 @@ import { GateSessions, readCookie } from "./gate-session.js";
 // still-tailnet-enrolled device" gap on its own.
 
 const PORT = Number(process.env.FLEET_GATE_PORT) || 4290;
-const TARGET = process.env.FLEET_GATE_TARGET || "http://127.0.0.1:4280";
+// FLEET_GATE_TARGET_SOCKET (a Unix socket path — see FLEET_GATE_SOCKET in
+// server/index.js) takes priority when set: that's the hardened path, only
+// reachable by whichever OS account owns that socket file. Falls back to
+// plain loopback TCP otherwise, which is also what FleetView listens on by
+// default with no extra setup — anything already running on this machine
+// can reach that port directly, gate or no gate. See TAILSCALE.md "What
+// this doesn't close yet" for the tradeoff.
+const TARGET = process.env.FLEET_GATE_TARGET_SOCKET
+  ? { socketPath: process.env.FLEET_GATE_TARGET_SOCKET }
+  : process.env.FLEET_GATE_TARGET || "http://127.0.0.1:4280";
 const RP_NAME = process.env.FLEET_GATE_RP_NAME || "FleetView";
 // Must be a real domain WebAuthn will bind credentials to, not an IP — set
 // FLEET_GATE_RP_ID to your tailnet hostname (e.g. did2200.tail5df669.ts.net)
@@ -199,8 +208,9 @@ server.on("upgrade", (req, socket, head) => {
   proxy.ws(req, socket, head);
 });
 
+const targetDescription = typeof TARGET === "string" ? TARGET : TARGET.socketPath;
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`[fleetview-gate] listening on http://127.0.0.1:${PORT}, proxying to ${TARGET}`);
+  console.log(`[fleetview-gate] listening on http://127.0.0.1:${PORT}, proxying to ${targetDescription}`);
   console.log(
     store.isEmpty()
       ? `[fleetview-gate] no passkeys registered yet — visit /gate/login to set one up`

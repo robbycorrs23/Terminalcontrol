@@ -733,6 +733,32 @@ body.big .task .tedit {
 .term .title .badge-slot {
   display: flex;
 }
+/* Permission-mode selector (agent-chat.ts only — see AgentChat's constructor
+   and setModeUI()). Dressed like a small chip rather than #bar's full-size
+   selects — the title bar is already tight, especially on mobile. */
+.term .title .mode-sel {
+  flex: none;
+  background: var(--btn);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 1px 5px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  max-width: 88px;
+}
+.term .title .mode-sel:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+/* bypassPermissions skips every approval prompt, unlike the other three
+   modes — flagged distinctly so it's never mistaken for one of the "still
+   asks before anything destructive" modes at a glance. */
+.term .title .mode-sel.bypass {
+  border-color: var(--waiting);
+  color: var(--waiting);
+}
 /* Window controls */
 .term .ctl {
   flex: none;
@@ -839,8 +865,8 @@ body.big .term .pinned {
   max-width: 88%;
   padding: 7px 11px;
   border-radius: 12px;
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 12.5px;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -850,11 +876,100 @@ body.big .term .pinned {
   color: #ffffff;
   border-bottom-right-radius: 3px;
 }
+/* The assistant side is deliberately NOT a bubble. One reply arrives as
+   several `assistant_done` events (one per text block), so bubbling each
+   chopped a single answer into a stack of near-identical cards; as plain
+   text on the pane background they read as consecutive paragraphs of one
+   message instead. The user's bubble is what distinguishes the speakers
+   now — so it keeps its accent fill, and this side carries no chrome at
+   all. */
 .term .msg.assistant {
-  align-self: flex-start;
+  align-self: stretch;
+  max-width: 100%;
+  padding: 2px 2px;
+  color: var(--text);
+  /* Rendered Markdown supplies its own block structure (see markdown.ts), so
+     drop the bubble-era pre-wrap that would otherwise double the spacing. */
+  white-space: normal;
+}
+/* Consecutive assistant blocks are paragraphs of one turn, not separate
+   messages — tighten the chat-log gap between them so the seam doesn't read
+   as a speaker change. */
+.term .msg.assistant + .msg.assistant {
+  margin-top: -3px;
+}
+/* ---- Rendered Markdown inside an assistant message ---- */
+.term .msg.assistant p {
+  margin: 0 0 8px;
+}
+.term .msg.assistant > :last-child {
+  margin-bottom: 0;
+}
+.term .msg.assistant .md-h {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 12px 0 6px;
+}
+.term .msg.assistant .md-h1 {
+  font-size: 17px;
+}
+.term .msg.assistant .md-h2 {
+  font-size: 15.5px;
+}
+.term .msg.assistant .md-h3,
+.term .msg.assistant .md-h4,
+.term .msg.assistant .md-h5,
+.term .msg.assistant .md-h6 {
+  font-size: 14px;
+}
+.term .msg.assistant a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.term .msg.assistant code {
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 0.92em;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-bottom-left-radius: 3px;
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.term .msg.assistant pre.md-code {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+/* A code block's <code> is a plain monospace slab — undo the inline-code pill
+   styling and let the <pre> own the frame and horizontal scroll. */
+.term .msg.assistant pre.md-code code {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font-size: 12.5px;
+  white-space: pre;
+}
+.term .msg.assistant ul,
+.term .msg.assistant ol {
+  margin: 4px 0 8px;
+  padding-left: 22px;
+}
+.term .msg.assistant li {
+  margin: 2px 0;
+}
+.term .msg.assistant blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--line);
+  color: var(--text-dim);
+}
+.term .msg.assistant hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 12px 0;
 }
 .term .msg.error {
   align-self: stretch;
@@ -883,6 +998,11 @@ body.big .term .pinned {
 .term .tool-card.error summary {
   color: #f85149;
 }
+.term .tool-card summary {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .term .tool-card pre {
   margin: 0;
   padding: 8px 10px;
@@ -891,6 +1011,36 @@ body.big .term .pinned {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: ui-monospace, Menlo, Monaco, monospace;
+}
+/* An opened card stacks the call's input and its output as two bare <pre>s,
+   which read as one run-on blob — label them so the actual command output is
+   findable at a glance. */
+.term .tool-card pre::before {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.term .tool-input::before {
+  content: "input";
+}
+.term .tool-output::before {
+  content: "output";
+}
+.term .tool-diff::before {
+  content: "diff";
+}
+/* Command output is unbounded (a build log or a big Read is thousands of
+   lines) and full fidelity is the whole point of opening the card — so scroll
+   it inside its own box rather than letting one call push the conversation
+   off-screen. */
+.term .tool-output,
+.term .tool-diff {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain; /* don't chain into the chat log's scroll */
 }
 /* A run of consecutive tool calls (see agent-chat.ts's toolGroup()) collapses
    into one summary row instead of stacking a full-width card per call —
@@ -975,6 +1125,86 @@ body.big .term .pinned {
   background: var(--btn);
   color: var(--text);
 }
+/* AskUserQuestion prompt — the interactive sibling of the permission card.
+   Same waiting-tinted frame, but options are full-width stacked buttons
+   (label + optional description) rather than a fixed allow/deny row. */
+.term .question-card {
+  align-self: stretch;
+  background: color-mix(in srgb, var(--waiting) 12%, var(--panel));
+  border: 1px solid var(--waiting);
+  border-radius: 10px;
+  padding: 10px;
+}
+.term .question-card.resolved {
+  opacity: 0.6;
+}
+.term .q-block + .q-block {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.term .q-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 3px;
+}
+.term .q-text {
+  font-size: 13.5px;
+  margin-bottom: 8px;
+}
+.term .q-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.term .q-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: auto;
+  height: auto;
+  min-height: 40px; /* touch target, same as .perm-btn */
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--btn);
+  color: var(--text);
+  text-align: left;
+}
+.term .q-opt.selected {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+.term .q-opt-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.term .q-opt-desc {
+  font-size: 11.5px;
+  opacity: 0.8;
+  white-space: normal;
+  line-height: 1.35;
+}
+.term .q-submit {
+  width: 100%;
+  height: auto;
+  min-height: 40px;
+  margin-top: 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #ffffff;
+}
+.term .q-foot {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: normal;
+}
 .term .status-line {
   flex: 0 0 auto;
   padding: 4px 12px;
@@ -1034,6 +1264,12 @@ body.big .term .pinned {
 @media (max-width: 640px) {
   .term .chat-input textarea {
     font-size: 16px; /* keeps iOS Safari from zooming the page in on focus */
+  }
+  /* A phone pane is barely taller than the desktop cap, so 320px of output
+     would fill the whole box and hide the conversation around it. */
+  .term .tool-output,
+  .term .tool-diff {
+    max-height: 200px;
   }
 }
 

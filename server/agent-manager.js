@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,19 @@ const LAST_INPUT_CAP = 2000; // matches PtyManager's UserPromptSubmit cap
  * (`status:"disconnected"`) and the driver starts lazily on first `/agent`
  * attach or first sent message, never eagerly at boot.
  */
+/**
+ * The isolated config dir a "-work" pane's agent must run against, or null for
+ * the default account. DERIVED from `cmd` rather than stored on the pane: this
+ * has to survive a server restart, and `cmd` is persisted while a stored copy
+ * of the resolved dir was not — which silently ran every restored "claude
+ * (work)" pane on the personal account (wrong billing, and `resume` failing
+ * with "No conversation found" because the transcript lives in the other
+ * dir's projects/).
+ */
+function accountConfigDirFor(cmd, provider) {
+  return String(cmd || "").endsWith("-work") ? join(homedir(), `.${provider}-work`) : null;
+}
+
 export class AgentManager {
   /**
    * @param {string} stateFile
@@ -43,8 +56,13 @@ export class AgentManager {
       return;
     }
     for (const r of records) {
+      const provider = r.provider || (String(r.cmd || "").startsWith("codex") ? "codex" : "claude");
       this.panes.set(r.id, {
         ...r,
+        provider,
+        // Recomputed, never read back from the record — see accountConfigDirFor.
+        accountConfigDir: accountConfigDirFor(r.cmd, provider),
+        mode: r.mode || "default", // older records predate mode-switching — default is what they always ran as
         driver: null,
         events: [],
         clients: new Set(),
@@ -69,12 +87,18 @@ export class AgentManager {
       color: p.color,
       name: p.name,
       createdAt: p.createdAt,
+      mode: p.mode,
     }));
     writeFileSync(this.stateFile, JSON.stringify(records, null, 2));
   }
 
   _buildEnv(pane) {
     const env = { ...process.env };
+    // Belt and braces: FleetView's own server may itself have been launched
+    // from a shell with CLAUDE_CONFIG_DIR/CODEX_HOME exported, which would
+    // leak that account into every pane that didn't ask for one.
+    delete env.CLAUDE_CONFIG_DIR;
+    delete env.CODEX_HOME;
     // A stray ANTHROPIC_API_KEY in the parent env would silently switch this
     // subprocess from subscription billing to pay-per-token API billing the
     // first time it's used — never let it through.
@@ -89,13 +113,39 @@ export class AgentManager {
     return env;
   }
 
+  /**
+   * A `resume` id only means something to the account that wrote it —
+   * transcripts live under `<configDir>/projects/`, so an id recorded while
+   * the pane was (mis)running on the other account resumes into nothing and
+   * the pane errors out on every attach forever, with no UI to clear it.
+   * Drop the id in that case and start a fresh session instead.
+   *
+   * Claude only: codex stores threads differently (`~/.codex/sessions`, plus a
+   * session index) and its resume path isn't the one that broke here — not
+   * worth guessing at that layout, so codex ids pass through untouched.
+   */
+  _resumableSessionId(pane) {
+    const sid = pane.sdkSessionId;
+    if (!sid || pane.provider === "codex") return sid || undefined;
+    const projects = join(pane.accountConfigDir || join(homedir(), ".claude"), "projects");
+    try {
+      for (const proj of readdirSync(projects)) {
+        if (existsSync(join(projects, proj, `${sid}.jsonl`))) return sid;
+      }
+    } catch {
+      return sid; // can't tell (no projects dir yet) — let the SDK decide
+    }
+    return undefined;
+  }
+
   /** Lazily starts (or resumes) the live driver for a pane. Idempotent. */
   _ensureDriver(pane) {
     if (pane.driver) return pane.driver;
     const start = pane.provider === "codex" ? startCodexSession : startClaudeSession;
     pane.driver = start({
       cwd: pane.cwd,
-      resume: pane.sdkSessionId || undefined,
+      resume: this._resumableSessionId(pane),
+      mode: pane.mode || "default",
       env: this._buildEnv(pane),
       onEvent: (ev) => this._handleEvent(pane, ev),
       onSessionId: (sid) => {
@@ -112,11 +162,14 @@ export class AgentManager {
     pane.events.push(ev);
     if (pane.events.length > RING_BUFFER_SIZE) pane.events.shift();
 
-    if (ev.t === "permission_request") {
+    if (ev.t === "permission_request" || ev.t === "question") {
       this.setAttention(pane.id, "question");
     } else if (ev.t === "status") {
       pane.status = ev.state;
       if (ev.state === "idle") this.setAttention(pane.id, "done");
+    } else if (ev.t === "mode" && pane.mode !== ev.mode) {
+      pane.mode = ev.mode;
+      this._persist();
     }
 
     const msg = JSON.stringify({ t: "ev", ev });
@@ -140,7 +193,7 @@ export class AgentManager {
       cwd: dir,
       cmd,
       provider,
-      accountConfigDir: cmd.endsWith("-work") ? join(home, `.${provider}-work`) : null,
+      accountConfigDir: accountConfigDirFor(cmd, provider),
       session: session || null,
       order: this.seq++,
       sdkSessionId: null,
@@ -154,6 +207,7 @@ export class AgentManager {
       name: "",
       createdAt: Date.now(),
       status: "idle",
+      mode: "default",
     };
     this.panes.set(id, pane);
     this._persist();
@@ -206,8 +260,12 @@ export class AgentManager {
         this.sendMessage(id, m.text);
       } else if (m.t === "approve" && m.requestId) {
         this.approve(id, m.requestId, m.decision);
+      } else if (m.t === "answer" && m.requestId && m.answers && typeof m.answers === "object") {
+        this.answer(id, m.requestId, m.answers);
       } else if (m.t === "interrupt") {
         pane.driver?.interrupt();
+      } else if (m.t === "setMode" && typeof m.mode === "string") {
+        this.setMode(id, m.mode);
       }
     });
     ws.on("close", () => pane.clients.delete(ws));
@@ -232,10 +290,51 @@ export class AgentManager {
     return true;
   }
 
+  /**
+   * Switch a pane's permission mode. If a driver is already live and
+   * supports it (currently just claude-driver.js — codex-driver.js's
+   * protocol support isn't verified yet, see its own file comment about not
+   * guessing at unconfirmed wire behavior), the change applies immediately
+   * to the running session, which itself reports the new mode back via
+   * `onEvent` — no need to also do it here. If there's no live driver yet
+   * (never attached, or the provider doesn't support live switching), just
+   * record it: the next `_ensureDriver()` call starts the session in this
+   * mode, and attached clients still need telling now.
+   */
+  async setMode(id, mode) {
+    const pane = this.panes.get(id);
+    if (!pane) return false;
+    if (pane.driver?.setMode) {
+      try {
+        await pane.driver.setMode(mode);
+      } catch (err) {
+        this._handleEvent(pane, { t: "status", state: "error", detail: err.message });
+        return false;
+      }
+    } else {
+      pane.mode = mode;
+      this._persist();
+      this._handleEvent(pane, { t: "mode", mode });
+    }
+    return true;
+  }
+
   approve(id, requestId, decision) {
     const pane = this.panes.get(id);
     if (!pane?.driver) return false;
     const ok = pane.driver.approve(requestId, decision);
+    if (ok) {
+      this.clearAttention(id);
+      this.broadcast(pane.session, { t: "cleared", pane: id });
+    }
+    return ok;
+  }
+
+  /** Answer an AskUserQuestion prompt (see claude-driver.js's `answer`). */
+  answer(id, requestId, answers) {
+    const pane = this.panes.get(id);
+    if (!pane?.driver?.answer) return false;
+    const ok = pane.driver.answer(requestId, answers);
     if (ok) {
       this.clearAttention(id);
       this.broadcast(pane.session, { t: "cleared", pane: id });
@@ -260,6 +359,7 @@ export class AgentManager {
       color: p.color || "",
       name: p.name || "",
       createdAt: p.createdAt,
+      mode: p.mode || "default",
     };
   }
 

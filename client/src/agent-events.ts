@@ -20,4 +20,15 @@ export type AgentEvent =
       description?: string;
     }
   | { t: "permission_resolved"; requestId: string; decision: "allow" | "deny" | "always" }
-  | { t: "status"; state: "idle" | "working" | "waiting_permission" | "error"; detail?: string };
+  | { t: "question"; requestId: string; questions: AgentQuestion[] }
+  | { t: "question_resolved"; requestId: string; answers: Record<string, string> }
+  | { t: "status"; state: "idle" | "working" | "waiting_permission" | "error"; detail?: string }
+  | { t: "mode"; mode: "default" | "acceptEdits" | "auto" | "plan" | "bypassPermissions" };
+
+/** One question in an AskUserQuestion tool call — see the `question` AgentEvent. */
+export type AgentQuestion = {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: { label: string; description?: string }[];
+};

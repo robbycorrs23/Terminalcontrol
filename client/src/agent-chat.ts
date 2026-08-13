@@ -1,6 +1,7 @@
 import { PaneInfo, PaneView, TermHost, displayName, basename } from "./terminal";
-import { AgentEvent } from "./agent-events";
+import { AgentEvent, AgentQuestion } from "./agent-events";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
+import { renderMarkdown } from "./markdown";
 
 function el(tag: string, cls: string): HTMLElement {
   const n = document.createElement(tag);
@@ -16,6 +17,24 @@ function formatToolInput(input: unknown): string {
   } catch {
     return String(input);
   }
+}
+
+// The one field that says what a call actually DID, so a collapsed card reads
+// "Bash · npm run build" instead of a bare "Bash" that you have to open to
+// identify. Ordered most- to least-specific; unknown tools just get their
+// name, same as before. Any provider's tools work here (codex-driver.js maps
+// its own items onto the same `{name,input}` shape) — these are the field
+// names the common ones happen to use, not an exhaustive registry.
+const TOOL_DETAIL_KEYS = ["command", "file_path", "path", "pattern", "url", "query", "prompt"];
+function toolDetail(input: unknown): string {
+  if (typeof input === "string") return input;
+  if (!input || typeof input !== "object") return "";
+  const rec = input as Record<string, unknown>;
+  for (const key of TOOL_DETAIL_KEYS) {
+    const v = rec[key];
+    if (typeof v === "string" && v.trim()) return v.trim().replace(/\s+/g, " ");
+  }
+  return "";
 }
 
 /**
@@ -41,12 +60,14 @@ export class AgentChat implements PaneView {
   private statusEl: HTMLElement;
   private pinnedEl: HTMLElement;
   private badgeSlot: HTMLElement;
+  private modeSel: HTMLSelectElement;
   private inputEl: HTMLTextAreaElement;
   private ws?: WebSocket;
   private reconnectTimer?: number;
   private disposed = false;
   private toolEls = new Map<string, HTMLElement>(); // tool_call id -> card, so a later tool_result can update it
   private permEls = new Map<string, HTMLElement>(); // permission requestId -> card
+  private questionEls = new Map<string, HTMLElement>(); // AskUserQuestion requestId -> card
   private streamingEls = new Map<string, HTMLElement>(); // assistant_delta id -> bubble being built
 
   // Consecutive tool_call events collapse into a single expandable group
@@ -67,22 +88,66 @@ export class AgentChat implements PaneView {
     this.el = el("div", "term agent");
     this.titleBar = el("div", "title");
     // Same classes/structure as Term's title bar (minus the color swatch —
-    // color-coding a chat pane isn't wired up yet, see setColor() below) so
-    // the existing zoom/drag/mobile-collapse CSS and main.ts wiring apply
+    // color-coding a chat pane isn't wired up yet, see setColor() below —
+    // and minus Term's attach button: Term only has the title-bar one, but
+    // a chat pane also has one built into the input bar at the bottom next
+    // to the textarea, which is the natural place to reach for it while
+    // typing, so the title-bar one would just be a redundant second copy)
+    // so the existing zoom/drag/mobile-collapse CSS and main.ts wiring apply
     // with no changes.
     this.titleBar.innerHTML =
       `<button class="ctl back" title="Back">‹</button>` +
       `<span class="dot">●</span>` +
       `<span class="path"></span>` +
+      `<select class="mode-sel" title="Permission mode">` +
+      `<option value="default">Ask</option>` +
+      `<option value="acceptEdits">Auto-edit</option>` +
+      `<option value="auto">Auto</option>` +
+      `<option value="plan">Plan</option>` +
+      `<option value="bypassPermissions">Bypass</option>` +
+      `</select>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
-      `<button class="ctl attach" title="Add file(s) to prompt">📎</button>` +
       `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
     (this.titleBar.querySelector(".path") as HTMLElement).textContent = displayName(info);
     (this.titleBar.querySelector(".path") as HTMLElement).title = info.cwd;
     this.badgeSlot = this.titleBar.querySelector(".badge-slot") as HTMLElement;
+
+    // Permission-mode selector: which of the SDK's modes (default = ask for
+    // everything, acceptEdits = auto-approve file edits, auto = route each
+    // prompt through a model classifier instead of asking you, plan =
+    // read-only/no execution, bypassPermissions = approve everything) this
+    // session runs under, and the only way to change it — there's no separate terminal
+    // TUI here to show Claude Code's own mode indicator/Shift+Tab toggle,
+    // since this view talks to the Agent SDK directly (see claude-driver.js).
+    // Only wired for claude-driver.js today — codex-driver.js's app-server
+    // protocol doesn't have a confirmed equivalent (see that file's own
+    // comment on not guessing at unverified wire behavior), so the control
+    // is hidden rather than silently doing nothing for a codex pane.
+    this.modeSel = this.titleBar.querySelector(".mode-sel") as HTMLSelectElement;
+    // Right side, immediately before the flag button — grouped with the
+    // other pane-level (not per-message) controls, rather than crowding the
+    // name on the left. Written in the HTML string next to .path above only
+    // because that's where its <option> list was easiest to author; this
+    // moves the actual node (not a clone) to where it's meant to render.
+    this.titleBar.querySelector(".flag")!.before(this.modeSel);
+    if (info.cmd === "codex" || info.cmd === "codex-work") {
+      this.modeSel.hidden = true;
+    } else {
+      this.setModeUI(info.mode || "default");
+      // Not `.ctl` (which enableDrag() in main.ts already excludes from the
+      // drag handle) — that class also carries Term's 20x18 icon-button
+      // sizing, which would squash this chip-styled <select>. Stopping
+      // pointerdown/click here does the same drag/zoom exclusion without
+      // pulling that sizing in.
+      this.modeSel.addEventListener("pointerdown", (e) => e.stopPropagation());
+      this.modeSel.addEventListener("click", (e) => e.stopPropagation());
+      this.modeSel.addEventListener("change", () => {
+        this.wsSend({ t: "setMode", mode: this.modeSel!.value });
+      });
+    }
 
     // Work-account panes (opened via "claude (work)" / "codex (work)") get a
     // didit-blue title tint, same as Term's — `.term.work .title` in
@@ -92,7 +157,9 @@ export class AgentChat implements PaneView {
     // chat bubbles, not a blank viewport) and a mobile-sized box can't spare
     // the room anyway — a small badge in the title bar reads better at that
     // size, so it's a separate `.work-badge` element instead of reusing
-    // Term's `.work-logo`.
+    // Term's `.work-logo`. Sits directly left of the mode selector (which is
+    // itself already positioned right before the flag button above), so the
+    // right-hand cluster reads badge → mode → flag → min → close.
     if (info.cmd === "claude-work" || info.cmd === "codex-work") {
       this.el.classList.add("work");
       const badge = document.createElement("img");
@@ -100,7 +167,7 @@ export class AgentChat implements PaneView {
       badge.src = "/didit-logo-white.png";
       badge.alt = "Work account";
       badge.title = "Work account";
-      this.titleBar.querySelector(".attach")!.before(badge);
+      this.modeSel.before(badge);
     }
 
     const cwdline = el("div", "cwdline");
@@ -233,6 +300,7 @@ export class AgentChat implements PaneView {
         this.logEl.innerHTML = "";
         this.toolEls.clear();
         this.permEls.clear();
+        this.questionEls.clear();
         this.streamingEls.clear();
         this.endToolGroup();
         for (const ev of m.events) this.applyEvent(ev);
@@ -326,13 +394,16 @@ export class AgentChat implements PaneView {
         break;
       case "assistant_delta": {
         // Not emitted by claude-driver.js yet (no partial-message streaming
-        // in the Phase 1 MVP) — handled here for forward compatibility.
+        // in the Phase 1 MVP) — handled here for forward compatibility. Keeps
+        // the raw source in a dataset field so each delta re-renders the whole
+        // accumulated Markdown rather than appending to already-rendered HTML.
         let bubble = this.streamingEls.get(ev.id);
         if (!bubble) {
           bubble = this.appendBubble("assistant", "");
           this.streamingEls.set(ev.id, bubble);
         }
-        bubble.textContent = (bubble.textContent || "") + ev.delta;
+        bubble.dataset.raw = (bubble.dataset.raw || "") + ev.delta;
+        bubble.innerHTML = renderMarkdown(bubble.dataset.raw);
         break;
       }
       case "tool_call":
@@ -347,8 +418,17 @@ export class AgentChat implements PaneView {
       case "permission_resolved":
         this.resolvePermissionCard(ev.requestId, ev.decision);
         break;
+      case "question":
+        this.appendQuestionCard(ev);
+        break;
+      case "question_resolved":
+        this.resolveQuestionCard(ev.requestId, ev.answers);
+        break;
       case "status":
         this.setStatus(ev.state, ev.detail);
+        break;
+      case "mode":
+        this.setModeUI(ev.mode);
         break;
     }
   }
@@ -356,7 +436,11 @@ export class AgentChat implements PaneView {
   private appendBubble(role: "user" | "assistant" | "error", text: string): HTMLElement {
     this.endToolGroup();
     const bubble = el("div", `msg ${role}`);
-    bubble.textContent = text;
+    // Assistant text is Markdown (renderMarkdown escapes untrusted source
+    // before adding any markup — see markdown.ts). User and error text stays
+    // literal: the user typed it, and an error string shouldn't be reinterpreted.
+    if (role === "assistant") bubble.innerHTML = renderMarkdown(text);
+    else bubble.textContent = text;
     this.logEl.append(bubble);
     return bubble;
   }
@@ -366,8 +450,11 @@ export class AgentChat implements PaneView {
     details.className = "tool-card";
     details.open = false;
     const summary = document.createElement("summary");
-    summary.textContent = `🔧 ${name}`;
+    const detail = toolDetail(input);
+    summary.textContent = detail ? `🔧 ${name} · ${detail}` : `🔧 ${name}`;
+    summary.title = summary.textContent; // the CSS ellipsis hides long commands
     const body = document.createElement("pre");
+    body.className = "tool-input";
     body.textContent = formatToolInput(input);
     details.append(summary, body);
     this.toolGroup().append(details);
@@ -471,6 +558,123 @@ export class AgentChat implements PaneView {
     if (btns) btns.textContent = decision === "deny" ? "Denied" : "Allowed";
   }
 
+  /**
+   * The interactive AskUserQuestion prompt (see claude-driver.js). Each
+   * question renders its options as buttons — single-select submits on click,
+   * multi-select toggles and waits for a Submit. We collect selections keyed
+   * by question TEXT (the shape the tool echoes back as its answers map) and
+   * send them as one `answer` message once every question has a pick.
+   */
+  private appendQuestionCard(ev: Extract<AgentEvent, { t: "question" }>) {
+    this.endToolGroup();
+    const card = el("div", "question-card");
+    const picks = new Map<string, Set<string>>(); // question text -> chosen labels
+
+    const trySubmit = () => {
+      // Only submit once every question has at least one pick — a single-select
+      // card with one question reaches this the moment it's clicked; a card
+      // with several (or a multi-select) waits for the rest / the Submit press.
+      const complete = ev.questions.every((q) => (picks.get(q.question)?.size ?? 0) > 0);
+      if (!complete) return;
+      const answers: Record<string, string> = {};
+      for (const q of ev.questions) answers[q.question] = [...(picks.get(q.question) || [])].join(", ");
+      card.classList.add("resolved");
+      card.querySelectorAll("button").forEach((b) => ((b as HTMLButtonElement).disabled = true));
+      this.renderQuestionSummary(card, answers);
+      this.wsSend({ t: "answer", requestId: ev.requestId, answers });
+    };
+
+    for (const q of ev.questions) {
+      const block = el("div", "q-block");
+      if (q.header) {
+        const h = el("div", "q-header");
+        h.textContent = q.header;
+        block.append(h);
+      }
+      const qt = el("div", "q-text");
+      qt.textContent = q.question;
+      block.append(qt);
+
+      const opts = el("div", "q-opts");
+      for (const o of q.options) {
+        const b = document.createElement("button");
+        b.className = "ctl q-opt";
+        const lbl = el("span", "q-opt-label");
+        lbl.textContent = o.label;
+        b.append(lbl);
+        if (o.description) {
+          const d = el("span", "q-opt-desc");
+          d.textContent = o.description;
+          b.append(d);
+        }
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const set = picks.get(q.question) || new Set<string>();
+          if (q.multiSelect) {
+            if (set.has(o.label)) set.delete(o.label);
+            else set.add(o.label);
+            b.classList.toggle("selected", set.has(o.label));
+            picks.set(q.question, set);
+          } else {
+            set.clear();
+            set.add(o.label);
+            picks.set(q.question, set);
+            opts.querySelectorAll("button").forEach((x) => x.classList.remove("selected"));
+            b.classList.add("selected");
+            trySubmit();
+          }
+        });
+        opts.append(b);
+      }
+      block.append(opts);
+      card.append(block);
+    }
+
+    // Multi-select needs an explicit Submit; single-select cards with one
+    // question submit on click and never show it.
+    if (ev.questions.some((q) => q.multiSelect) || ev.questions.length > 1) {
+      const submit = document.createElement("button");
+      submit.className = "ctl q-submit";
+      submit.textContent = "Submit";
+      submit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        trySubmit();
+      });
+      card.append(submit);
+    }
+
+    this.logEl.append(card);
+    this.questionEls.set(ev.requestId, card);
+    this.scrollToBottom();
+  }
+
+  private resolveQuestionCard(requestId: string, answers: Record<string, string>) {
+    const card = this.questionEls.get(requestId);
+    if (!card || card.classList.contains("resolved")) return;
+    card.classList.add("resolved");
+    card.querySelectorAll("button").forEach((b) => ((b as HTMLButtonElement).disabled = true));
+    // Reflect the choice made on another window (or before a reconnect).
+    for (const [q, ans] of Object.entries(answers)) {
+      card.querySelectorAll(".q-block").forEach((block) => {
+        if (block.querySelector(".q-text")?.textContent !== q) return;
+        block.querySelectorAll(".q-opt").forEach((b) => {
+          const label = b.querySelector(".q-opt-label")?.textContent || "";
+          if (ans.split(", ").includes(label)) b.classList.add("selected");
+        });
+      });
+    }
+    this.renderQuestionSummary(card, answers);
+  }
+
+  private renderQuestionSummary(card: HTMLElement, answers: Record<string, string>) {
+    let foot = card.querySelector(".q-foot") as HTMLElement | null;
+    if (!foot) {
+      foot = el("div", "q-foot");
+      card.append(foot);
+    }
+    foot.textContent = "✓ " + Object.values(answers).join(" · ");
+  }
+
   private setStatus(state: string, detail?: string) {
     if (state === "working" || state === "waiting_permission") {
       this.statusEl.hidden = false;
@@ -479,6 +683,16 @@ export class AgentChat implements PaneView {
       this.statusEl.hidden = true;
     }
     if (state === "error") this.appendBubble("error", detail || "Something went wrong.");
+  }
+
+  /** Reflects the session's current permission mode in the title-bar selector — see the `mode` AgentEvent. */
+  private setModeUI(mode: string) {
+    this.modeSel.value = mode;
+    // bypassPermissions skips every approval prompt — worth a visual "this is
+    // the dangerous one" cue distinct from the other three, which all still
+    // ask before something destructive happens (plan asks by never running
+    // anything at all).
+    this.modeSel.classList.toggle("bypass", mode === "bypassPermissions");
   }
 
   private scrollToBottom() {

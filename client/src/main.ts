@@ -625,24 +625,31 @@ async function loadPrefs() {
 
 // Chat view (see agent-chat.ts) is available for all four claude/codex agent
 // options (backed by claude-driver.js / codex-driver.js — see the plan).
-// Mobile defaults new agent boxes to it (confirmed with the user — it's what
-// actually fixes mobile terminal pain); desktop defaults to the classic
-// terminal either way. Existing boxes are unaffected — this only decides
-// what a NEWLY created box becomes.
+// Every new agent box defaults to it, on desktop as well as mobile; opting
+// back into the classic terminal is a per-open, explicit uncheck. Existing
+// boxes are unaffected — this only decides what a NEWLY created box becomes.
 function chatViewAvailable(cmd: string): boolean {
   return cmd === "claude" || cmd === "claude-work" || cmd === "codex" || cmd === "codex-work";
 }
+// What the user wants for THIS picker session, so that bouncing the agent
+// select through "plain shell" (which force-unchecks, since a shell has no
+// chat view) and back doesn't strand the box on the terminal it never
+// re-checks itself out of. Reset to the default on every picker open.
+let chatViewWanted = true;
 function updateChatViewAvailability() {
   const available = chatViewAvailable(agentSelect.value);
   chatViewEl.disabled = !available;
-  if (!available) chatViewEl.checked = false;
+  chatViewEl.checked = available && chatViewWanted;
 }
 agentSelect.addEventListener("change", updateChatViewAvailability);
+chatViewEl.addEventListener("change", () => {
+  if (!chatViewEl.disabled) chatViewWanted = chatViewEl.checked;
+});
 
 async function openPicker() {
   picker.hidden = false;
+  chatViewWanted = true;
   updateChatViewAvailability();
-  if (chatViewAvailable(agentSelect.value)) chatViewEl.checked = mobileQuery.matches;
   // Resume where we left off; on first open use the saved default (or home).
   await navigate(pickPath ?? prefs.defaultDir);
   loadPickerRecents();
