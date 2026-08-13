@@ -9,27 +9,29 @@
   </head>
   <body>
     <header id="bar">
-      <span class="brand">▦ FleetView</span>
-      <span id="current" class="current" hidden></span>
-      <div class="bar-chips">
-        <div id="queue" title="Terminals waiting on you"></div>
-        <span id="followups"></span>
-        <span id="recovery" title="Terminals that died or were set aside — click to bring back"></span>
+      <div id="barRow">
+        <span class="brand">▦ FleetView</span>
+        <span id="current" class="current" hidden></span>
+        <div class="bar-chips">
+          <div id="queue" title="Terminals waiting on you"></div>
+          <span id="followups"></span>
+          <span id="recovery" title="Terminals that died or were set aside — click to bring back"></span>
+        </div>
+        <span class="spacer"></span>
+        <div id="barMenu">
+          <button id="textBtn" class="icon" title="Toggle large text">A⁺</button>
+          <button id="themeBtn" class="icon" title="Toggle light / dark">☀</button>
+          <button id="nextBtn" hidden>Jump to next ⏎</button>
+          <select id="layoutSel">
+            <option value="">layouts…</option>
+          </select>
+          <button id="openBtn">Open</button>
+          <button id="saveBtn">Save layout</button>
+          <button id="tasksBtn" title="Show / hide the task list">✓ Tasks</button>
+        </div>
+        <button id="addBtn">+ Terminal</button>
+        <button id="menuBtn" class="icon" title="Menu">☰</button>
       </div>
-      <span class="spacer"></span>
-      <div id="barMenu">
-        <button id="textBtn" class="icon" title="Toggle large text">A⁺</button>
-        <button id="themeBtn" class="icon" title="Toggle light / dark">☀</button>
-        <button id="nextBtn" hidden>Jump to next ⏎</button>
-        <select id="layoutSel">
-          <option value="">layouts…</option>
-        </select>
-        <button id="openBtn">Open</button>
-        <button id="saveBtn">Save layout</button>
-        <button id="tasksBtn" title="Show / hide the task list">✓ Tasks</button>
-      </div>
-      <button id="addBtn">+ Terminal</button>
-      <button id="menuBtn" class="icon" title="Menu">☰</button>
     </header>
 
     <!-- Task list sidebar (collapsible, closed by default) -->

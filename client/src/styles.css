@@ -81,26 +81,32 @@ body {
   height: 100vh;
 }
 
-/* ---- Top bar ---- */
+/* ---- Top bar ----
+   #bar itself is a plain block box, NOT the flex container: it exists only to
+   own the safe-area clearance (padding-top) and the panel background/border,
+   so that clearance can never be "absorbed" by the flex row's own sizing.
+   An earlier version put padding-top and the flex row on the SAME element —
+   on a notch/Dynamic-Island phone that made the row's rendered top edge drift
+   (sometimes overflowing past the border-bottom, sometimes riding up under
+   the status bar) depending on how the browser reconciled the flex
+   cross-size against height vs min-height vs the padding. Splitting them
+   into an outer block (#bar) + inner flex row (#barRow) sidesteps that
+   entirely: a block box's auto height is unambiguously
+   padding-top + child height + padding-bottom, full stop. */
 #bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  /* min-height, not height: on notch/Dynamic-Island phones env(safe-area-inset-top)
-     alone can exceed 40px, and the mobile media query below bumps #addBtn/#menuBtn
-     to a 44px touch target. With a fixed `height` (box-sizing: border-box, see the
-     `*` rule up top) the box cannot grow to fit that content — it stayed pinned at
-     40px total, so the safe-area padding ate the entire box and the buttons'
-     bottoms overflowed past #bar's own border-bottom into the grid below. min-height
-     lets the box grow to whatever its content actually needs. */
-  min-height: 40px;
   flex: none;
-  padding: 0 10px;
   padding-top: env(safe-area-inset-top); /* clears the iPhone notch; 0 elsewhere */
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   position: relative;
   z-index: 60;
+}
+#barRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 10px;
 }
 .brand {
   color: var(--accent);
@@ -149,7 +155,7 @@ body {
   display: none;
 }
 
-/* On wide screens #barMenu's children lay out as if they were direct #bar
+/* On wide screens #barMenu's children lay out as if they were direct #barRow
    children (identical to pre-mobile-menu markup) — `menuBtn` stays display:none
    so it takes no space and doesn't shift anything. */
 #barMenu {
