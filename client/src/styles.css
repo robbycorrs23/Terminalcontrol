@@ -617,6 +617,18 @@ body.big .task .tedit {
   pointer-events: none;
   z-index: 5;
 }
+/* AgentChat's work-account marker (see agent-chat.ts): a small title-bar
+   badge instead of Term's big watermark — there's no blank canvas to overlay
+   it on (a chat pane is a column of bubbles, not an open viewport), and a
+   mobile-width box has no room to spare. Sits just left of the paperclip
+   (add-file) button. Full opacity, unlike .work-logo — at this size a faint
+   version would just read as a smudge, not an "it's the work account" cue. */
+.term.work .work-badge {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex: none;
+}
 /* Color-code: tint the title bar (the interior header), NOT the border — the
    border is reserved for the needs-you / done / flagged / zoomed alert glows.
    `--tint` is set per box; it inherits down to the title. */

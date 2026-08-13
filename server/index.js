@@ -423,8 +423,22 @@ app.post("/hook/prompt", (req, res) => {
 });
 
 // --- Static client -------------------------------------------------------
-app.use(express.static(DIST));
-app.get("*", (_req, res) => res.sendFile(join(DIST, "index.html")));
+// index.html must never be cached (let alone bfcache'd): its only job is to
+// point at the current content-hashed bundle filenames (index-XXXX.js/css),
+// so a stale copy silently keeps loading a stale bundle forever — no error,
+// no visual sign, just old code running. Bit us during mobile CSS work: the
+// server had the fix, curl confirmed it, but a phone Safari tab kept
+// rendering the old layout because Safari restored it from its
+// back-forward cache instead of refetching. Cache-Control: no-store is also
+// one of the few reliable ways to opt a page OUT of bfcache. The hashed
+// assets underneath (JS/CSS/images) are unaffected and stay on Express's
+// normal freshness-checked defaults, since a new build gives them new
+// filenames anyway.
+const noStoreIndexHtml = (res, path) => {
+  if (path.endsWith("index.html")) res.setHeader("Cache-Control", "no-store");
+};
+app.use(express.static(DIST, { setHeaders: noStoreIndexHtml }));
+app.get("*", (_req, res) => res.sendFile(join(DIST, "index.html"), { headers: { "Cache-Control": "no-store" } }));
 
 // --- HTTP + WebSocket wiring ---------------------------------------------
 const server = createServer(app);

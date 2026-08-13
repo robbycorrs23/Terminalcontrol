@@ -84,6 +84,25 @@ export class AgentChat implements PaneView {
     (this.titleBar.querySelector(".path") as HTMLElement).title = info.cwd;
     this.badgeSlot = this.titleBar.querySelector(".badge-slot") as HTMLElement;
 
+    // Work-account panes (opened via "claude (work)" / "codex (work)") get a
+    // didit-blue title tint, same as Term's — `.term.work .title` in
+    // styles.css already covers that, it just needed the `work` class here
+    // too. Term also overlays a big faint logo watermark across the whole
+    // terminal, but there's no equivalent open canvas here (it's a column of
+    // chat bubbles, not a blank viewport) and a mobile-sized box can't spare
+    // the room anyway — a small badge in the title bar reads better at that
+    // size, so it's a separate `.work-badge` element instead of reusing
+    // Term's `.work-logo`.
+    if (info.cmd === "claude-work" || info.cmd === "codex-work") {
+      this.el.classList.add("work");
+      const badge = document.createElement("img");
+      badge.className = "work-badge";
+      badge.src = "/didit-logo-white.png";
+      badge.alt = "Work account";
+      badge.title = "Work account";
+      this.titleBar.querySelector(".attach")!.before(badge);
+    }
+
     const cwdline = el("div", "cwdline");
     cwdline.textContent = info.cwd;
     this.pinnedEl = el("div", "pinned");
