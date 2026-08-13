@@ -497,7 +497,8 @@ body.big .task .tedit {
     flex-basis: 0;
     overflow: hidden;
   }
-  .term:not(.zoomed) .xt {
+  .term:not(.zoomed) .xt,
+  .term:not(.zoomed) .chat {
     display: none;
   }
   /* .pinned (last prompt sent) and .cwdline (full path) turn a collapsed row
@@ -769,6 +770,188 @@ body.big .term .pinned {
   min-height: 0;
   padding: 2px 4px;
 }
+
+/* ---- Agent chat view (client/src/agent-chat.ts) -----------------------
+   No xterm here — a plain flex column with a native-scrolling message log
+   and a bottom input bar, which is the whole point (no cursor to fight, no
+   touch-vs-mouse-tracking-mode conflicts). Same flex:1/min-height:0 sizing
+   as .xt above so it fills the same slot in the box. */
+.term .chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term .chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.term .msg {
+  max-width: 88%;
+  padding: 7px 11px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.term .msg.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #ffffff;
+  border-bottom-right-radius: 3px;
+}
+.term .msg.assistant {
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-bottom-left-radius: 3px;
+}
+.term .msg.error {
+  align-self: stretch;
+  background: color-mix(in srgb, #f85149 18%, var(--panel));
+  border: 1px solid #f85149;
+  color: var(--text);
+}
+.term .tool-card {
+  align-self: flex-start;
+  max-width: 92%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12.5px;
+  overflow: hidden;
+}
+.term .tool-card summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--text-dim);
+  list-style: none;
+}
+.term .tool-card summary::-webkit-details-marker {
+  display: none;
+}
+.term .tool-card.error summary {
+  color: #f85149;
+}
+.term .tool-card pre {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+}
+.term .tool-diff .add {
+  color: #3fb950;
+}
+.term .tool-diff .del {
+  color: #f85149;
+}
+.term .permission-card {
+  align-self: stretch;
+  background: color-mix(in srgb, var(--waiting) 12%, var(--panel));
+  border: 1px solid var(--waiting);
+  border-radius: 10px;
+  padding: 10px;
+}
+.term .permission-card.resolved {
+  opacity: 0.6;
+}
+.term .perm-text {
+  font-size: 13.5px;
+  margin-bottom: 8px;
+}
+.term .perm-btns {
+  display: flex;
+  gap: 6px;
+}
+.term .perm-btns .perm-btn {
+  flex: 1;
+  min-height: 40px; /* real touch target, same reasoning as the mobile .ctl sizing */
+  width: auto;
+  height: auto;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.term .perm-btns .perm-btn.allow,
+.term .perm-btns .perm-btn.always {
+  background: var(--accent);
+  color: #ffffff;
+}
+.term .perm-btns .perm-btn.deny {
+  background: var(--btn);
+  color: var(--text);
+}
+.term .status-line {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.term .chat-input {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+.term .chat-input textarea {
+  flex: 1;
+  min-height: 36px;
+  max-height: 160px;
+  resize: none;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.term .chat-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.term .chat-attach,
+.term .chat-send {
+  flex: 0 0 auto;
+  min-height: 36px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.term .chat-send {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+.term .chat-attach:hover,
+.term .chat-send:hover {
+  filter: brightness(1.08);
+}
+@media (max-width: 640px) {
+  .term .chat-input textarea {
+    font-size: 16px; /* keeps iOS Safari from zooming the page in on focus */
+  }
+}
+
 /* Mobile-only soft-key row (Esc/Ctrl/Tab/arrows) — a phone's on-screen keyboard
    has none of these. Hidden by default; shown only under the mobile media
    query, and only while zoomed (see there) — a physical keyboard already has
@@ -1186,6 +1369,20 @@ body.big .term .pinned {
 }
 .runclaude code {
   color: var(--accent);
+}
+.chatview {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.chatview input:disabled {
+  cursor: not-allowed;
+}
+.chatview:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .pfoot button {
   background: var(--btn);

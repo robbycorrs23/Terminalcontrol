@@ -3,9 +3,11 @@ import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname, resolve } from "node:path";
-import { mkdtempSync, writeFileSync, mkdirSync, statSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, statSync, existsSync, unlinkSync, chmodSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
+import { AgentManager } from "./agent-manager.js";
+import { createRegistry } from "./pane-registry.js";
 import { openInEditor, openFolder } from "./open-file.js";
 import { findPathLinks } from "./path-links.js";
 import { LayoutStore } from "./layout-store.js";
@@ -46,6 +48,15 @@ const codexWorkConfigDir = join(homedir(), ".codex-work");
 if (existsSync(codexWorkConfigDir)) ensureCodexHooks(PORT, codexWorkConfigDir);
 
 const ptys = new PtyManager(PORT, join(ROOT, "sessions.json"));
+// SDK-driven "chat" panes (see the plan) — `broadcast` is a hoisted function
+// declaration (defined further down), safe to pass here since AgentManager
+// only calls it later, never during construction.
+const agents = new AgentManager(join(ROOT, "agent-sessions.json"), broadcast);
+// Façade over the two pane managers. Route handlers below call `registry.*`
+// wherever the operation is generic pane metadata; `ptys.*`/`agents.*` stay
+// direct only for the kind-specific surface (`attach`, `tmux`, `on()` for
+// ptys) the registry deliberately doesn't cover.
+const registry = createRegistry(ptys, agents);
 const layouts = new LayoutStore(join(ROOT, "layouts.json"));
 const tasks = new TaskStore(join(ROOT, "tasks.json"));
 // The loud "tmux missing" warning is handled by preflight() above; here we just
@@ -73,7 +84,7 @@ function broadcastAll(msg) {
     } catch {}
   }
 }
-ptys.on("attention", (pane, kind) => broadcast(ptys.sessionOf(pane), { t: "attention", pane, kind }));
+ptys.on("attention", (pane, kind) => broadcast(registry.sessionOf(pane), { t: "attention", pane, kind }));
 ptys.on("exit", (pane, session) => broadcast(session, { t: "closed", pane }));
 // A pane's tmux session vanished unexpectedly — it's now dormant (recoverable),
 // not gone. Tell the window so it can offer a respawn instead of dropping the box.
@@ -143,15 +154,15 @@ app.use((req, res, next) =>
 app.use(express.json({ limit: "30mb" }));
 
 // --- Panes ---------------------------------------------------------------
-app.get("/api/panes", (req, res) => res.json(ptys.list(req.query.session)));
+app.get("/api/panes", (req, res) => res.json(registry.list(req.query.session)));
 
 // Dormant panes: ones whose terminal died or was set aside, kept so the user can
 // bring them back. `sessionAlive` says whether respawn will restore the live
 // Claude session (true) or start a fresh shell in the same folder (false).
-app.get("/api/dormant", (req, res) => res.json(ptys.dormantList(req.query.session)));
+app.get("/api/dormant", (req, res) => res.json(registry.dormantList(req.query.session)));
 
 app.post("/api/panes/:id/respawn", (req, res) => {
-  const info = ptys.respawn(req.params.id);
+  const info = registry.respawn(req.params.id);
   if (!info) return res.status(404).json({ error: "no such dormant pane" });
   layouts.addRecent(info.cwd);
   broadcast(info.session, { t: "created", pane: info });
@@ -159,16 +170,21 @@ app.post("/api/panes/:id/respawn", (req, res) => {
 });
 
 app.delete("/api/dormant/:id", (req, res) => {
-  const session = ptys.sessionOf(req.params.id);
-  ptys.discardDormant(req.params.id);
+  const session = registry.sessionOf(req.params.id);
+  registry.discardDormant(req.params.id);
   broadcast(session, { t: "discarded", pane: req.params.id });
   res.status(204).end();
 });
 
 app.post("/api/panes", (req, res) => {
-  const { cwd, cmd, session } = req.body || {};
-  const pane = ptys.create({ cwd, cmd, session });
-  const info = ptys.info(pane.id);
+  const { cwd, cmd, session, kind } = req.body || {};
+  let pane;
+  try {
+    pane = registry.create({ cwd, cmd, session, kind });
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+  const info = registry.info(pane.id);
   layouts.addRecent(info.cwd);
   broadcast(info.session, { t: "created", pane: info });
   res.json(info);
@@ -197,8 +213,8 @@ app.get("/api/prefs", (_req, res) => res.json(layouts.prefs()));
 app.put("/api/prefs", (req, res) => res.json(layouts.setPrefs(req.body || {})));
 
 app.delete("/api/panes/:id", (req, res) => {
-  const session = ptys.sessionOf(req.params.id);
-  ptys.kill(req.params.id);
+  const session = registry.sessionOf(req.params.id);
+  registry.kill(req.params.id);
   broadcast(session, { t: "closed", pane: req.params.id });
   res.status(204).end();
 });
@@ -206,7 +222,7 @@ app.delete("/api/panes/:id", (req, res) => {
 // Persist this window's grid order (so a drag survives refresh).
 app.post("/api/order", (req, res) => {
   const { session, ids } = req.body || {};
-  if (Array.isArray(ids)) ptys.reorder(session, ids);
+  if (Array.isArray(ids)) registry.reorder(session, ids);
   res.status(204).end();
 });
 
@@ -215,7 +231,7 @@ app.post("/api/order", (req, res) => {
 // like dragging a file into a real terminal. We don't touch the PTY here.
 // Any file type is accepted — Claude Code reads images, PDFs, text, code, etc.
 function saveDroppedFile(req, res) {
-  if (!ptys.info(req.params.id)) return res.status(404).json({ error: "no such pane" });
+  if (!registry.info(req.params.id)) return res.status(404).json({ error: "no such pane" });
   const { name, dataUrl } = req.body || {};
   // Mime may be empty ("data:;base64,…") — browsers emit that for unknown types.
   const m = /^data:([^;]*);base64,(.+)$/s.exec(dataUrl || "");
@@ -260,39 +276,39 @@ function mimeExt(mime) {
 }
 
 app.post("/api/panes/:id/clear", (req, res) => {
-  const session = ptys.sessionOf(req.params.id);
-  ptys.clearAttention(req.params.id);
+  const session = registry.sessionOf(req.params.id);
+  registry.clearAttention(req.params.id);
   broadcast(session, { t: "cleared", pane: req.params.id });
   res.status(204).end();
 });
 
 app.post("/api/panes/:id/followup", (req, res) => {
   const id = req.params.id;
-  if (!ptys.info(id)) return res.status(404).json({ error: "no such pane" });
+  if (!registry.info(id)) return res.status(404).json({ error: "no such pane" });
   const on = !!(req.body && req.body.on);
-  ptys.setFollowUp(id, on);
-  broadcast(ptys.sessionOf(id), { t: "followup", pane: id, on });
+  registry.setFollowUp(id, on);
+  broadcast(registry.sessionOf(id), { t: "followup", pane: id, on });
   res.status(204).end();
 });
 
 app.post("/api/panes/:id/color", (req, res) => {
   const id = req.params.id;
-  if (!ptys.info(id)) return res.status(404).json({ error: "no such pane" });
+  if (!registry.info(id)) return res.status(404).json({ error: "no such pane" });
   const color = (req.body && typeof req.body.color === "string" ? req.body.color : "").trim();
-  ptys.setColor(id, color);
-  broadcast(ptys.sessionOf(id), { t: "color", pane: id, color });
+  registry.setColor(id, color);
+  broadcast(registry.sessionOf(id), { t: "color", pane: id, color });
   res.status(204).end();
 });
 
 // A user-chosen display name for the pane ("" reverts to the cwd basename).
 app.post("/api/panes/:id/name", (req, res) => {
   const id = req.params.id;
-  if (!ptys.info(id)) return res.status(404).json({ error: "no such pane" });
+  if (!registry.info(id)) return res.status(404).json({ error: "no such pane" });
   const name = (req.body && typeof req.body.name === "string" ? req.body.name : "")
     .trim()
     .slice(0, 60);
-  ptys.setName(id, name);
-  broadcast(ptys.sessionOf(id), { t: "renamed", pane: id, name });
+  registry.setName(id, name);
+  broadcast(registry.sessionOf(id), { t: "renamed", pane: id, name });
   res.status(204).end();
 });
 
@@ -301,7 +317,7 @@ app.post("/api/panes/:id/name", (req, res) => {
 // "server/index.js:42"); a non-existent target is a silent no-op so a
 // false-positive link match never launches anything. See server/open-file.js.
 app.post("/api/panes/:id/open", (req, res) => {
-  const info = ptys.info(req.params.id);
+  const info = registry.info(req.params.id);
   if (!info) return res.status(404).json({ error: "no such pane" });
   const raw = req.body && typeof req.body.path === "string" ? req.body.path : "";
   if (!raw) return res.status(400).json({ error: "no path" });
@@ -326,7 +342,7 @@ app.post("/api/panes/:id/open", (req, res) => {
 // ends, so we validate candidates against the pane's cwd. Returns half-open
 // [start, end) string indices into the same `line` the client sent.
 app.post("/api/panes/:id/resolve", (req, res) => {
-  const info = ptys.info(req.params.id);
+  const info = registry.info(req.params.id);
   if (!info) return res.status(404).json({ error: "no such pane" });
   const line = req.body && typeof req.body.line === "string" ? req.body.line : "";
   res.json({ links: line ? findPathLinks(line, info.cwd) : [] });
@@ -352,21 +368,26 @@ app.post("/api/layouts/:name/open", (req, res) => {
   if (!layout) return res.status(404).json({ error: "no such layout" });
   const { session, mode } = req.body || {};
 
-  // "overwrite" sets this window's existing terminals aside (non-destructively —
-  // their tmux sessions keep running and land in the dormant/recovery list, so a
-  // mis-click on Replace can be undone); "add" keeps them on screen.
+  // "overwrite" sets this window's existing terminals aside (non-destructively
+  // for PTY panes — their tmux sessions keep running and land in the
+  // dormant/recovery list, so a mis-click on Replace can be undone; agent
+  // panes have no dormant tier, so for those this is a real close, see
+  // pane-registry.js) — "add" keeps them on screen either way.
   if (mode === "overwrite") {
-    for (const id of ptys.idsOf(session)) {
-      const info = ptys.setAside(id);
-      if (info) broadcast(session, { t: "died", pane: info });
+    for (const id of registry.idsOf(session)) {
+      const result = registry.setAside(id);
+      if (!result) continue;
+      if (result.type === "died" && result.info) broadcast(session, { t: "died", pane: result.info });
+      else if (result.type === "closed") broadcast(session, { t: "closed", pane: result.id });
     }
   }
 
   const created = [];
   for (const slot of layout.slots || []) {
     const cmd = slot.cmd ?? layout.cmd ?? "claude";
-    const pane = ptys.create({ cwd: slot.cwd, cmd, session });
-    const info = ptys.info(pane.id);
+    const kind = slot.kind ?? "pty";
+    const pane = registry.create({ cwd: slot.cwd, cmd, session, kind });
+    const info = registry.info(pane.id);
     layouts.addRecent(info.cwd);
     created.push(info);
     broadcast(session, { t: "created", pane: info });
@@ -385,7 +406,7 @@ app.put("/api/tasks", (req, res) => {
 // --- Hook endpoint (Claude Code / Codex phone home here) -----------------
 app.post("/hook", (req, res) => {
   const { pane, kind } = req.body || {};
-  if (pane) ptys.setAttention(pane, kind || "question");
+  if (pane) registry.setAttention(pane, kind || "question");
   res.status(204).end();
 });
 
@@ -395,8 +416,8 @@ app.post("/hook/prompt", (req, res) => {
   const id = req.query.pane;
   const prompt = req.body && typeof req.body.prompt === "string" ? req.body.prompt : "";
   if (id && prompt) {
-    ptys.setLastInput(id, prompt);
-    broadcast(ptys.sessionOf(id), { t: "input", pane: id, text: ptys.lastInputOf(id) });
+    registry.setLastInput(id, prompt);
+    broadcast(registry.sessionOf(id), { t: "input", pane: id, text: registry.lastInputOf(id) });
   }
   res.status(204).end();
 });
@@ -409,7 +430,7 @@ app.get("*", (_req, res) => res.sendFile(join(DIST, "index.html")));
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 
-server.on("upgrade", (req, socket, head) => {
+function handleUpgrade(req, socket, head) {
   // WebSockets bypass CORS entirely, so this is the most important origin check.
   if (!sameOrigin(req)) {
     socket.destroy();
@@ -426,24 +447,28 @@ server.on("upgrade", (req, socket, head) => {
         try {
           const m = JSON.parse(raw);
           if (m.t === "clear") {
-            ptys.clearAttention(m.pane);
+            registry.clearAttention(m.pane);
             broadcast(session, { t: "cleared", pane: m.pane });
           }
         } catch {}
       });
       // Hand the new browser only its own window's terminals, plus any dormant
       // (recoverable) panes so a refresh after a crash/sleep offers to bring them back.
-      ws.send(JSON.stringify({ t: "panes", panes: ptys.list(session) }));
-      ws.send(JSON.stringify({ t: "dormant", dormant: ptys.dormantList(session) }));
+      ws.send(JSON.stringify({ t: "panes", panes: registry.list(session) }));
+      ws.send(JSON.stringify({ t: "dormant", dormant: registry.dormantList(session) }));
       ws.send(JSON.stringify({ t: "tasks", tasks: tasks.tree() }));
     });
   } else if (url.pathname === "/term") {
     const id = url.searchParams.get("pane");
     wss.handleUpgrade(req, socket, head, (ws) => ptys.attach(id, ws));
+  } else if (url.pathname === "/agent") {
+    const id = url.searchParams.get("pane");
+    wss.handleUpgrade(req, socket, head, (ws) => agents.attach(id, ws));
   } else {
     socket.destroy();
   }
-});
+}
+server.on("upgrade", handleUpgrade);
 
 // Fail readably if the port is taken — usually the login service (or another
 // `npm start`) is already running. Don't dump a raw stack.
@@ -468,3 +493,33 @@ server.listen(PORT, HOST, () => {
     );
   }
 });
+
+// Optional second listener on a Unix domain socket, for the passkey gate
+// (server/gate.js) to proxy through instead of the TCP port above — see
+// TAILSCALE.md "Going further". A socket file's permissions are a real
+// OS-enforced boundary a TCP port number can't be: chmod it 0600 right after
+// binding (Node creates it with looser permissions, umask-dependent) so only
+// this same OS account (intended to be the dedicated one the gate also runs
+// as, not your interactive login user) can ever connect to it — anything
+// else gets a permissions error at the filesystem level, not just "the app
+// said no." Same request handler and upgrade wiring as the TCP server above;
+// this is purely a second door into the identical app.
+if (process.env.FLEET_GATE_SOCKET) {
+  const socketPath = process.env.FLEET_GATE_SOCKET;
+  if (existsSync(socketPath)) {
+    try {
+      unlinkSync(socketPath); // stale file from a previous run — listen() would EADDRINUSE on it
+    } catch (e) {
+      console.warn(`[fleetview] could not remove stale socket ${socketPath}: ${e.message}`);
+    }
+  }
+  const socketServer = createServer(app);
+  socketServer.on("upgrade", handleUpgrade);
+  socketServer.on("error", (e) => {
+    console.error(`[fleetview] gate socket ${socketPath} failed: ${e.message}`);
+  });
+  socketServer.listen(socketPath, () => {
+    chmodSync(socketPath, 0o600);
+    console.log(`[fleetview] also listening on ${socketPath} (for server/gate.js)`);
+  });
+}

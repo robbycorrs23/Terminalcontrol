@@ -552,6 +552,7 @@ export class PtyManager extends EventEmitter {
     if (!p) return null;
     return {
       id: p.id,
+      kind: "pty",
       cwd: p.cwd,
       cmd: p.cmd,
       session: p.session,
@@ -567,6 +568,7 @@ export class PtyManager extends EventEmitter {
   _dormantInfo(p) {
     return {
       id: p.id,
+      kind: "pty",
       cwd: p.cwd,
       cmd: p.cmd,
       session: p.session,

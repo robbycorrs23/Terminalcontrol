@@ -5,9 +5,11 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { installFileLinks } from "./links";
 import "@xterm/xterm/css/xterm.css";
 import { xtermTheme, xtermFontSize } from "./theme";
+import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 
 export interface PaneInfo {
   id: string;
+  kind: "pty" | "agent";
   cwd: string;
   cmd: string;
   attention?: { waiting: boolean; kind: "question" | "done" | null };
@@ -23,14 +25,41 @@ export function displayName(info: { name?: string; cwd: string }): string {
   return info.name || basename(info.cwd);
 }
 
+/**
+ * What the orchestrator (main.ts) needs from any pane box, terminal or not —
+ * grid/zoom/tray/drag/attention all drive this shape, not `Term` directly, so
+ * a non-terminal view (e.g. a mobile agent-chat pane) can slot in alongside
+ * `Term` with zero changes to that code. `Term` implements this.
+ */
+export interface PaneView {
+  id: string;
+  info: PaneInfo;
+  cell: HTMLElement; // grid placeholder (keeps the slot during zoom/drag)
+  el: HTMLElement; // the .term box (this is what zooms/drags)
+  titleBar: HTMLElement; // drag handle
+  isWaiting(): boolean;
+  waitingKind(): "question" | "done";
+  setWaiting(on: boolean, kind?: "question" | "done"): void;
+  isFlagged(): boolean;
+  setFollowUp(on: boolean): void;
+  setColor(color: string): void;
+  setName(name: string): void;
+  setAppearance(theme: object, fontSize: number): void;
+  setLastInput(text: string): void;
+  refit(): void;
+  focusTerm(): void;
+  reconnectNow(): void;
+  dispose(): void;
+}
+
 export interface TermHost {
-  onOpen(t: Term): void; // user clicked the box → zoom it
-  onBack(t: Term): void; // ‹ (mobile, zoomed only) → unzoom, unambiguously
-  onClose(t: Term): void; // × → kill it
-  onMinimize(t: Term): void; // – → send to tray
-  onToggleFollowUp(t: Term): void; // 🚩 → toggle the follow-up flag
-  onSetColor(t: Term, color: string): void; // ● → tint the border ("" = clear)
-  onRename(t: Term, name: string): void; // title text edited ("" = revert to folder)
+  onOpen(t: PaneView): void; // user clicked the box → zoom it
+  onBack(t: PaneView): void; // ‹ (mobile, zoomed only) → unzoom, unambiguously
+  onClose(t: PaneView): void; // × → kill it
+  onMinimize(t: PaneView): void; // – → send to tray
+  onToggleFollowUp(t: PaneView): void; // 🚩 → toggle the follow-up flag
+  onSetColor(t: PaneView, color: string): void; // ● → tint the border ("" = clear)
+  onRename(t: PaneView, name: string): void; // title text edited ("" = revert to folder)
 }
 
 // The five border tints offered in the color popover.
@@ -41,7 +70,7 @@ export const TINT_COLORS = ["#f85149", "#e3b341", "#3fb950", "#58a6ff", "#bc8cff
  * Knows nothing about the grid, zoom, tray, or drag — it just renders, forwards
  * bytes, and exposes `cell`, `el`, and `titleBar` for the orchestrator to drive.
  */
-export class Term {
+export class Term implements PaneView {
   id: string;
   info: PaneInfo;
   cell: HTMLElement; // grid placeholder (keeps the slot during zoom/drag)
@@ -185,20 +214,7 @@ export class Term {
     });
     this.buildColorPopover(host);
     // 📎 opens a file picker — the same path-injection flow as drag-and-drop.
-    const fileInput = el("input", "file-input") as HTMLInputElement;
-    fileInput.type = "file";
-    fileInput.multiple = true;
-    fileInput.hidden = true;
-    this.el.append(fileInput);
-    this.titleBar.querySelector(".attach")!.addEventListener("click", (e) => {
-      e.stopPropagation();
-      fileInput.click();
-    });
-    fileInput.addEventListener("change", () => {
-      const files = Array.from(fileInput.files || []);
-      fileInput.value = ""; // let the same file be re-picked next time
-      if (files.length) void this.dropFiles(files);
-    });
+    wireFilePicker(this.titleBar.querySelector(".attach")!, this.el, (files) => void this.dropFiles(files));
 
     // Click the box (outside the controls) opens/zooms it.
     this.el.addEventListener("click", (e) => {
@@ -207,7 +223,7 @@ export class Term {
       host.onOpen(this);
     });
 
-    this.wireFileDrop();
+    wireFileDrop(this.el, (files) => void this.dropFiles(files));
 
     this.ro = new ResizeObserver(() => this.refit());
     this.ro.observe(this.xtEl);
@@ -444,83 +460,13 @@ export class Term {
   }
 
   /**
-   * Let users drop files onto the box. We intercept the drop (otherwise the
-   * browser just navigates to the file), upload each to the server, and type the
-   * returned absolute path into the prompt — the same thing dragging a file into
-   * a native terminal does, which is how Claude picks up images and documents.
+   * Let users drop (or 📎-pick) files onto the box: upload each via
+   * attach.ts's `uploadFiles` and type the returned absolute path into the
+   * prompt — the same thing dragging a file into a native terminal does,
+   * which is how Claude picks up images and documents.
    */
-  private wireFileDrop() {
-    const target = this.el;
-    let depth = 0; // dragenter/leave fire per child; count to know when we truly left
-
-    const hasFiles = (e: DragEvent) =>
-      Array.from(e.dataTransfer?.types || []).includes("Files");
-
-    target.addEventListener("dragenter", (e) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      depth++;
-      target.classList.add("dropping");
-    });
-    target.addEventListener("dragover", (e) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-    });
-    target.addEventListener("dragleave", (e) => {
-      if (!hasFiles(e)) return;
-      if (--depth <= 0) {
-        depth = 0;
-        target.classList.remove("dropping");
-      }
-    });
-    target.addEventListener("drop", (e) => {
-      depth = 0;
-      target.classList.remove("dropping");
-      const items = Array.from(e.dataTransfer?.items || []).filter(
-        (it) => it.kind === "file"
-      );
-      if (!items.length) return; // not a file drop → let the browser/xterm do its thing
-      e.preventDefault(); // even a folders-only drop must not navigate the page
-      e.stopPropagation();
-      const files: File[] = [];
-      for (const it of items) {
-        // Folders arrive as zero-byte phantom "files" — detect and skip them
-        // rather than upload garbage. (Folder upload is deliberately unsupported.)
-        if (it.webkitGetAsEntry?.()?.isDirectory) continue;
-        const f = it.getAsFile();
-        if (f) files.push(f);
-      }
-      if (files.length) void this.dropFiles(files);
-    });
-  }
-
   private async dropFiles(files: File[]) {
-    const paths: string[] = [];
-    for (const f of files) {
-      // Base64-over-JSON transport caps out ~20MB real bytes (30MB body limit);
-      // bigger files would 413 anyway, so skip them up front.
-      if (f.size > 20 * 1024 * 1024) {
-        console.error(`file too large to attach (>20MB): ${f.name}`);
-        continue;
-      }
-      try {
-        const dataUrl = await readAsDataURL(f);
-        const res = await fetch(`/api/panes/${this.id}/file`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: f.name, dataUrl }),
-        });
-        if (!res.ok) {
-          console.error("image upload failed", await res.text());
-          continue;
-        }
-        const { path } = await res.json();
-        if (path) paths.push(path);
-      } catch (err) {
-        console.error("image upload failed", err);
-      }
-    }
+    const paths = await uploadFiles(this.id, files);
     if (!paths.length) return;
     // Type the path(s) into the prompt with a trailing space, but don't submit —
     // the user adds their message and hits Enter.
@@ -682,22 +628,13 @@ export class Term {
   }
 }
 
-function readAsDataURL(file: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(file);
-  });
-}
-
 function el(tag: string, cls: string): HTMLElement {
   const n = document.createElement(tag);
   n.className = cls;
   return n;
 }
 
-function basename(p: string): string {
+export function basename(p: string): string {
   const parts = p.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || p;
 }

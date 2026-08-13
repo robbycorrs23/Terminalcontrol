@@ -2,6 +2,7 @@ node_modules/
 dist/
 layouts.json
 sessions.json
+agent-sessions.json
 tasks.json
 *.log
 .DS_Store

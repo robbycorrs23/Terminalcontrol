@@ -1,4 +1,5 @@
-import { Term, PaneInfo, TermHost, displayName } from "./terminal";
+import { Term, PaneInfo, PaneView, TermHost, displayName } from "./terminal";
+import { AgentChat } from "./agent-chat";
 import { play } from "./sound";
 import { setTabAttention } from "./tab";
 import { initTasks, applyRemoteTasks, closeTasksIfOpen } from "./tasks";
@@ -36,14 +37,14 @@ const currentEl = document.getElementById("current")!;
 
 type DormantInfo = PaneInfo & { sessionAlive?: boolean };
 
-const terms = new Map<string, Term>();
+const panes = new Map<string, PaneView>();
 const queue: string[] = []; // pane ids waiting on the user, in arrival order
 const minimized = new Set<string>(); // pane ids currently in the tray
 const flagged = new Set<string>(); // pane ids marked for follow-up
 // Terminals whose tmux session died or was set aside (Replace). Kept here so the
 // user can bring them back instead of losing them — they show as recovery chips.
 const dormant = new Map<string, DormantInfo>();
-let zoomed: Term | null = null;
+let zoomed: PaneView | null = null;
 let suppressNextOpen = false; // set after a drag so the trailing click doesn't zoom
 let currentLayout: string | null = sessionStorage.getItem("fleet-current-layout");
 
@@ -100,11 +101,11 @@ const host: TermHost = {
 };
 
 // ---- Grid -------------------------------------------------------------
-function addTerm(info: PaneInfo): Term {
-  const existing = terms.get(info.id);
+function addTerm(info: PaneInfo): PaneView {
+  const existing = panes.get(info.id);
   if (existing) return existing;
-  const t = new Term(info, host);
-  terms.set(info.id, t);
+  const t = info.kind === "agent" ? new AgentChat(info, host) : new Term(info, host);
+  panes.set(info.id, t);
   t.cell.dataset.id = info.id; // lets us read grid order for layout autosave
   grid.append(t.cell);
   enableDrag(t);
@@ -115,11 +116,11 @@ function addTerm(info: PaneInfo): Term {
 }
 
 function removeTerm(id: string) {
-  const t = terms.get(id);
+  const t = panes.get(id);
   if (!t) return;
   if (zoomed === t) unzoom();
   t.dispose();
-  terms.delete(id);
+  panes.delete(id);
   minimized.delete(id);
   flagged.delete(id);
   renderFollowups();
@@ -142,7 +143,7 @@ function reflow() {
   const n = Math.max(grid.children.length, 1);
   const cols = mobileQuery.matches ? 1 : Math.ceil(Math.sqrt(n));
   grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-  for (const t of terms.values()) if (!minimized.has(t.id)) t.refit();
+  for (const t of panes.values()) if (!minimized.has(t.id)) t.refit();
   reflowMobileOrder();
 }
 
@@ -151,7 +152,7 @@ function reflow() {
 // doesn't touch the underlying grid order that drag-to-reorder persists, so
 // desktop layouts and saved layouts are unaffected.
 function reflowMobileOrder() {
-  for (const t of terms.values()) {
+  for (const t of panes.values()) {
     t.cell.style.order = mobileQuery.matches
       ? String(t.isWaiting() ? (t.waitingKind() === "done" ? 1 : 0) : 2)
       : "";
@@ -160,7 +161,7 @@ function reflowMobileOrder() {
 mobileQuery.addEventListener("change", reflow);
 
 // ---- Minimize / tray --------------------------------------------------
-function minimize(t: Term) {
+function minimize(t: PaneView) {
   if (zoomed === t) unzoom();
   if (minimized.has(t.id)) return;
   t.cell.remove();
@@ -170,7 +171,7 @@ function minimize(t: Term) {
 }
 
 function restore(id: string) {
-  const t = terms.get(id);
+  const t = panes.get(id);
   if (!t || !minimized.has(id)) return;
   minimized.delete(id);
   grid.append(t.cell);
@@ -204,7 +205,7 @@ function renderTray() {
   label.textContent = "Minimized:";
   tray.append(label);
   for (const id of minimized) {
-    const t = terms.get(id);
+    const t = panes.get(id);
     if (!t) continue;
     const chip = document.createElement("div");
     chip.className =
@@ -224,7 +225,7 @@ function renderTray() {
 }
 
 // ---- Zoom to center (animated) ----------------------------------------
-function zoom(t: Term) {
+function zoom(t: PaneView) {
   if (minimized.has(t.id)) restore(t.id);
   if (zoomed === t) return;
   if (zoomed) unzoom();
@@ -348,7 +349,7 @@ window.visualViewport?.addEventListener("scroll", onVisualViewportChange);
 let dropTarget: HTMLElement | null = null;
 let dropAfter = false; // insert after (vs before) the drop target
 
-function enableDrag(t: Term) {
+function enableDrag(t: PaneView) {
   t.titleBar.addEventListener("pointerdown", (e) => {
     if ((e.target as HTMLElement).closest(".ctl")) return; // controls aren't a handle
     // On mobile a title bar IS a row in the list — a touch-drag there is meant
@@ -411,7 +412,7 @@ function enableDrag(t: Term) {
 // cell (rather than requiring the cursor to land exactly on a cell via
 // elementFromPoint) makes dragging across rows reliable — gaps and the floating
 // drag box no longer block the drop. Also sets `dropAfter` (left/right of center).
-function dropSlot(ev: PointerEvent, t: Term): HTMLElement | null {
+function dropSlot(ev: PointerEvent, t: PaneView): HTMLElement | null {
   let best: HTMLElement | null = null;
   let bestDist = Infinity;
   for (const child of grid.children) {
@@ -442,7 +443,7 @@ function setDropTarget(cell: HTMLElement | null) {
 
 // ---- Attention queue --------------------------------------------------
 function onAttention(id: string, kind: "question" | "done") {
-  const t = terms.get(id);
+  const t = panes.get(id);
   if (!t) return;
   if (zoomed === t) return; // you're already looking at it
   t.setWaiting(true, kind);
@@ -461,12 +462,12 @@ function dequeue(id: string) {
   renderQueue();
 }
 function setCleared(id: string) {
-  terms.get(id)?.setWaiting(false);
+  panes.get(id)?.setWaiting(false);
   if (minimized.has(id)) renderTray();
   dequeue(id);
 }
 function clearAttention(id: string) {
-  const t = terms.get(id);
+  const t = panes.get(id);
   if (!t || !t.isWaiting()) return;
   fetch(`/api/panes/${id}/clear`, { method: "POST" });
   setCleared(id);
@@ -475,7 +476,7 @@ function renderQueue() {
   reflowMobileOrder();
   queueEl.innerHTML = "";
   for (const id of queue) {
-    const t = terms.get(id);
+    const t = panes.get(id);
     const chip = document.createElement("span");
     const kind = t?.waitingKind() === "done" ? "done" : "question";
     chip.className = "qchip" + (kind === "done" ? " done" : "");
@@ -488,7 +489,7 @@ function renderQueue() {
   // Mirror the waiting state in the browser tab (title + favicon dot) so it's
   // visible even when FleetView isn't the focused tab. queue[0] is the oldest
   // waiter — the same one "Jump to next" goes to.
-  const head = queue[0] ? terms.get(queue[0]) : undefined;
+  const head = queue[0] ? panes.get(queue[0]) : undefined;
   setTabAttention(
     queue.length,
     head ? displayName(head.info) : "",
@@ -496,7 +497,7 @@ function renderQueue() {
   );
 }
 nextBtn.onclick = () => {
-  const t = queue[0] && terms.get(queue[0]);
+  const t = queue[0] && panes.get(queue[0]);
   if (t) zoom(t);
 };
 
@@ -509,7 +510,7 @@ function setFlagged(id: string, on: boolean) {
 function renderFollowups() {
   followupsEl.innerHTML = "";
   for (const id of flagged) {
-    const t = terms.get(id);
+    const t = panes.get(id);
     if (!t) continue;
     const chip = document.createElement("span");
     chip.className = "fchip";
@@ -527,7 +528,7 @@ function renderFollowups() {
 // set aside (sessionAlive) restore the live Claude session intact; ones whose
 // session died respawn a fresh shell in the same folder.
 function markDormant(info: DormantInfo) {
-  if (terms.has(info.id)) removeTerm(info.id); // it was on screen — take it off
+  if (panes.has(info.id)) removeTerm(info.id); // it was on screen — take it off
   dormant.set(info.id, info);
   renderRecovery();
 }
@@ -590,6 +591,7 @@ const crumbsEl = document.getElementById("crumbs")!;
 const plistEl = document.getElementById("plist")!;
 const precentEl = document.getElementById("precent")!;
 const agentSelect = document.getElementById("agentSelect") as HTMLSelectElement;
+const chatViewEl = document.getElementById("chatView") as HTMLInputElement;
 const searchEl = document.getElementById("psearch") as HTMLInputElement;
 const sortEl = document.getElementById("psort") as HTMLSelectElement;
 const mkdirBtn = document.getElementById("pmkdir")!;
@@ -607,8 +609,26 @@ async function loadPrefs() {
   sortEl.value = prefs.sort || "name";
 }
 
+// Chat view (see agent-chat.ts) is available for all four claude/codex agent
+// options (backed by claude-driver.js / codex-driver.js — see the plan).
+// Mobile defaults new agent boxes to it (confirmed with the user — it's what
+// actually fixes mobile terminal pain); desktop defaults to the classic
+// terminal either way. Existing boxes are unaffected — this only decides
+// what a NEWLY created box becomes.
+function chatViewAvailable(cmd: string): boolean {
+  return cmd === "claude" || cmd === "claude-work" || cmd === "codex" || cmd === "codex-work";
+}
+function updateChatViewAvailability() {
+  const available = chatViewAvailable(agentSelect.value);
+  chatViewEl.disabled = !available;
+  if (!available) chatViewEl.checked = false;
+}
+agentSelect.addEventListener("change", updateChatViewAvailability);
+
 async function openPicker() {
   picker.hidden = false;
+  updateChatViewAvailability();
+  if (chatViewAvailable(agentSelect.value)) chatViewEl.checked = mobileQuery.matches;
   // Resume where we left off; on first open use the saved default (or home).
   await navigate(pickPath ?? prefs.defaultDir);
   loadPickerRecents();
@@ -762,14 +782,15 @@ async function loadPickerRecents() {
 }
 
 function choose(path: string) {
-  openTermAt(path, agentSelect.value);
+  const kind = chatViewAvailable(agentSelect.value) && chatViewEl.checked ? "agent" : "pty";
+  openTermAt(path, agentSelect.value, kind);
   closePicker();
 }
-async function openTermAt(cwd: string, cmd: string) {
+async function openTermAt(cwd: string, cmd: string, kind: "pty" | "agent" = "pty") {
   await fetch("/api/panes", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ cwd, cmd, session: SESSION }),
+    body: JSON.stringify({ cwd, cmd, session: SESSION, kind }),
   });
 }
 function prettyPath(p: string): string {
@@ -818,7 +839,7 @@ function connectControl() {
         // e.g. a terminal closed while we were asleep.
         const live = new Set((m.panes as PaneInfo[]).map((p) => p.id));
         for (const info of m.panes as PaneInfo[]) addTerm(info);
-        for (const id of [...terms.keys()]) if (!live.has(id)) removeTerm(id);
+        for (const id of [...panes.keys()]) if (!live.has(id)) removeTerm(id);
         break;
       }
       case "created":
@@ -838,16 +859,16 @@ function connectControl() {
         undormant(m.pane);
         break;
       case "input":
-        terms.get(m.pane)?.setLastInput(m.text);
+        panes.get(m.pane)?.setLastInput(m.text);
         break;
       case "tasks":
         applyRemoteTasks(m.tasks);
         break;
       case "color":
-        terms.get(m.pane)?.setColor(m.color);
+        panes.get(m.pane)?.setColor(m.color);
         break;
       case "renamed": {
-        terms.get(m.pane)?.setName(m.name);
+        panes.get(m.pane)?.setName(m.name);
         const d = dormant.get(m.pane);
         if (d) {
           d.name = m.name;
@@ -866,7 +887,7 @@ function connectControl() {
         setCleared(m.pane);
         break;
       case "followup": {
-        const t = terms.get(m.pane);
+        const t = panes.get(m.pane);
         if (t) t.setFollowUp(m.on);
         setFlagged(m.pane, m.on);
         break;
@@ -901,7 +922,7 @@ function reconnectControl() {
 // until a manual refresh. Re-establish the control socket and every terminal.
 function recoverConnections() {
   reconnectControl();
-  for (const t of terms.values()) t.reconnectNow();
+  for (const t of panes.values()) t.reconnectNow();
 }
 
 // Detect a wake via a heartbeat: if the interval didn't fire for far longer than
@@ -952,7 +973,7 @@ function currentSlots() {
   const ordered = [...grid.children].map((c) => (c as HTMLElement).dataset.id!).filter(Boolean);
   const rest = [...minimized].filter((id) => !ordered.includes(id));
   return [...ordered, ...rest]
-    .map((id) => terms.get(id))
+    .map((id) => panes.get(id))
     .filter(Boolean)
     .map((t) => ({ cwd: t!.info.cwd, cmd: t!.info.cmd }));
 }
@@ -985,13 +1006,13 @@ let pendingOpen: string | null = null;
 document.getElementById("openBtn")!.addEventListener("click", () => {
   const name = layoutSel.value;
   if (!name) return;
-  if (terms.size === 0) {
+  if (panes.size === 0) {
     doOpen(name, "overwrite"); // empty window — nothing to merge, just adopt it
     return;
   }
   pendingOpen = name;
-  const n = terms.size;
-  const live = [...terms.values()].filter((t) => /\b(claude|codex)\b/.test(t.info.cmd || "")).length;
+  const n = panes.size;
+  const live = [...panes.values()].filter((t) => /\b(claude|codex)\b/.test(t.info.cmd || "")).length;
   const livePart = live ? ` (${live} running an agent)` : "";
   omMsg.innerHTML =
     `Open <b>${name}</b> — <b>Add</b> its terminals alongside the ${n} here, ` +
@@ -1054,7 +1075,7 @@ function applyAppearance() {
   document.body.classList.toggle("big", a.big);
   const theme = xtermTheme(a.light);
   const fs = xtermFontSize(a.big);
-  for (const t of terms.values()) t.setAppearance(theme, fs);
+  for (const t of panes.values()) t.setAppearance(theme, fs);
   themeBtn.textContent = a.light ? "☾" : "☀";
   themeBtn.title = a.light ? "Switch to dark" : "Switch to light";
   textBtn.textContent = a.big ? "A−" : "A⁺";
