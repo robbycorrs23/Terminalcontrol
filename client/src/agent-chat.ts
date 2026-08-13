@@ -220,8 +220,9 @@ export class AgentChat implements PaneView {
 
   private connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    this.ws = new WebSocket(`${proto}://${location.host}/agent?pane=${this.id}`);
-    this.ws.onmessage = (e) => {
+    const ws = new WebSocket(`${proto}://${location.host}/agent?pane=${this.id}`);
+    this.ws = ws;
+    ws.onmessage = (e) => {
       let m: { t: string; events?: AgentEvent[]; ev?: AgentEvent };
       try {
         m = JSON.parse(e.data);
@@ -241,27 +242,43 @@ export class AgentChat implements PaneView {
         this.scrollToBottom();
       }
     };
-    this.ws.onclose = () => {
-      if (!this.disposed) this.scheduleReconnect();
+    // Compare against `this.ws`, not just `!this.disposed`: reconnectNow() (see
+    // below) replaces `this.ws` with a fresh socket and closes this old one out
+    // from under it. That old socket's onclose still fires (asynchronously,
+    // after this.ws already points at the new one) — without this check it
+    // would schedule a SECOND, redundant reconnect ~1s later, leaving two live
+    // sockets both receiving/rendering every broadcast event: every user
+    // message and reply painted twice. Mirrors terminal.ts's Term.connect(),
+    // which had the same bug fixed already.
+    ws.onclose = () => {
+      if (this.ws === ws) this.scheduleReconnect();
     };
   }
 
   private scheduleReconnect(delay = 1000) {
-    if (this.reconnectTimer != null) return;
+    if (this.disposed || this.reconnectTimer != null) return;
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = undefined;
       this.connect();
     }, delay);
   }
 
+  /** Drop the current socket and reconnect immediately (e.g. on tab foreground/pageshow — see main.ts). */
   reconnectNow() {
+    if (this.disposed) return;
     if (this.reconnectTimer != null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    try {
-      this.ws?.close();
-    } catch {}
+    const old = this.ws;
+    if (old) {
+      old.onclose = null; // we're reconnecting ourselves; don't double-schedule
+      old.onerror = null;
+      old.onmessage = null;
+      try {
+        old.close();
+      } catch {}
+    }
     this.connect();
   }
 
