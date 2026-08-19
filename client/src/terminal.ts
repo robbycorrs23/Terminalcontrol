@@ -13,6 +13,8 @@ export interface PaneInfo {
   cwd: string;
   cmd: string;
   attention?: { waiting: boolean; kind: "question" | "done" | null };
+  /** Is something running in this pane right now? (see PtyManager's work detection) */
+  working?: boolean;
   followUp?: boolean;
   lastInput?: string;
   color?: string;
@@ -42,6 +44,7 @@ export interface PaneView {
   isWaiting(): boolean;
   waitingKind(): "question" | "done";
   setWaiting(on: boolean, kind?: "question" | "done"): void;
+  setBusy(on: boolean): void;
   isFlagged(): boolean;
   setFollowUp(on: boolean): void;
   setColor(color: string): void;
@@ -139,8 +142,10 @@ export class Term implements PaneView {
       `<button data-key="Down">↓</button>` +
       `<button data-key="Left">←</button>` +
       `<button data-key="Right">→</button>`;
+    this.xtEl.append(workingOverlay());
     this.el.append(this.titleBar, cwdline, this.pinnedEl, this.xtEl, softkeys);
     this.cell.append(this.el);
+    this.setBusy(!!info.working);
     this.wireSoftKeys(softkeys);
     // Boxes opened via the "claude (work)" / "codex (work)" picker options get
     // a dark-green title tint + a faint logo watermark centered over the
@@ -606,6 +611,10 @@ export class Term implements PaneView {
     }
   }
 
+  setBusy(on: boolean) {
+    setBusyClass(this.el, on);
+  }
+
   isFlagged() {
     return this.el.classList.contains("flagged");
   }
@@ -628,6 +637,57 @@ export class Term implements PaneView {
     this.term.dispose();
     this.cell.remove();
   }
+}
+
+// Half-width katakana (the Matrix alphabet) mixed with digits and the operators
+// you'd actually see in code — pure katakana reads as decoration, pure ASCII
+// reads as a stack trace. The mix reads as "something is running".
+const RAIN_GLYPHS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789<>{}[]()=+*/$;:";
+const RAIN_COLUMNS = 40;
+const RAIN_GLYPHS_PER_COLUMN = 34; // one copy must out-tall the pane — see styles.css
+
+/**
+ * The "this pane is working" overlay: Matrix rain over the pane's content.
+ *
+ * Deliberately `pointer-events:none` and low-opacity — you read the terminal
+ * straight through it and clicks still land on the box. CSS hides AND pauses it
+ * unless the box has `.busy`, so an idle grid costs nothing (see styles.css).
+ *
+ * No canvas and no rAF on purpose: each column is one element animated with a
+ * `transform` only, which the compositor owns outright. A dozen busy panes is a
+ * few hundred composited layers doing zero per-frame JS, where the canvas
+ * version would be a dozen render loops fighting over the main thread.
+ *
+ * Each column's glyphs are emitted TWICE so `translateY(-50%) → 0` loops
+ * seamlessly, and every column gets its own duration/phase/opacity so they
+ * never march in lockstep.
+ */
+export function workingOverlay(): HTMLElement {
+  const o = el("div", "busy-rain");
+  o.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < RAIN_COLUMNS; i++) {
+    const col = el("div", "rain-col");
+    let seq = "";
+    for (let j = 0; j < RAIN_GLYPHS_PER_COLUMN; j++) {
+      seq += RAIN_GLYPHS[Math.floor(Math.random() * RAIN_GLYPHS.length)] + "\n";
+    }
+    col.textContent = seq + seq; // the two identical copies the loop relies on
+    col.style.animationDuration = `${(3.2 + Math.random() * 5).toFixed(2)}s`;
+    col.style.animationDelay = `${(-Math.random() * 8).toFixed(2)}s`; // negative = start mid-fall
+    col.style.opacity = (0.65 + Math.random() * 0.35).toFixed(2);
+    o.append(col);
+  }
+  return o;
+}
+
+/**
+ * Two classes, not one, so idle panes can be styled (dimmed) as positively as
+ * busy ones — a box that has never reported either state gets neither and just
+ * renders normally.
+ */
+export function setBusyClass(box: HTMLElement, on: boolean) {
+  box.classList.toggle("busy", on);
+  box.classList.toggle("idle", !on);
 }
 
 function el(tag: string, cls: string): HTMLElement {

@@ -8,6 +8,7 @@ import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
 import { AgentManager } from "./agent-manager.js";
 import { createRegistry } from "./pane-registry.js";
+import { collectSnapshot, saveSnapshot, SNAPSHOT_DIR } from "./snapshot.js";
 import { openInEditor, openFolder } from "./open-file.js";
 import { findPathLinks } from "./path-links.js";
 import { LayoutStore } from "./layout-store.js";
@@ -85,6 +86,9 @@ function broadcastAll(msg) {
   }
 }
 ptys.on("attention", (pane, kind) => broadcast(registry.sessionOf(pane), { t: "attention", pane, kind }));
+// A pane started/stopped working (see PtyManager's work-detection notes). Edge-
+// triggered, so this is cheap even while a pane is streaming output.
+ptys.on("work", (pane, on) => broadcast(registry.sessionOf(pane), { t: "work", pane, on }));
 ptys.on("exit", (pane, session) => broadcast(session, { t: "closed", pane }));
 // A pane's tmux session vanished unexpectedly — it's now dormant (recoverable),
 // not gone. Tell the window so it can offer a respawn instead of dropping the box.
@@ -159,6 +163,20 @@ app.get("/api/panes", (req, res) => res.json(registry.list(req.query.session)));
 // Dormant panes: ones whose terminal died or was set aside, kept so the user can
 // bring them back. `sessionAlive` says whether respawn will restore the live
 // Claude session (true) or start a fresh shell in the same folder (false).
+// What every pane is doing right now — the thing to grab before a restart.
+// `?save=1` also writes it to ~/.fleetview/snapshots/ (see snapshot.js).
+app.get("/api/snapshot", (req, res) => {
+  const snap = collectSnapshot(ptys, agents, req.query.reason || "api");
+  if (req.query.save) {
+    try {
+      snap.savedTo = saveSnapshot(snap);
+    } catch (e) {
+      snap.saveError = e.message;
+    }
+  }
+  res.json(snap);
+});
+
 app.get("/api/dormant", (req, res) => res.json(registry.dormantList(req.query.session)));
 
 app.post("/api/panes/:id/respawn", (req, res) => {
@@ -418,6 +436,9 @@ app.post("/hook/prompt", (req, res) => {
   if (id && prompt) {
     registry.setLastInput(id, prompt);
     broadcast(registry.sessionOf(id), { t: "input", pane: id, text: registry.lastInputOf(id) });
+    // A prompt was just submitted ⇒ this agent is now working. The matching
+    // Stop/Notification hook (POST /hook above) ends it.
+    registry.setWorking(id, true);
   }
   res.status(204).end();
 });
@@ -498,8 +519,30 @@ server.on("error", (e) => {
   }
   throw e;
 });
+// Snapshot on the way out. Agent panes are the fragile ones — their live
+// driver dies with this process and their on-screen log is memory-only — so a
+// shutdown is exactly when a record of "what was each box doing" is worth
+// having. Sync write: an async one would never land before exit. Under the
+// auto-start service (KeepAlive), launchd/systemd sends SIGTERM here on every
+// restart, so this fires on the restarts you didn't type as well as the ones
+// you did.
+let shuttingDown = false;
+function snapshotAndExit(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    const path = saveSnapshot(collectSnapshot(ptys, agents, `shutdown:${signal}`));
+    console.log(`[fleetview] ${signal} — snapshot saved to ${path}`);
+  } catch (e) {
+    console.warn(`[fleetview] ${signal} — could not save snapshot: ${e.message}`);
+  }
+  process.exit(0);
+}
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(sig, () => snapshotAndExit(sig));
+
 server.listen(PORT, HOST, () => {
   console.log(`\n  ▦ FleetView → http://localhost:${PORT}\n`);
+  console.log(`[fleetview] pane snapshots: ${SNAPSHOT_DIR} (auto on shutdown, or \`npm run snapshot\`)`);
   if (!isLoopback) {
     console.warn(
       `  ⚠ Listening on ${HOST} — reachable from the network. This server runs\n` +

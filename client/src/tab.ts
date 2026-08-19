@@ -65,11 +65,13 @@ function drawFavicon(kind: AttentionKind | null): string {
     }
   }
 
-  // Attention dot badge, top-right: orange = needs you, green = done.
+  // Attention dot badge, top-right: orange = needs you, yellow = done. Colours
+  // come from the same CSS variables the boxes and chips use, so the favicon
+  // can't drift out of sync with the palette (and follows light/dark too).
   if (kind) {
     x.beginPath();
     x.arc(S - 8, 8, 6, 0, Math.PI * 2);
-    x.fillStyle = kind === "done" ? "#3fb950" : "#f0a35e";
+    x.fillStyle = kind === "done" ? cssVar("--done", "#f5d142") : cssVar("--waiting", "#f0a35e");
     x.fill();
     x.lineWidth = 2;
     x.strokeStyle = "#0d1117";
@@ -77,6 +79,12 @@ function drawFavicon(kind: AttentionKind | null): string {
   }
 
   return canvas.toDataURL("image/png");
+}
+
+/** Read a theme colour out of CSS, with a fallback for the pre-boot call. */
+function cssVar(name: string, fallback: string): string {
+  const v = getComputedStyle(document.body).getPropertyValue(name).trim();
+  return v || fallback;
 }
 
 function roundRect(x: CanvasRenderingContext2D, px: number, py: number, w: number, h: number, r: number) {

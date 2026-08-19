@@ -20,6 +20,11 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 ## Run / build / test
 - `npm install` — installs deps; a postinstall (`scripts/fix-pty-helper.js`) chmods
   the node-pty spawn helper.
+- `npm run snapshot` — capture what every pane is doing to `~/.fleetview/snapshots/`
+  (JSON + readable Markdown). Deliberately **external**: it uses the running
+  server's REST API plus tmux `capture-pane` and the on-disk SDK transcripts, so
+  it works against a server running older code, or with no server at all. Take one
+  before anything that could bounce the server.
 - `npm run doctor` — preflight: checks tmux/curl/claude, prints the exact per-platform
   install command, and can install tmux (interactive, or `FLEET_AUTO_INSTALL=1`).
   `scripts/preflight.js` also exports `preflight()`, which `server/index.js` calls
@@ -52,6 +57,8 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `server/pty-manager.js` | owns panes: spawn/kill shells, tmux sessions, scrollback, attention, **dormant recovery**, persistence |
 | `server/layout-store.js` / `task-store.js` | named layouts / the global task tree |
 | `server/setup-hooks.js` | idempotently install the guarded Claude Code hooks |
+| `server/transcript.js` | rebuild an agent pane's chat log from the SDK's on-disk transcript |
+| `server/snapshot.js` | point-in-time dump of every pane (also written on shutdown) |
 | `server/index.js` | HTTP + WS wiring, REST, hook endpoints, static client |
 | `client/src/terminal.ts` | one xterm box bound to one PTY socket (auto-reconnects) |
 | `client/src/main.ts` | grid, zoom, tray, drag, picker, attention queue, control socket |
@@ -83,8 +90,33 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   `codex --dangerously-bypass-hook-trust` (bypasses trust review for ALL enabled
   hooks that session, not just FleetView's — a real tradeoff, not a default we set
   for you).
+- **Working indicator:** a pane is "working" when EITHER its agent hooks say so
+  (UserPromptSubmit → yes, Stop/Notification → no; sticky through silent tool
+  calls) OR it produced PTY output in the last `WORK_IDLE_MS`. One sweep timer
+  demotes quiet panes, and `PtyManager` emits `"work"` only on the EDGE, so a
+  pane streaming megabytes costs one broadcast, not one per chunk. The client
+  renders it as `.busy`/`.idle` on the box (border scan + Matrix rain over the
+  content + idle boxes dimmed); `.waiting` always wins — needs-you outranks busy.
+  The rain is CSS-only — one `transform` per column, no canvas and no rAF — and
+  it PAUSES (not just hides) when a pane goes idle, so a quiet grid costs
+  nothing. `◍` in the top bar cycles `body.fx-full` → `.fx-edge` → `.fx-off`.
 - **WebSockets:** `/term?pane=` (per box, reconnects after sleep) and `/control?session=`
   (per browser window; grid events + initial panes/dormant/tasks snapshot).
+- **Agent panes survive restarts in two halves, and BOTH are needed.** The
+  *conversation* is durable via `sdkSessionId` → `_ensureDriver` resumes it. The
+  *visible log* is not: `pane.events` is an in-memory ring (`RING_BUFFER_SIZE`,
+  never persisted), so a restarted pane used to come back blank even though the
+  model still remembered everything. `_hydrateFromTranscript` refills it from the
+  SDK's `<configDir>/projects/*/<sdkSessionId>.jsonl` on first attach — once per
+  process, only when the ring is empty, so it can never race live events.
+  `transcript.js`'s mapping MIRRORS `claude-driver.js`'s `handleMessage` exactly
+  (same event names, same id fields); if you change one, change the other.
+- **Snapshot before you bounce the server.** `SIGTERM/SIGINT/SIGHUP` write a
+  snapshot before exit, which matters most under the auto-start service, where
+  `KeepAlive` turns *any* exit into an instant restart. ⚠️ Restarting also kills
+  every agent pane's live driver — including, if you're working from inside a
+  FleetView agent pane, your own session. Terminal panes are tmux-backed and
+  don't care.
 - **Tasks** are one global tree in `tasks.json`, broadcast to ALL windows on change.
 
 ## Gotchas
@@ -94,7 +126,11 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 - `sessions.json`, `layouts.json`, `tasks.json`, `dist/`, `node_modules/` are
   gitignored local state — they regenerate; a fresh clone starts empty.
 - Restarting the server reattaches tmux sessions, but an already-open browser tab
-  must be refreshed to load new client code.
+  must be refreshed to load new client code. This bites constantly: the server can
+  be serving a brand-new bundle while the tab in front of you still runs the old
+  one, so "the change didn't work" is usually "the tab wasn't reloaded". Confirm
+  what's actually being served with
+  `curl -s localhost:4280/ | grep -oE 'assets/index-[^"]+'`.
 
 ## Conventions
 - Small, single-purpose modules; match the surrounding style and comment density.

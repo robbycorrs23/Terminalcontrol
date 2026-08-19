@@ -30,6 +30,7 @@
     "postinstall": "node scripts/fix-pty-helper.js",
     "setup": "node server/setup-hooks.js",
     "doctor": "node scripts/preflight.js",
+    "snapshot": "node scripts/snapshot.js",
     "service:install": "node scripts/install-service.js",
     "service:uninstall": "node scripts/uninstall-service.js",
     "typecheck": "tsc --noEmit",

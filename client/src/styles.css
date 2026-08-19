@@ -4,8 +4,16 @@
   --line: #30363d;
   --accent: #58a6ff;
   --waiting: #f0a35e; /* needs you */
-  --done: #3fb950; /* finished a turn */
+  --done: #f5d142; /* finished a turn */
   --flag: #a371f7;
+  /* "Working" is one green family, deliberately: --busy paints the travelling
+     border light, --rain the falling glyphs, --rain-head the hot leading edge
+     of BOTH. Kept as separate variables so the border and the rain can still be
+     tuned independently, but they must stay in the same hue or a working box
+     reads as two unrelated effects. */
+  --busy: #00e64a;
+  --rain: #00e64a;
+  --rain-head: #8fffad; /* brighter leading edge, still unmistakably green */
   --text: #c9d1d9;
   --text-dim: #8b949e;
   --btn: #21262d;
@@ -18,8 +26,13 @@ body.light {
   --line: #d0d7de;
   --accent: #0969da;
   --waiting: #bc4c00;
-  --done: #1a7f37;
+  --done: #8a6a00;
   --flag: #8250df;
+  /* On a white terminal the working green has to go DARKER, not brighter — a
+     bright leading glyph is simply invisible there. Still green, just deep. */
+  --busy: #0f7a2e;
+  --rain: #0f7a2e;
+  --rain-head: #04421a;
   --text: #1f2328;
   --text-dim: #57606a;
   --btn: #eaeef2;
@@ -847,6 +860,7 @@ body.big .term .pinned {
    touch-vs-mouse-tracking-mode conflicts). Same flex:1/min-height:0 sizing
    as .xt above so it fills the same slot in the box. */
 .term .chat {
+  position: relative; /* anchors .busy-rain, same as .xt above */
   flex: 1;
   min-height: 0;
   display: flex;
@@ -1188,6 +1202,29 @@ body.big .term .pinned {
   white-space: normal;
   line-height: 1.35;
 }
+/* The "Other…" write-in option: same button, dashed to read as "type here"
+   rather than a pre-written choice. */
+.term .q-opt-other {
+  border-style: dashed;
+}
+.term .q-other {
+  margin-top: 6px;
+}
+.term .q-other-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.term .q-other-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .term .q-submit {
   width: 100%;
   height: auto;
@@ -1348,6 +1385,180 @@ body.big .term .pinned {
 @keyframes pulse {
   50% {
     box-shadow: 0 0 0 2px currentColor, 0 0 28px 7px currentColor;
+  }
+}
+
+/* ---- Working vs. idle: which boxes are actually doing something -------
+   Driven by the `.busy` / `.idle` classes main.ts toggles from the server's
+   "work" broadcast (see PtyManager's work-detection notes). Three cues, layered
+   deliberately at different reading distances:
+     1. a light travelling around the border — reads across a whole grid at a glance
+     2. Matrix rain over the content         — reads when you're looking at one box
+     3. idle boxes dim + desaturate          — your eye lands on what's alive
+   Everything here is pointer-events:none and affects no layout, so a working
+   box behaves identically to an idle one for clicks, drags and selection.
+   All three defer to `.waiting`: "needs you" is the more urgent state and owns
+   the border glow, so a box that's blocked on you never also reads as busy.
+   The ◍ button in the top bar cycles body.fx-full → .fx-edge (border light
+   only) → .fx-off, which is why each cue below is scoped to a body class
+   rather than standing alone. */
+
+/* The rotating angle needs @property to be animatable at all. Without it
+   (older Safari) the gradient just sits still and the box still reads as
+   accented — degraded, not broken. */
+@property --scan {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+/* 1. Border scan. `.term` is overflow:hidden, so this ring has to live just
+   INSIDE the border (inset:0) rather than around it — an outset ring would be
+   clipped away. The outward glow comes from box-shadow, which isn't clipped. */
+body:not(.fx-off) .term.busy:not(.waiting)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--scan),
+    transparent 0deg 210deg,
+    color-mix(in srgb, var(--busy) 35%, transparent) 310deg,
+    var(--busy) 350deg,
+    var(--rain-head) 358deg,
+    transparent 360deg
+  );
+  /* Punch out the middle so only the 2px rim paints (mask xor of box vs content-box). */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: scan 2.6s linear infinite;
+  pointer-events: none;
+  z-index: 6;
+}
+body:not(.fx-off) .term.busy:not(.waiting):not(.zoomed) {
+  box-shadow: 0 0 14px -3px color-mix(in srgb, var(--busy) 70%, transparent);
+}
+@keyframes scan {
+  to {
+    --scan: 360deg;
+  }
+}
+
+/* 2. Matrix rain over the pane's content (terminal.ts's workingOverlay()).
+   Faint enough to read straight through, and it never intercepts a click.
+   When the pane goes idle the rain fades out AND every animation pauses — a
+   paused animation stops generating frames, so an idle grid costs nothing,
+   while `display:none` would have killed the cross-fade. */
+.busy-rain {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  color: var(--rain);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 6;
+  transition: opacity 0.6s ease;
+  /* Feather the top and bottom so the rain dissolves instead of butting into
+     the title bar and the border. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 14%, #000 84%, transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 14%, #000 84%, transparent);
+}
+body.fx-full .term.busy:not(.waiting) .busy-rain {
+  opacity: 0.97;
+}
+body.light.fx-full .term.busy:not(.waiting) .busy-rain {
+  opacity: 0.9;
+}
+/* Zoomed you're actually reading the output — keep a whisper of it, no more. */
+body.fx-full .term.zoomed.busy:not(.waiting) .busy-rain {
+  opacity: 0.15;
+}
+.term:not(.busy) .busy-rain,
+.term:not(.busy) .busy-rain .rain-col {
+  animation-play-state: paused;
+}
+
+/* One column = one glyph per line, drawn twice (see workingOverlay). The
+   gradient is clipped to the text and TILED down it: each tile fades in from
+   nothing, brightens along its length, and ends in a bright head. Scrolling the
+   element therefore scrolls a train of bright heads, each with a fading trail
+   above it — the classic falling-code look, out of one background and one
+   transform. */
+.rain-col {
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.15;
+  text-align: center;
+  /* No `will-change` on purpose: a running transform animation gets promoted
+     to its own layer anyway, and the browser drops that layer again when the
+     animation pauses. Pinning it would keep a layer per column alive for every
+     idle pane on the grid. */
+  animation: rain 5s linear infinite;
+  background-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    color-mix(in srgb, var(--rain) 40%, transparent) 22%,
+    color-mix(in srgb, var(--rain) 80%, transparent) 55%,
+    var(--rain) 84%,
+    var(--rain-head) 97%,
+    transparent 100%
+  );
+  /* One gradient per copy gave a single streak per 34 glyphs — mostly empty
+     column. Repeating it three times per copy puts a head every ~11 glyphs,
+     which is what actually reads as rain. Must stay an exact divisor of the
+     50% translate (50/3), or the loop seams. */
+  background-size: 100% 16.6667%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+body.big .rain-col {
+  font-size: 13px;
+}
+@keyframes rain {
+  from {
+    transform: translateY(-50%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* 3. Idle dim. Only the content area — the title bar stays fully legible so you
+   can still read every box's name. Hover or zoom brings it back instantly, and a
+   box that needs you is never dimmed. */
+body.fx-full .term.idle .xt,
+body.fx-full .term.idle .chat {
+  opacity: 0.55;
+  filter: saturate(0.5);
+  transition: opacity 0.5s ease, filter 0.5s ease;
+}
+body.fx-full .term.idle.waiting .xt,
+body.fx-full .term.idle.waiting .chat,
+body.fx-full .term.idle.zoomed .xt,
+body.fx-full .term.idle.zoomed .chat,
+body.fx-full .term.idle:hover .xt,
+body.fx-full .term.idle:hover .chat {
+  opacity: 1;
+  filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body:not(.fx-off) .term.busy:not(.waiting)::before {
+    animation: none;
+    background: color-mix(in srgb, var(--busy) 65%, transparent);
+  }
+  /* Falling text is exactly what motion sensitivity can't tolerate — the
+     border accent alone still says "working". */
+  .busy-rain {
+    display: none;
   }
 }
 

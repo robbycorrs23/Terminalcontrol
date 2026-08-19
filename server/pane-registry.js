@@ -52,6 +52,9 @@ export function createRegistry(ptys, agents) {
       agents.reorder(session, ids);
     },
     setAttention: (id, kind) => ownerOf(id)?.setAttention(id, kind),
+    // PTY-only: agent panes get their working state from the SDK driver's own
+    // status events (agent-manager.js), not from shell hooks — hence the `?.`.
+    setWorking: (id, on) => ownerOf(id)?.setWorking?.(id, on),
     clearAttention: (id) => ownerOf(id)?.clearAttention(id),
     setFollowUp: (id, on) => ownerOf(id)?.setFollowUp(id, on),
     setColor: (id, color) => ownerOf(id)?.setColor(id, color),

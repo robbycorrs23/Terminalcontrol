@@ -1,4 +1,4 @@
-import { PaneInfo, PaneView, TermHost, displayName, basename } from "./terminal";
+import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, setBusyClass } from "./terminal";
 import { AgentEvent, AgentQuestion } from "./agent-events";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown } from "./markdown";
@@ -189,10 +189,11 @@ export class AgentChat implements PaneView {
     const sendBtn = el("button", "chat-send");
     sendBtn.textContent = "Send";
     inputBar.append(attachBtn, this.inputEl, sendBtn);
-    chat.append(this.logEl, this.statusEl, inputBar);
+    chat.append(this.logEl, this.statusEl, inputBar, workingOverlay());
 
     this.el.append(this.titleBar, cwdline, this.pinnedEl, chat);
     this.cell.append(this.el);
+    this.setBusy(!!info.working);
 
     this.wireRename(host);
     this.wireTitleBarButtons(host);
@@ -560,31 +561,57 @@ export class AgentChat implements PaneView {
 
   /**
    * The interactive AskUserQuestion prompt (see claude-driver.js). Each
-   * question renders its options as buttons — single-select submits on click,
-   * multi-select toggles and waits for a Submit. We collect selections keyed
-   * by question TEXT (the shape the tool echoes back as its answers map) and
-   * send them as one `answer` message once every question has a pick.
+   * question renders its options as buttons plus an "Other…" write-in — the
+   * tool provides an Other affordance automatically in its native UI, and its
+   * answer is just a free string, so a typed value slots into the same answers
+   * map as a chosen label. Single-select submits on click; multi-select and
+   * write-ins wait for Submit. Answers are keyed by question TEXT (the shape
+   * the tool echoes back) and sent as one `answer` message once complete.
    */
   private appendQuestionCard(ev: Extract<AgentEvent, { t: "question" }>) {
     this.endToolGroup();
     const card = el("div", "question-card");
-    const picks = new Map<string, Set<string>>(); // question text -> chosen labels
+    const picks = new Map<string, Set<string>>(); // question text -> chosen option labels
+    const custom = new Map<string, string>(); // question text -> "Other" free text (when active)
+
+    // The final answer for a question: chosen labels plus any active write-in,
+    // comma-joined (the tool's own multi-select encoding).
+    const answerFor = (q: string) => {
+      const parts = [...(picks.get(q) || [])];
+      const c = (custom.get(q) || "").trim();
+      if (c) parts.push(c);
+      return parts.join(", ");
+    };
+    const answered = (q: string) => (picks.get(q)?.size ?? 0) > 0 || (custom.get(q) || "").trim().length > 0;
+
+    // Submit is created on demand: a single-select single-question card answers
+    // on click and needs none — until the user picks "Other" and needs a way
+    // to send the typed text.
+    let submitBtn: HTMLButtonElement | null = null;
+    const ensureSubmit = () => {
+      if (submitBtn) return;
+      submitBtn = document.createElement("button");
+      submitBtn.className = "ctl q-submit";
+      submitBtn.textContent = "Submit";
+      submitBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        trySubmit();
+      });
+      card.append(submitBtn);
+    };
 
     const trySubmit = () => {
-      // Only submit once every question has at least one pick — a single-select
-      // card with one question reaches this the moment it's clicked; a card
-      // with several (or a multi-select) waits for the rest / the Submit press.
-      const complete = ev.questions.every((q) => (picks.get(q.question)?.size ?? 0) > 0);
-      if (!complete) return;
+      if (!ev.questions.every((q) => answered(q.question))) return;
       const answers: Record<string, string> = {};
-      for (const q of ev.questions) answers[q.question] = [...(picks.get(q.question) || [])].join(", ");
+      for (const q of ev.questions) answers[q.question] = answerFor(q.question);
       card.classList.add("resolved");
-      card.querySelectorAll("button").forEach((b) => ((b as HTMLButtonElement).disabled = true));
+      card.querySelectorAll("button, input").forEach((b) => ((b as HTMLInputElement).disabled = true));
       this.renderQuestionSummary(card, answers);
       this.wsSend({ t: "answer", requestId: ev.requestId, answers });
     };
 
     for (const q of ev.questions) {
+      picks.set(q.question, new Set<string>());
       const block = el("div", "q-block");
       if (q.header) {
         const h = el("div", "q-header");
@@ -596,6 +623,31 @@ export class AgentChat implements PaneView {
       block.append(qt);
 
       const opts = el("div", "q-opts");
+
+      // "Other…" write-in row, revealed when its option is chosen.
+      const otherWrap = el("div", "q-other");
+      otherWrap.hidden = true;
+      const otherInput = document.createElement("input");
+      otherInput.type = "text";
+      otherInput.className = "q-other-input";
+      otherInput.placeholder = "Type your own answer…";
+      otherInput.addEventListener("input", () => custom.set(q.question, otherInput.value));
+      otherInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          trySubmit();
+        }
+      });
+      otherWrap.append(otherInput);
+
+      const deselectOpts = () => opts.querySelectorAll("button").forEach((x) => x.classList.remove("selected"));
+
+      const otherBtn = document.createElement("button");
+      otherBtn.className = "ctl q-opt q-opt-other";
+      const olbl = el("span", "q-opt-label");
+      olbl.textContent = "✎ Other…";
+      otherBtn.append(olbl);
+
       for (const o of q.options) {
         const b = document.createElement("button");
         b.className = "ctl q-opt";
@@ -609,39 +661,55 @@ export class AgentChat implements PaneView {
         }
         b.addEventListener("click", (e) => {
           e.stopPropagation();
-          const set = picks.get(q.question) || new Set<string>();
+          const set = picks.get(q.question)!;
           if (q.multiSelect) {
             if (set.has(o.label)) set.delete(o.label);
             else set.add(o.label);
             b.classList.toggle("selected", set.has(o.label));
-            picks.set(q.question, set);
           } else {
             set.clear();
             set.add(o.label);
-            picks.set(q.question, set);
-            opts.querySelectorAll("button").forEach((x) => x.classList.remove("selected"));
+            deselectOpts();
             b.classList.add("selected");
+            // A concrete pick cancels an in-progress write-in.
+            otherBtn.classList.remove("selected");
+            otherWrap.hidden = true;
+            custom.delete(q.question);
             trySubmit();
           }
         });
         opts.append(b);
       }
-      block.append(opts);
+
+      otherBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (q.multiSelect) {
+          const active = otherBtn.classList.toggle("selected");
+          otherWrap.hidden = !active;
+          if (active) otherInput.focus();
+          else {
+            custom.delete(q.question);
+            otherInput.value = "";
+          }
+        } else {
+          // Single-select: "Other" becomes the sole selection.
+          picks.get(q.question)!.clear();
+          deselectOpts();
+          otherBtn.classList.add("selected");
+          otherWrap.hidden = false;
+          otherInput.focus();
+          ensureSubmit(); // this card had none; the write-in needs one
+        }
+      });
+      opts.append(otherBtn);
+
+      block.append(opts, otherWrap);
       card.append(block);
     }
 
-    // Multi-select needs an explicit Submit; single-select cards with one
-    // question submit on click and never show it.
-    if (ev.questions.some((q) => q.multiSelect) || ev.questions.length > 1) {
-      const submit = document.createElement("button");
-      submit.className = "ctl q-submit";
-      submit.textContent = "Submit";
-      submit.addEventListener("click", (e) => {
-        e.stopPropagation();
-        trySubmit();
-      });
-      card.append(submit);
-    }
+    // Multi-select or multi-question cards always need an explicit Submit;
+    // single-select single-question cards get one lazily via "Other".
+    if (ev.questions.some((q) => q.multiSelect) || ev.questions.length > 1) ensureSubmit();
 
     this.logEl.append(card);
     this.questionEls.set(ev.requestId, card);
@@ -676,6 +744,7 @@ export class AgentChat implements PaneView {
   }
 
   private setStatus(state: string, detail?: string) {
+    this.setBusy(state === "working");
     if (state === "working" || state === "waiting_permission") {
       this.statusEl.hidden = false;
       this.statusEl.textContent = state === "waiting_permission" ? "● Waiting on your approval…" : "● Working…";
@@ -716,6 +785,9 @@ export class AgentChat implements PaneView {
       badge.textContent = kind === "done" ? "done" : "needs you";
       this.badgeSlot.append(badge);
     }
+  }
+  setBusy(on: boolean) {
+    setBusyClass(this.el, on);
   }
   isFlagged(): boolean {
     return this.el.classList.contains("flagged");

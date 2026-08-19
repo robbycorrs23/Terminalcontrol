@@ -14,6 +14,20 @@ const SHELL =
 // can repaint the screen (scrollback) without the live process noticing.
 const SCROLLBACK = 256 * 1024;
 
+// --- "this pane is working" detection ------------------------------------
+// A pane counts as working from two independent signals, OR'd together:
+//   1. hooks — the agent's UserPromptSubmit says "a turn just started"; its
+//      Stop/Notification hook (setAttention) says it ended. Exact, but only
+//      exists for claude/codex panes whose hooks actually fire.
+//   2. output — bytes on the PTY. Agents redraw a spinner while they think, and
+//      builds/tests stream, so "produced output recently" is a good proxy; an
+//      idle shell prompt emits nothing at all. Covers plain shells and panes
+//      whose hooks never fired (untrusted Codex hooks, post-restart, …).
+// A single sweep timer (not one timer per pane) demotes panes that have gone
+// quiet, so the cost is O(panes) every WORK_SWEEP_MS regardless of throughput.
+const WORK_IDLE_MS = 900; // silence this long ⇒ not working (output signal)
+const WORK_SWEEP_MS = 300; // how often we look for panes that went quiet
+
 // Terminal-identity *queries* that programs (claude, tmux) emit to ask "what
 // terminal is this?": Device Attributes (CSI c / > c / = c), XTVERSION (CSI > q),
 // DSR cursor/status reports (CSI n), DECRQM mode queries (CSI $ p), and OSC
@@ -88,6 +102,11 @@ export class PtyManager extends EventEmitter {
       spawnSync(this.tmuxBin, this._tx(["set-option", "-g", "escape-time", "10"]), { stdio: "ignore" });
       this._restore();
     }
+
+    // Demote panes whose output has gone quiet (see WORK_IDLE_MS). unref'd so a
+    // throwaway test script that builds a PtyManager still exits on its own.
+    this._workSweep = setInterval(() => this._sweepWork(), WORK_SWEEP_MS);
+    this._workSweep.unref?.();
   }
 
   // Prefix tmux args with a socket so the invocation targets the right server.
@@ -209,6 +228,7 @@ export class PtyManager extends EventEmitter {
       buffer: "",
       clients: new Set(),
       attention: { waiting: false, kind: null },
+      work: { hook: false, out: false, last: 0, active: false },
       followUp: !!m.followUp,
       lastInput: m.lastInput || "",
       color: m.color || "",
@@ -290,6 +310,11 @@ export class PtyManager extends EventEmitter {
     pane.pty = term;
     term.onData((d) => {
       pane.buffer = (pane.buffer + d).slice(-SCROLLBACK);
+      pane.work.last = Date.now();
+      if (!pane.work.out) {
+        pane.work.out = true;
+        this._syncWork(pane);
+      }
       for (const ws of pane.clients) safeSend(ws, { t: "d", d });
     });
     term.onExit(() => {
@@ -303,6 +328,7 @@ export class PtyManager extends EventEmitter {
       pane.pty = null;
       pane.clients = new Set();
       pane.buffer = "";
+      pane.work = { hook: false, out: false, last: 0, active: false };
       pane.sessionAlive = this._hasSession(pane.id, pane.sock);
       this.dormant.set(pane.id, pane);
       this._persistState();
@@ -357,6 +383,7 @@ export class PtyManager extends EventEmitter {
       buffer: "",
       clients: new Set(),
       attention: { waiting: false, kind: null },
+      work: { hook: false, out: false, last: 0, active: false },
       followUp: false,
       lastInput: "",
       color: "",
@@ -459,12 +486,52 @@ export class PtyManager extends EventEmitter {
     const pane = this.panes.get(id);
     if (!pane) return;
     pane.attention = { waiting: true, kind };
+    // Stop / Notification / PermissionRequest all mean the turn is over: the
+    // agent is either done or blocked on you. Either way it stopped working.
+    pane.work.hook = false;
+    this._syncWork(pane);
     this.emit("attention", id, kind);
   }
 
   clearAttention(id) {
     const pane = this.panes.get(id);
     if (pane) pane.attention = { waiting: false, kind: null };
+  }
+
+  /**
+   * The hook-driven half of the working signal (UserPromptSubmit ⇒ true). Sticky:
+   * it stays true through long silent tool calls, until a Stop/Notification hook
+   * lands in `setAttention` (or the pane is closed). See WORK_IDLE_MS above.
+   */
+  setWorking(id, on) {
+    const pane = this.panes.get(id);
+    if (!pane) return;
+    pane.work.hook = !!on;
+    this._syncWork(pane);
+  }
+
+  isWorking(id) {
+    const pane = this.panes.get(id);
+    return !!pane && (pane.work.hook || pane.work.out);
+  }
+
+  // Recompute the OR of both signals and emit only on an edge, so a pane
+  // streaming megabytes produces one event, not one per chunk.
+  _syncWork(pane) {
+    const on = pane.work.hook || pane.work.out;
+    if (on === pane.work.active) return;
+    pane.work.active = on;
+    this.emit("work", pane.id, on);
+  }
+
+  _sweepWork() {
+    const cutoff = Date.now() - WORK_IDLE_MS;
+    for (const pane of this.panes.values()) {
+      if (pane.work.out && pane.work.last < cutoff) {
+        pane.work.out = false;
+        this._syncWork(pane);
+      }
+    }
   }
 
   setFollowUp(id, on) {
@@ -541,6 +608,7 @@ export class PtyManager extends EventEmitter {
     pane.pty = null;
     pane.clients = new Set();
     pane.buffer = "";
+    pane.work = { hook: false, out: false, last: 0, active: false };
     pane.sessionAlive = alive;
     this.dormant.set(id, pane);
     this._persistState();
@@ -557,6 +625,7 @@ export class PtyManager extends EventEmitter {
       cmd: p.cmd,
       session: p.session,
       attention: p.attention,
+      working: p.work.hook || p.work.out,
       followUp: p.followUp,
       lastInput: p.lastInput || "",
       color: p.color || "",

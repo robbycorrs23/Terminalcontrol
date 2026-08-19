@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { startClaudeSession } from "./agents/claude-driver.js";
 import { startCodexSession } from "./agents/codex-driver.js";
+import { restoreEvents } from "./transcript.js";
 
 const RING_BUFFER_SIZE = 300; // replayed to a client that attaches/reconnects
 const LAST_INPUT_CAP = 2000; // matches PtyManager's UserPromptSubmit cap
@@ -165,7 +166,12 @@ export class AgentManager {
     if (ev.t === "permission_request" || ev.t === "question") {
       this.setAttention(pane.id, "question");
     } else if (ev.t === "status") {
+      const wasWorking = pane.status === "working";
       pane.status = ev.state;
+      // Mirror PtyManager's "work" edge onto the control socket so agent panes
+      // get the same grid-wide working treatment terminal panes do.
+      if (wasWorking !== (ev.state === "working"))
+        this.broadcast(pane.session, { t: "work", pane: pane.id, on: ev.state === "working" });
       if (ev.state === "idle") this.setAttention(pane.id, "done");
     } else if (ev.t === "mode" && pane.mode !== ev.mode) {
       pane.mode = ev.mode;
@@ -230,6 +236,27 @@ export class AgentManager {
 
   // ---- Live WS attach, mirrors PtyManager.attach for /term --------------
 
+  /**
+   * Refill an empty event ring from the SDK's on-disk transcript, once per
+   * process. Restarts leave a resumed pane with a working conversation but a
+   * blank log (`events` is memory-only, see `_restore`); this puts the history
+   * back on screen. Guarded on emptiness so it can never fight live events, and
+   * flagged so a genuinely empty transcript isn't re-read on every attach.
+   */
+  _hydrateFromTranscript(pane) {
+    if (pane._hydrated || pane.events.length || !pane.sdkSessionId) return;
+    pane._hydrated = true;
+    if (pane.provider === "codex") return; // different on-disk layout — see transcript.js
+    try {
+      const configDir = pane.accountConfigDir || join(homedir(), ".claude");
+      const events = restoreEvents(configDir, pane.sdkSessionId, RING_BUFFER_SIZE - 10);
+      if (events.length) {
+        pane.events = events;
+        console.log(`[fleetview] pane ${pane.id}: restored ${events.length} events from transcript`);
+      }
+    } catch {} // best effort — a blank log is the old behavior, not a failure
+  }
+
   attach(id, ws) {
     const pane = this.panes.get(id);
     if (!pane) {
@@ -238,6 +265,9 @@ export class AgentManager {
       } catch {}
       return;
     }
+    // Before _ensureDriver, so the driver's own `mode` event lands after the
+    // restored history rather than being swallowed by the emptiness guard.
+    this._hydrateFromTranscript(pane);
     try {
       this._ensureDriver(pane);
     } catch (err) {
@@ -354,6 +384,7 @@ export class AgentManager {
       cmd: p.cmd,
       session: p.session,
       attention: p.attention,
+      working: p.status === "working",
       followUp: p.followUp,
       lastInput: p.lastInput || "",
       color: p.color || "",

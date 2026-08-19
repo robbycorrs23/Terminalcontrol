@@ -153,6 +153,17 @@ signed-in, approved device on your tailnet.
 - **Close** — the `✕` control kills that shell.
 - **Drag to rearrange** — grab a box by its title bar and drop it onto another
   slot to reorder the grid.
+- **See what's running** — a box that's actually working gets a light travelling
+  around its border and Matrix rain falling behind its output, while idle boxes dim
+  and desaturate, so a glance at the grid tells you which agents are going. A box
+  that **needs you** is never shown as busy — that amber glow always wins. `◍`
+  cycles the effect: full → border light only → off.
+- **Snapshots** — `npm run snapshot` writes what every box is doing (terminal
+  scrollback, each agent's last exchange, the resume id) to
+  `~/.fleetview/snapshots/` as JSON + Markdown; the server also writes one
+  automatically when it's shut down. Agent chats additionally rebuild their own
+  log from the SDK transcript on reconnect, so a restart no longer leaves you
+  staring at a dozen empty boxes.
 - **Appearance** — `☀/☾` toggles light/dark, `A⁺/A−` toggles large text. Both
   persist (localStorage) and apply to the terminals and UI live.
 - **Layouts** — `Save layout` records this window's terminals (folders + order);

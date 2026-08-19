@@ -3,7 +3,7 @@ import { AgentChat } from "./agent-chat";
 import { play } from "./sound";
 import { setTabAttention } from "./tab";
 import { initTasks, applyRemoteTasks, closeTasksIfOpen } from "./tasks";
-import { getAppearance, setAppearance, xtermTheme, xtermFontSize } from "./theme";
+import { getAppearance, setAppearance, xtermTheme, xtermFontSize, FX_ORDER, WorkFx } from "./theme";
 
 const grid = document.getElementById("grid")!;
 const scrim = document.getElementById("scrim")!;
@@ -904,6 +904,9 @@ function connectControl() {
       case "attention":
         onAttention(m.pane, m.kind);
         break;
+      case "work":
+        panes.get(m.pane)?.setBusy(m.on);
+        break;
       case "cleared":
         setCleared(m.pane);
         break;
@@ -1090,10 +1093,21 @@ async function loadLayouts() {
 // ---- Appearance (light/dark + large text) -----------------------------
 const themeBtn = document.getElementById("themeBtn")!;
 const textBtn = document.getElementById("textBtn")!;
+const fxBtn = document.getElementById("fxBtn")!;
+const FX_LABEL: Record<WorkFx, [string, string]> = {
+  full: ["◍", "Working: full (border + orb, idle boxes dimmed)"],
+  edge: ["◎", "Working: border light only"],
+  off: ["○", "Working: no indicator"],
+};
 function applyAppearance() {
   const a = getAppearance();
   document.body.classList.toggle("light", a.light);
   document.body.classList.toggle("big", a.big);
+  // The .busy/.idle classes on each box stay authoritative regardless — only
+  // the CSS that reacts to them is gated, so cycling this is instant and never
+  // loses a pane's actual state.
+  for (const f of FX_ORDER) document.body.classList.toggle("fx-" + f, a.fx === f);
+  [fxBtn.textContent, fxBtn.title] = FX_LABEL[a.fx];
   const theme = xtermTheme(a.light);
   const fs = xtermFontSize(a.big);
   for (const t of panes.values()) t.setAppearance(theme, fs);
@@ -1101,7 +1115,13 @@ function applyAppearance() {
   themeBtn.title = a.light ? "Switch to dark" : "Switch to light";
   textBtn.textContent = a.big ? "A−" : "A⁺";
   textBtn.title = a.big ? "Switch to normal text" : "Switch to large text";
+  renderQueue(); // favicon colours come from CSS vars — repaint after a theme flip
 }
+fxBtn.addEventListener("click", () => {
+  const a = getAppearance();
+  setAppearance({ ...a, fx: FX_ORDER[(FX_ORDER.indexOf(a.fx) + 1) % FX_ORDER.length] });
+  applyAppearance();
+});
 themeBtn.addEventListener("click", () => {
   const a = getAppearance();
   setAppearance({ ...a, light: !a.light });
