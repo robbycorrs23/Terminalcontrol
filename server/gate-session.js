@@ -3,7 +3,19 @@ import { dirname } from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 const COOKIE_NAME = "fleet_gate_session";
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Session lifetime. Configurable because it is a real security/convenience
+// dial, not an implementation detail.
+//
+// The cookie is what actually admits you — the passkey is only checked when no
+// valid cookie exists. So this number IS the stolen-device window: anyone
+// holding an unlocked, already-logged-in device gets straight in for this long
+// without ever facing Face ID. 30 days made that window a month.
+//
+// 24h default: one biometric prompt a day, and a stolen phone is useful to a
+// thief for at most a day. Override with FLEET_GATE_SESSION_HOURS.
+const SESSION_MS =
+  (Number(process.env.FLEET_GATE_SESSION_HOURS) || 24) * 60 * 60 * 1000;
 
 /** Read (or create, once) the HMAC secret this gate signs session cookies with. */
 function loadSecret(file) {
@@ -55,9 +67,9 @@ export class GateSessions {
     return payload;
   }
 
-  /** A fresh 30-day session token. */
+  /** A fresh session token, lasting SESSION_MS. */
   issue() {
-    return this.sign({ exp: Date.now() + THIRTY_DAYS_MS });
+    return this.sign({ exp: Date.now() + SESSION_MS });
   }
 
   cookieName() {
@@ -65,7 +77,7 @@ export class GateSessions {
   }
 
   maxAgeSeconds() {
-    return THIRTY_DAYS_MS / 1000;
+    return SESSION_MS / 1000;
   }
 }
 
