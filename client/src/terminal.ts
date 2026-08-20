@@ -4,7 +4,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { installFileLinks } from "./links";
 import "@xterm/xterm/css/xterm.css";
-import { xtermTheme, xtermFontSize } from "./theme";
+import { xtermTheme, xtermFontSize } from "./settings";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 
 export interface PaneInfo {

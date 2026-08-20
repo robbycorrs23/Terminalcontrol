@@ -3,7 +3,35 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 const MAX_RECENTS = 10;
 
 /**
- * JSON-backed persistent state: named layouts + a recent-folders list.
+ * Everything the client can persist through /api/prefs, with its default.
+ *
+ * These are USER settings, not machine state: they live here (server-side,
+ * alongside layouts) rather than in each browser's localStorage so that the
+ * phone and the laptop agree. The client keeps a localStorage mirror purely so
+ * the first paint doesn't flash the wrong theme while this loads.
+ *
+ * Flat on purpose — setPrefs() merges shallowly, so a nested object would be
+ * replaced wholesale by any partial patch that touched it.
+ */
+const DEFAULT_PREFS = {
+  // Folder picker
+  defaultDir: null,
+  sort: "name",
+  // Appearance
+  theme: "dark", // "dark" | "light"
+  text: "normal", // "normal" | "big"
+  fx: "full", // working-terminal animation: "full" | "edge" | "off"
+  // Alerts
+  sound: true, // play a tone when a terminal needs you / finishes
+  volume: 70, // 0-100, scales the generated tones
+  notify: false, // OS notification when the tab is backgrounded (needs browser permission)
+  // Safety
+  confirmClose: false, // ask before ✕ kills a terminal
+};
+
+/**
+ * JSON-backed persistent state: named layouts, a recent-folders list, and the
+ * user's settings (see DEFAULT_PREFS).
  *
  * File shape ({ layouts, recents }):
  *   layouts[name] = { name, cmd?, slots: [{ cwd, cmd? }] }
@@ -31,8 +59,9 @@ export class LayoutStore {
     this.data = {
       layouts: raw.layouts || {},
       recents: raw.recents || [],
-      // Folder-picker preferences: where it opens, and how it sorts.
-      prefs: { defaultDir: null, sort: "name", ...(raw.prefs || {}) },
+      // User preferences (picker, appearance, alerts, safety). Unknown keys from
+      // an older/newer client are preserved; missing ones fall back to defaults.
+      prefs: { ...DEFAULT_PREFS, ...(raw.prefs || {}) },
     };
   }
 

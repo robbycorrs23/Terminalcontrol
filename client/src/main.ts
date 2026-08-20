@@ -3,7 +3,7 @@ import { AgentChat } from "./agent-chat";
 import { play } from "./sound";
 import { setTabAttention } from "./tab";
 import { initTasks, applyRemoteTasks, closeTasksIfOpen } from "./tasks";
-import { getAppearance, setAppearance, xtermTheme, xtermFontSize, FX_ORDER, WorkFx } from "./theme";
+import { getSettings, patchSettings, loadSettings, putPrefs, xtermTheme, xtermFontSize, FX_ORDER, Settings } from "./settings";
 
 const grid = document.getElementById("grid")!;
 const scrim = document.getElementById("scrim")!;
@@ -65,6 +65,14 @@ const host: TermHost = {
       unzoom();
       return;
     }
+    // Opt-in guard (Settings → Safety). Off by default: ✕ from the grid has
+    // always been immediate, and a confirm on every close would annoy anyone
+    // who didn't ask for it.
+    if (
+      getSettings().confirmClose &&
+      !confirm(`Close "${displayName(t.info)}"?\n\nWhatever is running in it stops.`)
+    )
+      return;
     closeTerm(t.id);
   },
   onMinimize: (t) => minimize(t),
@@ -272,7 +280,7 @@ function unzoom() {
 // the floating-card margins entirely and go edge-to-edge: a phone screen is
 // too small to spare for a decorative border.
 // Keeps --bar-h in sync with #bar's real rendered height, for CSS (#tasks'
-// `top`) that can't use `top: 100%` the way #barMenu does because #tasks is
+// `top`) that can't use `top: 100%` the way #settings does because #tasks is
 // `position: fixed`, not a child of #bar. #bar's height isn't a fixed 40px —
 // env(safe-area-inset-top) (notch/Dynamic Island) and the mobile touch-target
 // button sizing both add to it — so a static px in CSS drifts out of sync per
@@ -333,6 +341,7 @@ addEventListener("keydown", (e) => {
   const om = document.getElementById("openmode") as HTMLElement;
   if (!picker.hidden) closePicker();
   else if (om && !om.hidden) om.hidden = true;
+  else if (settingsPanel.classList.contains("open")) closeSettings();
   else if (closeTasksIfOpen()) {
     /* closed the task sidebar */
   } else if (zoomed) unzoom();
@@ -463,7 +472,38 @@ function onAttention(id: string, kind: "question" | "done") {
   t.setWaiting(true, kind);
   if (minimized.has(id)) renderTray();
   enqueue(id, kind);
-  play(kind);
+  const s = getSettings();
+  if (s.sound) play(kind, s.volume / 100);
+  notifyAttention(t, kind);
+}
+
+/**
+ * OS-level notification for a pane that needs you, for when FleetView isn't the
+ * tab you're looking at. Deliberately only fires when the tab is hidden — if
+ * you're staring at the grid, the glow, the chip and the tone already told you.
+ *
+ * `tag: id` means a pane that pings twice replaces its own notification instead
+ * of stacking a second one.
+ */
+function notifyAttention(t: PaneView, kind: "question" | "done") {
+  if (!getSettings().notify || !document.hidden) return;
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  try {
+    const name = displayName(t.info);
+    const n = new Notification(kind === "done" ? `${name} finished` : `${name} needs you`, {
+      body: kind === "done" ? "The agent ended its turn." : "Waiting on an approval or an answer.",
+      tag: t.id,
+      icon: "/favicon.svg",
+    });
+    n.onclick = () => {
+      window.focus();
+      const live = panes.get(t.id);
+      if (live) zoom(live);
+      n.close();
+    };
+  } catch {
+    /* some browsers throw on construction outside a service worker — ignore */
+  }
 }
 
 function enqueue(id: string, _kind: "question" | "done") {
@@ -618,9 +658,12 @@ let pickParent: string | null = null;
 let pickHome = "";
 let prefs: { defaultDir: string | null; sort: string } = { defaultDir: null, sort: "name" };
 
+// One GET for both: settings.ts needs the appearance/alert keys, the picker
+// needs sort/defaultDir, and they all live in the same prefs object.
 async function loadPrefs() {
-  prefs = await fetch("/api/prefs").then((r) => r.json());
+  prefs = await loadSettings();
   sortEl.value = prefs.sort || "name";
+  applySettings(); // server values may differ from the localStorage mirror we booted on
 }
 
 // Chat view (see agent-chat.ts) is available for all four claude/codex agent
@@ -773,13 +816,6 @@ starBtn.addEventListener("click", async () => {
   prefs = await putPrefs({ defaultDir: next });
   updateStar();
 });
-async function putPrefs(patch: object) {
-  return fetch("/api/prefs", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(patch),
-  }).then((r) => r.json());
-}
 
 async function loadPickerRecents() {
   const recents: string[] = await fetch("/api/recents").then((r) => r.json());
@@ -823,22 +859,34 @@ function prettyPath(p: string): string {
 document.getElementById("addBtn")!.addEventListener("click", openPicker);
 document.getElementById("pcancel")!.addEventListener("click", closePicker);
 
-// ---- Mobile menu (narrow screens collapse secondary bar controls here) ----
-const barMenu = document.getElementById("barMenu")!;
-const menuBtn = document.getElementById("menuBtn")!;
-menuBtn.addEventListener("click", (e) => {
+// ---- Settings dropdown ------------------------------------------------
+// Holds everything except "+ Terminal", on every screen size (this replaced the
+// old ☰-on-mobile-only menu, so the bar is now identical on a phone and a
+// desktop). Visibility is the .open class, not the `hidden` attribute — the
+// attribute is only in the markup to prevent a flash before CSS loads.
+const settingsBtn = document.getElementById("settingsBtn")!;
+const settingsPanel = document.getElementById("settings") as HTMLElement;
+settingsPanel.hidden = false;
+
+function closeSettings() {
+  settingsPanel.classList.remove("open");
+  settingsBtn.classList.remove("active");
+}
+settingsBtn.addEventListener("click", (e) => {
   e.stopPropagation();
-  barMenu.classList.toggle("open");
+  const open = settingsPanel.classList.toggle("open");
+  settingsBtn.classList.toggle("active", open);
 });
-barMenu.addEventListener("click", (e) => {
-  // Let the click's own handler (theme toggle, open layout, etc.) run first,
-  // then close — except selects, which need to stay open through the choice.
-  if ((e.target as HTMLElement).tagName !== "SELECT") barMenu.classList.remove("open");
+settingsPanel.addEventListener("click", (e) => {
+  // Toggles and sliders leave the panel open — you often flip two at once. The
+  // three ACTIONS (open/save a layout, show tasks) close it, since each one
+  // hands the screen over to something else.
+  if ((e.target as HTMLElement).closest("#openBtn, #saveBtn, #tasksBtn")) closeSettings();
 });
 document.addEventListener("click", (e) => {
-  if (!barMenu.classList.contains("open")) return;
-  if (e.target === menuBtn || barMenu.contains(e.target as Node)) return;
-  barMenu.classList.remove("open");
+  if (!settingsPanel.classList.contains("open")) return;
+  if (e.target === settingsBtn || settingsPanel.contains(e.target as Node)) return;
+  closeSettings();
 });
 document.getElementById("popen")!.addEventListener("click", () => pickPath && choose(pickPath));
 picker.addEventListener("click", (e) => {
@@ -1090,51 +1138,117 @@ async function loadLayouts() {
   layoutSel.value = currentLayout || keep || "";
 }
 
-// ---- Appearance (light/dark + large text) -----------------------------
-const themeBtn = document.getElementById("themeBtn")!;
-const textBtn = document.getElementById("textBtn")!;
-const fxBtn = document.getElementById("fxBtn")!;
-const FX_LABEL: Record<WorkFx, [string, string]> = {
-  full: ["◍", "Working: full (border + orb, idle boxes dimmed)"],
-  edge: ["◎", "Working: border light only"],
-  off: ["○", "Working: no indicator"],
-};
-function applyAppearance() {
-  const a = getAppearance();
-  document.body.classList.toggle("light", a.light);
-  document.body.classList.toggle("big", a.big);
+// ---- Settings controls ------------------------------------------------
+// The panel is the only place these live now. Values are server-backed (see
+// settings.ts) so they follow you between devices; this section just binds them
+// to the DOM and re-applies on change.
+const soundEl = document.getElementById("setSound") as HTMLInputElement;
+const volumeEl = document.getElementById("setVolume") as HTMLInputElement;
+const volRow = document.getElementById("volRow")!;
+const notifyEl = document.getElementById("setNotify") as HTMLInputElement;
+const notifyNote = document.getElementById("notifyNote")!;
+const confirmCloseEl = document.getElementById("setConfirmClose") as HTMLInputElement;
+
+/** Mark the selected button in a segmented control. */
+function seg(id: string, value: string) {
+  for (const b of document.querySelectorAll<HTMLButtonElement>(`#${id} button`))
+    b.classList.toggle("on", b.dataset.v === value);
+}
+/** Segmented controls replaced the old cycling icon buttons (◍ / A⁺ / ☀): in a
+ *  settings panel the current value should be readable at a glance, not
+ *  inferred from which glyph the button happens to be showing. */
+function wireSeg(id: string, apply: (v: string) => void) {
+  document.getElementById(id)!.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("button") as HTMLButtonElement | null;
+    if (!b?.dataset.v) return;
+    apply(b.dataset.v);
+    applySettings();
+  });
+}
+
+function applySettings() {
+  const s = getSettings();
+  document.body.classList.toggle("light", s.theme === "light");
+  document.body.classList.toggle("big", s.text === "big");
   // The .busy/.idle classes on each box stay authoritative regardless — only
-  // the CSS that reacts to them is gated, so cycling this is instant and never
+  // the CSS that reacts to them is gated, so changing this is instant and never
   // loses a pane's actual state.
-  for (const f of FX_ORDER) document.body.classList.toggle("fx-" + f, a.fx === f);
-  [fxBtn.textContent, fxBtn.title] = FX_LABEL[a.fx];
-  const theme = xtermTheme(a.light);
-  const fs = xtermFontSize(a.big);
+  for (const f of FX_ORDER) document.body.classList.toggle("fx-" + f, s.fx === f);
+
+  const theme = xtermTheme(s.theme === "light");
+  const fs = xtermFontSize(s.text === "big");
   for (const t of panes.values()) t.setAppearance(theme, fs);
-  themeBtn.textContent = a.light ? "☾" : "☀";
-  themeBtn.title = a.light ? "Switch to dark" : "Switch to light";
-  textBtn.textContent = a.big ? "A−" : "A⁺";
-  textBtn.title = a.big ? "Switch to normal text" : "Switch to large text";
+
+  // Reflect state back into the controls. Also covers the post-load reconcile,
+  // where the server's values can differ from the mirror we booted on.
+  seg("segTheme", s.theme);
+  seg("segText", s.text);
+  seg("segFx", s.fx);
+  soundEl.checked = s.sound;
+  volumeEl.value = String(s.volume);
+  volRow.classList.toggle("off", !s.sound);
+  notifyEl.checked = s.notify;
+  confirmCloseEl.checked = s.confirmClose;
+
   renderQueue(); // favicon colours come from CSS vars — repaint after a theme flip
 }
-fxBtn.addEventListener("click", () => {
-  const a = getAppearance();
-  setAppearance({ ...a, fx: FX_ORDER[(FX_ORDER.indexOf(a.fx) + 1) % FX_ORDER.length] });
-  applyAppearance();
+
+wireSeg("segTheme", (v) => patchSettings({ theme: v as Settings["theme"] }));
+wireSeg("segText", (v) => patchSettings({ text: v as Settings["text"] }));
+wireSeg("segFx", (v) => patchSettings({ fx: v as Settings["fx"] }));
+
+soundEl.addEventListener("change", () => {
+  patchSettings({ sound: soundEl.checked });
+  applySettings();
+  if (soundEl.checked) play("question", getSettings().volume / 100); // preview
 });
-themeBtn.addEventListener("click", () => {
-  const a = getAppearance();
-  setAppearance({ ...a, light: !a.light });
-  applyAppearance();
+// `change`, not `input`: dragging the slider would otherwise fire a tone per
+// pixel. The preview is the point of the control — you can't set a volume you
+// can't hear.
+volumeEl.addEventListener("change", () => {
+  patchSettings({ volume: Number(volumeEl.value) });
+  if (getSettings().sound) play("question", getSettings().volume / 100);
 });
-textBtn.addEventListener("click", () => {
-  const a = getAppearance();
-  setAppearance({ ...a, big: !a.big });
-  applyAppearance();
+
+/** Ask the browser for notification permission, reporting why it failed.
+ *  Note for iOS: Safari only grants this to a page installed to the home
+ *  screen, so the checkbox can legitimately refuse to stay on in mobile Safari. */
+async function ensureNotifyPermission(): Promise<boolean> {
+  notifyNote.hidden = true;
+  if (!("Notification" in window)) {
+    notifyNote.textContent = "This browser doesn't support notifications.";
+    notifyNote.hidden = false;
+    return false;
+  }
+  if (Notification.permission === "granted") return true;
+  if (Notification.permission === "denied") {
+    notifyNote.textContent =
+      "Notifications are blocked for this site. Enable them in your browser's site settings, then try again.";
+    notifyNote.hidden = false;
+    return false;
+  }
+  const res = await Notification.requestPermission();
+  if (res !== "granted") {
+    notifyNote.textContent =
+      "Permission wasn't granted. On iOS, add FleetView to your home screen first.";
+    notifyNote.hidden = false;
+  }
+  return res === "granted";
+}
+notifyEl.addEventListener("change", async () => {
+  // Only persist `true` once the browser has actually granted permission —
+  // otherwise the setting reads "on" while nothing can ever fire.
+  const on = notifyEl.checked ? await ensureNotifyPermission() : false;
+  patchSettings({ notify: on });
+  applySettings();
+});
+confirmCloseEl.addEventListener("change", () => {
+  patchSettings({ confirmClose: confirmCloseEl.checked });
+  applySettings();
 });
 
 // ---- Boot -------------------------------------------------------------
-applyAppearance();
+applySettings(); // instant, from the localStorage mirror; loadPrefs() reconciles with the server
 connectControl();
 loadLayouts();
 loadPrefs();

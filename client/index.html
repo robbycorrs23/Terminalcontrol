@@ -12,26 +12,86 @@
       <div id="barRow">
         <span class="brand">▦ FleetView</span>
         <span id="current" class="current" hidden></span>
+        <!-- Status, plus the one action that's only useful the moment it appears:
+             "Jump to next" is contextual (hidden unless something is waiting), so
+             it stays out here next to the chips it belongs to rather than behind ⚙. -->
         <div class="bar-chips">
           <div id="queue" title="Terminals waiting on you"></div>
           <span id="followups"></span>
           <span id="recovery" title="Terminals that died or were set aside — click to bring back"></span>
+          <button id="nextBtn" hidden>Jump to next ⏎</button>
         </div>
         <span class="spacer"></span>
-        <div id="barMenu">
-          <button id="fxBtn" class="icon" title="Working-terminal animation">◍</button>
-          <button id="textBtn" class="icon" title="Toggle large text">A⁺</button>
-          <button id="themeBtn" class="icon" title="Toggle light / dark">☀</button>
-          <button id="nextBtn" hidden>Jump to next ⏎</button>
+        <button id="settingsBtn" class="icon" title="Settings">⚙</button>
+        <button id="addBtn">+ Terminal</button>
+      </div>
+
+      <!-- Settings: everything that isn't "+ Terminal". One dropdown on every
+           screen size — the old ☰-only-on-mobile menu is gone, so the bar looks
+           and behaves the same on a phone and a 27" monitor. -->
+      <div id="settings" hidden>
+        <section class="set-sec">
+          <h3 class="set-h">Layouts</h3>
           <select id="layoutSel">
             <option value="">layouts…</option>
           </select>
-          <button id="openBtn">Open</button>
-          <button id="saveBtn">Save layout</button>
+          <div class="set-btns">
+            <button id="openBtn">Open</button>
+            <button id="saveBtn">Save layout</button>
+          </div>
+        </section>
+
+        <section class="set-sec">
+          <h3 class="set-h">View</h3>
           <button id="tasksBtn" title="Show / hide the task list">✓ Tasks</button>
-        </div>
-        <button id="addBtn">+ Terminal</button>
-        <button id="menuBtn" class="icon" title="Menu">☰</button>
+          <div class="set-row">
+            <span class="set-label">Theme</span>
+            <div class="seg" id="segTheme">
+              <button data-v="dark">Dark</button>
+              <button data-v="light">Light</button>
+            </div>
+          </div>
+          <div class="set-row">
+            <span class="set-label">Text size</span>
+            <div class="seg" id="segText">
+              <button data-v="normal">Normal</button>
+              <button data-v="big">Large</button>
+            </div>
+          </div>
+          <div class="set-row">
+            <span class="set-label" title="How loudly a working terminal announces itself">Working animation</span>
+            <div class="seg" id="segFx">
+              <button data-v="full" title="Border light + Matrix rain, idle boxes dimmed">Full</button>
+              <button data-v="edge" title="Border light only">Edge</button>
+              <button data-v="off" title="No working indicator">Off</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="set-sec">
+          <h3 class="set-h">Alerts</h3>
+          <label class="set-check">
+            <input type="checkbox" id="setSound" />
+            Play a sound when a terminal needs you
+          </label>
+          <div class="set-row" id="volRow">
+            <span class="set-label">Volume</span>
+            <input type="range" id="setVolume" min="0" max="100" step="5" />
+          </div>
+          <label class="set-check">
+            <input type="checkbox" id="setNotify" />
+            Notify me when this tab is in the background
+          </label>
+          <div class="set-note" id="notifyNote" hidden></div>
+        </section>
+
+        <section class="set-sec">
+          <h3 class="set-h">Safety</h3>
+          <label class="set-check">
+            <input type="checkbox" id="setConfirmClose" />
+            Ask before ✕ closes a terminal
+          </label>
+        </section>
       </div>
     </header>
 
