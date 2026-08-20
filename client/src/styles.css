@@ -218,11 +218,137 @@ body {
 }
 .set-h {
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
+}
+
+/* ---- Usage rows (subscription limits) ----
+   One row per ACCOUNT, not per pane — every claude box shares one bucket, so
+   a per-pane list would repeat the same number. Reading these costs no tokens
+   (see server/usage.js), which is why the panel can refresh freely. */
+.use-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.use-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.use-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.use-name {
+  font-size: 13px;
+  color: var(--text);
+}
+.use-plan {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.use-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--btn);
+  overflow: hidden;
+}
+.use-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+/* Colour by headroom so a bucket about to bite reads as urgent at a glance. */
+.use-bar.warn i,
+.use-pct.warn {
+  color: var(--waiting);
+  background: var(--waiting);
+}
+.use-bar.crit i,
+.use-pct.crit {
+  color: #f85149;
+  background: #f85149;
+}
+.use-pct {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent);
+  background: none !important; /* .warn/.crit above set both; text wants colour only */
+}
+.use-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.use-win {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.use-sec {
+  flex: none;
+  opacity: 0.8;
+}
+.use-err,
+.use-empty {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+#bar .use-refresh {
+  margin-left: auto;
+  padding: 0 6px;
+  min-height: 20px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+}
+#bar .use-refresh:hover {
+  color: var(--accent);
+}
+.use-refresh.spin {
+  animation: use-spin 0.8s linear infinite;
+}
+@keyframes use-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Unread "your limit reset" marker — shown even when notifications are off,
+   so the news can't be missed entirely. Cleared when the panel is opened. */
+#settingsBtn.hasnews::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--done);
+}
+#settingsBtn {
+  position: relative;
 }
 /* Label on the left, control on the right — the shape people expect from a
    settings sheet, and it keeps the segmented controls right-aligned with each

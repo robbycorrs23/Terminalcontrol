@@ -155,6 +155,10 @@ export class AgentManager {
           this._persist();
         }
       },
+      // Limits are per-ACCOUNT, so this is keyed by cmd ("claude" / "claude-work"
+      // / "codex" / "codex-work") — the same string accountConfigDirFor() reads —
+      // not by pane id. Whoever consumes it is watching accounts, not boxes.
+      onRateLimit: (data) => this.onRateLimit?.(String(pane.cmd || pane.provider), data),
     });
     return pane.driver;
   }

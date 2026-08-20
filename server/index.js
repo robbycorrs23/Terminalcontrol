@@ -13,6 +13,8 @@ import { openInEditor, openFolder } from "./open-file.js";
 import { findPathLinks } from "./path-links.js";
 import { LayoutStore } from "./layout-store.js";
 import { TaskStore } from "./task-store.js";
+import { UsageMonitor } from "./usage-monitor.js";
+import { normalizeCodexSnapshot, normalizeClaudeEvent } from "./usage.js";
 import { ensureHooks } from "./setup-hooks.js";
 import { ensureCodexHooks } from "./setup-codex-hooks.js";
 import { listDirs, makeDir } from "./fs-browse.js";
@@ -58,6 +60,29 @@ const agents = new AgentManager(join(ROOT, "agent-sessions.json"), broadcast);
 // direct only for the kind-specific surface (`attach`, `tmux`, `on()` for
 // ptys) the registry deliberately doesn't cover.
 const registry = createRegistry(ptys, agents);
+
+// --- Subscription limit monitor ----------------------------------------
+// Reading limits costs nothing (verified: no tokens, no quota — see usage.js),
+// so this polls on a timer AND takes free pushes from live drivers. Rows are
+// per ACCOUNT, not per pane: ten claude boxes share one 5-hour bucket.
+const usage = new UsageMonitor(broadcastAll, (row, window) => {
+  broadcastAll({
+    t: "usage-reset",
+    account: row.id,
+    label: row.label,
+    window: window.label,
+    resetsAt: window.resetsAt,
+  });
+  console.log(`[fleetview] ${row.label}: fresh ${window.label} window`);
+});
+// Live limit updates ride along with work the panes were doing anyway. The key
+// is the pane's cmd, which is exactly the account id the monitor uses.
+agents.onRateLimit = (accountId, data) => {
+  const win = accountId.startsWith("codex")
+    ? normalizeCodexSnapshot(data)?.primary
+    : normalizeClaudeEvent(data);
+  if (win) usage.applyPush(accountId, win);
+};
 const layouts = new LayoutStore(join(ROOT, "layouts.json"));
 const tasks = new TaskStore(join(ROOT, "tasks.json"));
 // The loud "tmux missing" warning is handled by preflight() above; here we just
@@ -413,6 +438,13 @@ app.post("/api/layouts/:name/open", (req, res) => {
   res.json(created);
 });
 
+// --- Usage (subscription limits, one row per account) --------------------
+app.get("/api/usage", (_req, res) => res.json(usage.snapshot()));
+app.post("/api/usage/refresh", async (_req, res) => {
+  await usage.refresh();
+  res.json(usage.snapshot());
+});
+
 // --- Tasks (one global tree, shared across all windows) ------------------
 app.get("/api/tasks", (_req, res) => res.json(tasks.tree()));
 app.put("/api/tasks", (req, res) => {
@@ -492,6 +524,7 @@ function handleUpgrade(req, socket, head) {
       ws.send(JSON.stringify({ t: "panes", panes: registry.list(session) }));
       ws.send(JSON.stringify({ t: "dormant", dormant: registry.dormantList(session) }));
       ws.send(JSON.stringify({ t: "tasks", tasks: tasks.tree() }));
+      ws.send(JSON.stringify({ t: "usage", usage: usage.snapshot() }));
     });
   } else if (url.pathname === "/term") {
     const id = url.searchParams.get("pane");
@@ -543,6 +576,8 @@ for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(sig, () => snapsho
 server.listen(PORT, HOST, () => {
   console.log(`\n  ▦ FleetView → http://localhost:${PORT}\n`);
   console.log(`[fleetview] pane snapshots: ${SNAPSHOT_DIR} (auto on shutdown, or \`npm run snapshot\`)`);
+  // Started here, not at module load, so a slow/absent CLI can never delay boot.
+  usage.start();
   if (!isLoopback) {
     console.warn(
       `  ⚠ Listening on ${HOST} — reachable from the network. This server runs\n` +

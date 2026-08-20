@@ -47,7 +47,7 @@ function stringifyBlockContent(content) {
  *   onSessionId: (id: string) => void,
  * }} opts
  */
-export function startClaudeSession({ cwd, resume, env, mode, onEvent, onSessionId }) {
+export function startClaudeSession({ cwd, resume, env, mode, onEvent, onSessionId, onRateLimit }) {
   const promptQueue = new PushQueue();
   const pendingPermissions = new Map(); // requestId -> (decision: "allow"|"deny"|"always") => void
   const pendingQuestions = new Map(); // requestId -> (answers|null) => void
@@ -175,6 +175,15 @@ export function startClaudeSession({ cwd, resume, env, mode, onEvent, onSessionI
           state: msg.is_error ? "error" : "idle",
           detail: msg.is_error ? msg.result : undefined,
         });
+        break;
+      case "rate_limit_event":
+        // Subscription limit utilization, pushed by the SDK whenever it
+        // changes. Deliberately NOT an AgentEvent: limits belong to the
+        // ACCOUNT, not this pane (every pane on the same account shares one
+        // bucket), so it goes out a separate channel to the usage monitor
+        // rather than into the pane's chat log. Costs nothing — it rides
+        // along with work the pane was doing anyway.
+        onRateLimit?.(msg.rate_limit_info);
         break;
       default:
         break; // normalized schema is deliberately narrow — ignore the rest

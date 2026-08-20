@@ -30,6 +30,16 @@
            screen size — the old ☰-only-on-mobile menu is gone, so the bar looks
            and behaves the same on a phone and a 27" monitor. -->
       <div id="settings" hidden>
+        <!-- Usage first: it's the thing you open ⚙ to check. One row per
+             ACCOUNT, not per pane — every claude box shares one bucket. -->
+        <section class="set-sec">
+          <h3 class="set-h">
+            Usage
+            <button id="usageRefresh" class="use-refresh" title="Refresh now">↻</button>
+          </h3>
+          <div id="usageList" class="use-list"></div>
+        </section>
+
         <section class="set-sec">
           <h3 class="set-h">Layouts</h3>
           <select id="layoutSel">

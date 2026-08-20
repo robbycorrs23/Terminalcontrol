@@ -876,6 +876,10 @@ settingsBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   const open = settingsPanel.classList.toggle("open");
   settingsBtn.classList.toggle("active", open);
+  if (open) {
+    settingsBtn.classList.remove("hasnews"); // you've now seen it
+    settingsBtn.title = "Settings";
+  }
 });
 settingsPanel.addEventListener("click", (e) => {
   // Toggles and sliders leave the panel open — you often flip two at once. The
@@ -932,6 +936,13 @@ function connectControl() {
         break;
       case "tasks":
         applyRemoteTasks(m.tasks);
+        break;
+      case "usage":
+        usageRows = m.usage || [];
+        renderUsage();
+        break;
+      case "usage-reset":
+        onUsageReset(m);
         break;
       case "color":
         panes.get(m.pane)?.setColor(m.color);
@@ -1137,6 +1148,147 @@ async function loadLayouts() {
   // Preserve the user's selection (or pin to the current layout) across refreshes.
   layoutSel.value = currentLayout || keep || "";
 }
+
+// ---- Usage (subscription limits, per account) --------------------------
+// Rows are per ACCOUNT, not per pane: every claude box draws on the same
+// 5-hour bucket, so a row per box would repeat the same number N times.
+// Reading these costs no tokens (see server/usage.js), so the server polls on
+// a timer and also takes free pushes from live panes.
+type UsageWindow = { label: string; percent: number; resetsAt: number | null };
+type UsageRow = {
+  id: string;
+  label: string;
+  plan: string | null;
+  available: boolean;
+  primary: UsageWindow | null;
+  secondary: UsageWindow | null;
+  error: string | null;
+};
+
+const usageListEl = document.getElementById("usageList")!;
+const usageRefreshEl = document.getElementById("usageRefresh") as HTMLButtonElement;
+let usageRows: UsageRow[] = [];
+
+/** Colour by headroom, so a row that's about to bite reads as urgent. */
+function usageLevel(pct: number): string {
+  if (pct >= 90) return "crit";
+  if (pct >= 70) return "warn";
+  return "ok";
+}
+
+/** "6:59 PM" today, "Thu 6:59 PM" beyond it — a bare time would be a lie. */
+function resetLabel(at: number | null): string {
+  if (!at) return "";
+  const d = new Date(at);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
+function renderUsage() {
+  usageListEl.innerHTML = "";
+  if (!usageRows.length) {
+    const empty = document.createElement("div");
+    empty.className = "use-empty";
+    empty.textContent = "No agent accounts detected.";
+    usageListEl.append(empty);
+    return;
+  }
+  for (const row of usageRows) {
+    const el = document.createElement("div");
+    el.className = "use-row";
+
+    const head = document.createElement("div");
+    head.className = "use-head";
+    const name = document.createElement("span");
+    name.className = "use-name";
+    name.textContent = row.label;
+    head.append(name);
+    if (row.plan) {
+      const plan = document.createElement("span");
+      plan.className = "use-plan";
+      plan.textContent = row.plan;
+      head.append(plan);
+    }
+    el.append(head);
+
+    if (!row.available || !row.primary) {
+      const err = document.createElement("div");
+      err.className = "use-err";
+      // The claude reader leans on an SDK method upstream flags EXPERIMENTAL,
+      // whose name is documented to change. When that happens this row degrades
+      // to a message instead of taking the panel down with it.
+      err.textContent = row.error ? `unavailable — ${row.error}` : "no plan limits on this account";
+      el.append(err);
+      usageListEl.append(el);
+      continue;
+    }
+
+    const p = row.primary;
+    const bar = document.createElement("div");
+    bar.className = `use-bar ${usageLevel(p.percent)}`;
+    const fill = document.createElement("i");
+    fill.style.width = `${p.percent}%`;
+    bar.append(fill);
+    el.append(bar);
+
+    const meta = document.createElement("div");
+    meta.className = "use-meta";
+    const pctEl = document.createElement("span");
+    pctEl.className = `use-pct ${usageLevel(p.percent)}`;
+    pctEl.textContent = `${p.percent}%`;
+    const win = document.createElement("span");
+    win.className = "use-win";
+    win.textContent = p.resetsAt ? `${p.label} · resets ${resetLabel(p.resetsAt)}` : p.label;
+    meta.append(pctEl, win);
+    if (row.secondary) {
+      const sec = document.createElement("span");
+      sec.className = "use-sec";
+      sec.textContent = `${row.secondary.label} ${row.secondary.percent}%`;
+      meta.append(sec);
+    }
+    el.append(meta);
+    usageListEl.append(el);
+  }
+}
+
+/**
+ * A window rolled over. The server announces this exactly once per window and
+ * persists what it already reported, so a restart can't repeat it.
+ */
+function onUsageReset(m: { label: string; window: string; account: string }) {
+  const text = `${m.label}: fresh ${m.window} window`;
+  if (getSettings().notify && "Notification" in window && Notification.permission === "granted") {
+    try {
+      const n = new Notification(text, { body: "Your limit reset — starting from zero.", tag: `reset-${m.account}` });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+    } catch {
+      /* some browsers throw outside a service worker — the badge below still shows it */
+    }
+  }
+  // Always leave a visible mark, even with notifications off or denied: the
+  // point is that you find out without having to go looking.
+  settingsBtn.classList.add("hasnews");
+  settingsBtn.title = text;
+}
+
+usageRefreshEl.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  usageRefreshEl.disabled = true;
+  usageRefreshEl.classList.add("spin");
+  try {
+    usageRows = await fetch("/api/usage/refresh", { method: "POST" }).then((r) => r.json());
+    renderUsage();
+  } catch {
+    /* leave the last-known rows up rather than blanking the panel */
+  } finally {
+    usageRefreshEl.disabled = false;
+    usageRefreshEl.classList.remove("spin");
+  }
+});
 
 // ---- Settings controls ------------------------------------------------
 // The panel is the only place these live now. Values are server-backed (see

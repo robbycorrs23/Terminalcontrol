@@ -60,7 +60,7 @@ function toolResultFromItem(item) {
  *   onSessionId: (id: string) => void,
  * }} opts
  */
-export function startCodexSession({ cwd, resume, env, onEvent, onSessionId }) {
+export function startCodexSession({ cwd, resume, env, onEvent, onSessionId, onRateLimit }) {
   const proc = spawn("codex", ["app-server", "--stdio"], {
     cwd,
     env: env || process.env,
@@ -132,6 +132,12 @@ export function startCodexSession({ cwd, resume, env, onEvent, onSessionId }) {
         break;
       case "error":
         onEvent({ t: "status", state: "error", detail: params.error?.message });
+        break;
+      case "account/rateLimits/updated":
+        // Account-level limit snapshot, pushed for free during normal turns.
+        // Like claude's rate_limit_event this is NOT an AgentEvent — limits are
+        // per-account, not per-pane — so it bypasses the chat log entirely.
+        onRateLimit?.(params?.rateLimits);
         break;
       default:
         // The full notification surface is enormous (mcp servers, account,
