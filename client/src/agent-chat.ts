@@ -2,6 +2,7 @@ import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, se
 import { AgentEvent, AgentQuestion } from "./agent-events";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown } from "./markdown";
+import { attachSecretPopover } from "./secret-popover";
 
 function el(tag: string, cls: string): HTMLElement {
   const n = document.createElement(tag);
@@ -108,6 +109,7 @@ export class AgentChat implements PaneView {
       `</select>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
+      `<button class="ctl secret" title="Give this chat a secret (never saved to chat memory)">🔒</button>` +
       `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
@@ -197,6 +199,7 @@ export class AgentChat implements PaneView {
 
     this.wireRename(host);
     this.wireTitleBarButtons(host);
+    attachSecretPopover(this.titleBar.querySelector(".secret") as HTMLElement, this.el, host, this);
     wireFilePicker(attachBtn, this.el, (files) => void this.attachFiles(files));
     wireFileDrop(this.el, (files) => void this.attachFiles(files));
 

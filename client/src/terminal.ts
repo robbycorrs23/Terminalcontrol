@@ -6,6 +6,7 @@ import { installFileLinks } from "./links";
 import "@xterm/xterm/css/xterm.css";
 import { xtermTheme, xtermFontSize } from "./settings";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
+import { attachSecretPopover } from "./secret-popover";
 
 export interface PaneInfo {
   id: string;
@@ -73,10 +74,13 @@ export interface TermHost {
     opts: { name: string; value: string; ttlMs: number }
   ): Promise<{ name: string; expiresAt: number; stepUpVerified: boolean }>;
   onRevokeSecret(t: PaneView, name: string): void; // ✕ next to a listed active secret
-  // What to show in the popover before the user commits to anything: whether
-  // step-up is even possible right now, and what's already live in this pane.
+  // What to show in the popover before the user commits to anything: how this
+  // pane would receive it (tmux env for terminal panes, a temp file + one
+  // chat message for chat panes — see server/secret-vault.js), whether that's
+  // even possible right now, and what's already live in this pane.
   secretStatus(t: PaneView): Promise<{
-    tmux: boolean;
+    mechanism: "tmux-env" | "tmp-file";
+    ready: boolean;
     gateConfigured: boolean;
     active: { name: string; expiresAt: number }[];
   }>;
@@ -373,113 +377,11 @@ export class Term implements PaneView {
   // The 🔒 control: paste a value, give it a name Claude can reference, pick
   // how long it lives, then it's gone — see server/secret-vault.js for what
   // actually happens to it (never chat text, never on disk as plaintext).
+  // Shared with AgentChat (chat panes get the identical popover), see
+  // secret-popover.ts.
   private buildSecretPopover(host: TermHost) {
     const btn = this.titleBar.querySelector(".secret") as HTMLElement;
-    const pop = el("div", "spop");
-    pop.hidden = true;
-    pop.addEventListener("click", (e) => e.stopPropagation());
-    pop.addEventListener("pointerdown", (e) => e.stopPropagation());
-
-    const warn = el("div", "spop-warn");
-    warn.hidden = true;
-
-    const value = el("input", "spop-value") as HTMLInputElement;
-    value.type = "password";
-    value.autocomplete = "off";
-    value.placeholder = "secret value";
-
-    const name = el("input", "spop-name") as HTMLInputElement;
-    name.type = "text";
-    name.maxLength = 64;
-    name.placeholder = "FLEET_SECRET";
-
-    const ttl = el("select", "spop-ttl") as HTMLSelectElement;
-    for (const [label, ms] of [
-      ["1 min", 60_000],
-      ["5 min", 300_000],
-      ["15 min", 900_000],
-      ["60 min", 3_600_000],
-    ] as [string, number][]) {
-      const o = document.createElement("option");
-      o.value = String(ms);
-      o.textContent = label;
-      if (ms === 300_000) o.selected = true;
-      ttl.append(o);
-    }
-
-    const go = el("button", "spop-go") as HTMLButtonElement;
-    go.textContent = "Inject";
-
-    const status = el("div", "spop-status");
-    const active = el("div", "spop-active");
-
-    const refreshActive = async () => {
-      const s = await host.secretStatus(this).catch(() => null);
-      warn.hidden = !!s && s.tmux && s.gateConfigured;
-      if (s && !s.tmux) warn.textContent = "⚠ no tmux — this server can't inject secrets at all.";
-      else if (s && !s.gateConfigured) warn.textContent = "⚠ no passkey gate set up — this only stops it reaching Claude's memory, not local/tailnet access.";
-      active.replaceChildren();
-      for (const a of s?.active || []) {
-        const row = el("div", "spop-row");
-        const secsLeft = Math.max(0, Math.round((a.expiresAt - Date.now()) / 1000));
-        const label = el("span", "spop-label");
-        label.textContent = `$${a.name} — ${secsLeft}s left`;
-        const revoke = el("button", "spop-revoke") as HTMLButtonElement;
-        revoke.textContent = "✕";
-        revoke.title = "Revoke now";
-        revoke.addEventListener("click", () => {
-          host.onRevokeSecret(this, a.name);
-          row.remove();
-        });
-        row.append(label, revoke);
-        active.append(row);
-      }
-    };
-
-    go.addEventListener("click", async () => {
-      const v = value.value;
-      if (!v) {
-        status.textContent = "enter a value first";
-        return;
-      }
-      go.disabled = true;
-      status.textContent = "confirming…";
-      try {
-        const r = await host.onInjectSecret(this, {
-          name: name.value.trim(),
-          value: v,
-          ttlMs: Number(ttl.value),
-        });
-        value.value = "";
-        status.textContent = `✓ $${r.name} ready for ${Math.round((r.expiresAt - Date.now()) / 1000)}s${r.stepUpVerified ? " (step-up confirmed)" : ""}`;
-        refreshActive();
-      } catch (e) {
-        status.textContent = `✗ ${(e as Error).message}`;
-      } finally {
-        go.disabled = false;
-      }
-    });
-
-    pop.append(warn, value, name, ttl, go, status, active);
-    this.el.append(pop);
-
-    const onDoc = (ev: PointerEvent) => {
-      const t = ev.target as HTMLElement;
-      if (pop.contains(t) || t === btn) return;
-      pop.hidden = true;
-      document.removeEventListener("pointerdown", onDoc);
-    };
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      pop.hidden = !pop.hidden;
-      if (!pop.hidden) {
-        status.textContent = "";
-        refreshActive();
-        document.addEventListener("pointerdown", onDoc);
-      } else {
-        document.removeEventListener("pointerdown", onDoc);
-      }
-    });
+    attachSecretPopover(btn, this.el, host, this);
   }
 
   /** Pin the last prompt sent to this window's Claude (from the server). */

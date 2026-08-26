@@ -64,8 +64,9 @@ const agents = new AgentManager(join(ROOT, "agent-sessions.json"), broadcast);
 const registry = createRegistry(ptys, agents);
 
 // Ephemeral, per-pane secrets ("give Claude a code without it ending up in the
-// transcript") — see secret-vault.js for the full model. PTY panes only.
-const secrets = new SecretVault(ptys, join(ROOT, "pane-secrets.json"));
+// transcript") — see secret-vault.js for the full model. Works for both PTY
+// (tmux env injection) and agent/chat (temp file + one chat message) panes.
+const secrets = new SecretVault(ptys, agents, join(ROOT, "pane-secrets.json"));
 secrets.restore();
 
 // --- Subscription limit monitor ----------------------------------------
@@ -368,23 +369,30 @@ app.post("/api/panes/:id/name", (req, res) => {
   res.status(204).end();
 });
 
-// --- Ephemeral secrets (terminal panes only) ------------------------------
-// See secret-vault.js for the full model: the value goes straight into the
-// pane's tmux env table, never into pane.buffer/events, so it can't reach
-// the transcript, the ring buffer, or a snapshot. Claude only ever sees the
-// var name it's told to reference.
+// --- Ephemeral secrets -----------------------------------------------------
+// See secret-vault.js for the full model. PTY panes: the value goes straight
+// into the pane's tmux env table, never into pane.buffer/events, so it can't
+// reach the transcript, the ring buffer, or a snapshot — Claude only ever
+// sees the var name it's told to reference. Agent (chat) panes have no tmux
+// session, so instead: a private temp file + one chat message telling Claude
+// the file's path (never the value).
 app.get("/api/panes/:id/secret-status", (req, res) => {
+  const id = req.params.id;
+  const isChat = !!agents.info(id);
   res.json({
-    tmux: !!ptys.tmux,
+    mechanism: isChat ? "tmp-file" : "tmux-env",
+    // tmp-file delivery has no external dependency to be missing; tmux-env
+    // delivery needs a tmux binary FleetView found at startup.
+    ready: isChat || !!ptys.tmux,
     gateConfigured: gateConfigured(),
-    active: secrets.listForPane(req.params.id),
+    active: secrets.listForPane(id),
   });
 });
 
 app.post("/api/panes/:id/secret", (req, res) => {
   const id = req.params.id;
   const paneSession = registry.sessionOf(id);
-  if (!paneSession) return res.status(404).json({ error: "no such (live) terminal pane" });
+  if (!paneSession) return res.status(404).json({ error: "no such (live) pane" });
   const { name, value, ttlMs, session, stepUpToken } = req.body || {};
   // Ownership: only the browser window that currently has this pane can
   // inject into it — a paneId can't be replayed from an unrelated tab/window.
