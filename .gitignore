@@ -4,6 +4,7 @@ layouts.json
 sessions.json
 agent-sessions.json
 tasks.json
+pane-secrets.json
 *.log
 .DS_Store
 

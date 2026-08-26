@@ -35,6 +35,62 @@ const SESSION = (() => {
 
 const currentEl = document.getElementById("current")!;
 
+// ---- Ephemeral secrets: optional WebAuthn step-up ----------------------
+// The 🔒 popover (terminal.ts) wants a fresh passkey confirmation right
+// before releasing a secret, on top of whatever the passkey gate
+// (server/gate.js) already does with session cookies. That's only possible
+// when THIS page is actually being served through the gate — gate.js mounts
+// its own `/gate` router in front of the FleetView proxy, so a same-origin
+// probe of `/gate/status` tells us that without hardcoding a port: reached
+// through the gate, it answers; reached directly on FleetView's own port
+// (also fully supported — see CLAUDE.md's security model), it 404s.
+let webauthnBrowserLoaded: Promise<void> | null = null;
+function loadWebAuthnBrowser(): Promise<void> {
+  if (!webauthnBrowserLoaded) {
+    webauthnBrowserLoaded = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/gate/webauthn-browser.js";
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("could not load the gate's WebAuthn helper"));
+      document.head.append(s);
+    });
+  }
+  return webauthnBrowserLoaded;
+}
+async function gateApi(path: string, body?: unknown) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `${path} failed (${res.status})`);
+  return data;
+}
+/**
+ * Best-effort: resolves to a step-up token when the gate is present, signed
+ * in, and the passkey prompt succeeds — otherwise null. A null result never
+ * blocks the secret-inject flow; the server treats an absent token as "no
+ * step-up available", not an error (see server/index.js's /api/panes/:id/secret).
+ */
+async function tryStepUp(scope: string): Promise<string | null> {
+  try {
+    const statusRes = await fetch("/gate/status");
+    if (!statusRes.ok) return null;
+    const status = await statusRes.json();
+    if (!status.loggedIn) return null; // behind the gate but not signed in here — don't force a detour
+    await loadWebAuthnBrowser();
+    const options = await gateApi("/gate/stepup/start", { scope });
+    const response = await (window as unknown as { SimpleWebAuthnBrowser: any }).SimpleWebAuthnBrowser.startAuthentication({
+      optionsJSON: options,
+    });
+    const { token } = await gateApi("/gate/stepup/finish", response);
+    return (token as string) || null;
+  } catch {
+    return null;
+  }
+}
+
 type DormantInfo = PaneInfo & { sessionAlive?: boolean };
 
 const panes = new Map<string, PaneView>();
@@ -105,6 +161,24 @@ const host: TermHost = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name }),
     });
+  },
+  onInjectSecret: async (t, opts) => {
+    const stepUpToken = await tryStepUp(`secret:${t.id}`);
+    const res = await fetch(`/api/panes/${t.id}/secret`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...opts, session: SESSION, stepUpToken }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `inject failed (${res.status})`);
+    return data;
+  },
+  onRevokeSecret: (t, name) => {
+    fetch(`/api/panes/${t.id}/secret/${encodeURIComponent(name)}`, { method: "DELETE" });
+  },
+  secretStatus: async (t) => {
+    const res = await fetch(`/api/panes/${t.id}/secret-status`);
+    return res.json();
   },
 };
 
@@ -286,10 +360,34 @@ function unzoom() {
 // button sizing both add to it — so a static px in CSS drifts out of sync per
 // device/orientation the same way centerRect()'s barH read below has to be
 // live rather than a constant.
+// Callers: startup, `resize`, visualViewport changes — and every chip render,
+// because #bar now has a second row (#barChips) that appears and disappears with
+// the attention chips. That changes #bar's height WITHOUT any window resize
+// firing, and a stale --bar-h leaves #tasks (position: fixed, top: var(--bar-h))
+// either overlapping the bar or floating below it.
 function syncBarHeightVar() {
   const barH = document.getElementById("bar")?.offsetHeight ?? 40;
   document.documentElement.style.setProperty("--bar-h", `${barH}px`);
 }
+
+// Drives body's height (see the --app-h note in styles.css). The point is that
+// the app is never one pixel taller than what's actually visible: on iOS a body
+// taller than the visible area is pannable, and panning tucks #bar — safe-area
+// padding and all — under the status bar / Dynamic Island, which is what makes
+// its buttons untappable. `dvh` handles the URL bar but NOT the keyboard;
+// visualViewport.height handles both, so it wins when we have it.
+function syncAppHeightVar() {
+  const vv = window.visualViewport;
+  // While pinch-zoomed, visualViewport.height is the magnified slice of the
+  // page, not the window — writing that to --app-h would shrink the whole app
+  // to the zoom window. Leave the last good value; the next scale-1 event
+  // (resize, or the zoom being released) refreshes it.
+  if (!vv || vv.scale > 1.01) return;
+  document.documentElement.style.setProperty("--app-h", `${vv.height}px`);
+}
+// Height first, then the bar measurement — #bar's offsetHeight is read out of a
+// layout that the height change can invalidate.
+syncAppHeightVar();
 syncBarHeightVar();
 
 function centerRect(): DOMRect {
@@ -347,6 +445,7 @@ addEventListener("keydown", (e) => {
   } else if (zoomed) unzoom();
 });
 addEventListener("resize", () => {
+  syncAppHeightVar();
   syncBarHeightVar();
   if (zoomed) setRect(zoomed.el, centerRect());
   reflow();
@@ -356,6 +455,8 @@ addEventListener("resize", () => {
 // innerHeight — without this, a zoomed terminal's fit()/rect can end up wrong
 // (partly hidden behind the keyboard) until something else forces a reflow.
 function onVisualViewportChange() {
+  syncAppHeightVar();
+  syncBarHeightVar();
   if (zoomed) {
     setRect(zoomed.el, centerRect());
     zoomed.refit();
@@ -539,6 +640,7 @@ function renderQueue() {
     queueEl.append(chip);
   }
   nextBtn.hidden = queue.length === 0;
+  syncBarHeightVar();
 
   // Mirror the waiting state in the browser tab (title + favicon dot) so it's
   // visible even when FleetView isn't the focused tab. queue[0] is the oldest
@@ -573,6 +675,7 @@ function renderFollowups() {
     chip.onclick = () => zoom(t);
     followupsEl.append(chip);
   }
+  syncBarHeightVar();
 }
 
 // ---- Recovery (dormant terminals) -------------------------------------
@@ -604,7 +707,7 @@ async function discardPane(id: string) {
 }
 function renderRecovery() {
   recoveryEl.innerHTML = "";
-  if (dormant.size === 0) return;
+  if (dormant.size === 0) return syncBarHeightVar();
   const label = document.createElement("span");
   label.className = "rec-label";
   label.textContent = "⏎ recover:";
@@ -637,6 +740,7 @@ function renderRecovery() {
     all.onclick = () => respawnAll();
     recoveryEl.append(all);
   }
+  syncBarHeightVar();
 }
 
 // ---- Folder picker ----------------------------------------------------
@@ -883,9 +987,10 @@ settingsBtn.addEventListener("click", (e) => {
 });
 settingsPanel.addEventListener("click", (e) => {
   // Toggles and sliders leave the panel open — you often flip two at once. The
-  // three ACTIONS (open/save a layout, show tasks) close it, since each one
-  // hands the screen over to something else.
-  if ((e.target as HTMLElement).closest("#openBtn, #saveBtn, #tasksBtn")) closeSettings();
+  // ACTIONS (open/save a layout, show tasks, jump to the next waiting terminal)
+  // close it, since each one hands the screen over to something else.
+  if ((e.target as HTMLElement).closest("#openBtn, #saveBtn, #tasksBtn, #nextBtn"))
+    closeSettings();
 });
 document.addEventListener("click", (e) => {
   if (!settingsPanel.classList.contains("open")) return;

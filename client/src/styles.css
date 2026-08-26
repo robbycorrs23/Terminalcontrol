@@ -86,12 +86,32 @@ body {
   color: var(--text);
   font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow: hidden;
+  /* Nothing in this app scrolls the DOCUMENT — the grid, the settings sheet and
+     the chat log own their own scrollers. Without this, over-scrolling any of
+     them chains out to the document and rubber-bands the whole app (see the
+     height note below for why that's not merely cosmetic on iOS). */
+  overscroll-behavior: none;
 }
 /* App is a vertical stack: bar / grid (fills) / tray. */
 body {
   display: flex;
   flex-direction: column;
+  /* NOT 100vh. On iOS `vh` is the LARGE viewport — the height the page would
+     have if Safari's chrome were retracted — so with the URL bar showing, the
+     body is TALLER than what you can actually see. Safari resolves that by
+     letting the whole document pan, which slides #bar (and with it the
+     env(safe-area-inset-top) padding below) up underneath the status bar and
+     Dynamic Island, where its buttons stop being tappable. That's why the
+     safe-area padding alone never fixed this: the clearance was always there,
+     it was just scrolled off-screen.
+     --app-h is visualViewport.height, kept live from main.ts, and is the only
+     measure that ALSO shrinks when the on-screen keyboard opens (vh and dvh
+     are both keyboard-blind). 100dvh is the CSS-only fallback; 100vh is the
+     last resort for browsers without dvh. Layered, so the app is never taller
+     than the pixels the user can see, so there is nothing to pan. */
   height: 100vh;
+  height: 100dvh;
+  height: var(--app-h, 100dvh);
 }
 
 /* ---- Top bar ----
@@ -154,17 +174,35 @@ body {
   font-size: 14px;
 }
 
-/* Chip row scrolls horizontally instead of pushing "+ Terminal" / the menu
-   off-screen when many attention/recovery chips pile up on a narrow bar. */
-.bar-chips {
+/* ---- Attention chip row ----
+   A second row under #barRow, NOT a flex item inside it. This used to be an
+   inline horizontal scroller; the problem with sharing the row is that chips
+   and controls compete for the same width, and on a phone one waiting terminal
+   was enough to crush ⚙ / "+ Terminal" down to untappable slivers.
+   Here the chips WRAP onto as many lines as they need and the controls above
+   are never affected.
+
+   Capped and scrollable so a fleet with a dozen simultaneous waiters can't push
+   the grid off-screen — past ~3 lines the row scrolls rather than grows. */
+#barChips {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  overflow-x: auto;
-  min-width: 0;
+  gap: 6px;
+  padding: 0 10px 7px;
+  max-height: 22dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   scrollbar-width: none;
 }
-.bar-chips::-webkit-scrollbar {
+#barChips::-webkit-scrollbar {
+  display: none;
+}
+/* Empty fleet, no row: #queue/#followups/#recovery are always in the DOM (their
+   render functions fill them in place), so :empty on the container never
+   matches — test for actual chips instead. Keeps the bar exactly as tall as it
+   was before when nothing needs attention, rather than leaving a dead strip. */
+#barChips:not(:has(.qchip, .fchip, .rchip, .rec-label, .rec-all)) {
   display: none;
 }
 
@@ -434,6 +472,14 @@ body {
 }
 
 @media (max-width: 640px) {
+  /* Belt-and-braces on the notch clearance: Safari reports a smaller top inset
+     than the system's own in some UI states (mid toolbar-collapse, for one), and
+     a bar sitting flush against the top edge is a bar whose buttons the Island
+     eats. max() — not "+" — so this is a plain no-op whenever the inset reports
+     properly (59pt on an Island phone). */
+  #bar {
+    padding-top: max(env(safe-area-inset-top), 10px);
+  }
   /* Full-width sheet, and touch-sized targets throughout. */
   #settings {
     left: 0;
@@ -463,6 +509,14 @@ body {
     min-width: 44px;
     min-height: 44px;
   }
+  /* Chips are tap targets on a phone, and the desktop 11px/1px-padding pill is
+     a hard thing to hit. Their own row means there's now width to spend. */
+  #barChips .qchip,
+  #barChips .fchip,
+  #barChips .rchip {
+    font-size: 12px;
+    padding: 5px 11px;
+  }
 }
 
 /* Current-layout indicator */
@@ -483,6 +537,7 @@ body {
 #queue {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
 }
 .qchip {
   background: var(--waiting);
@@ -501,6 +556,7 @@ body {
 #followups {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
 }
 .fchip {
   background: var(--flag);
@@ -517,6 +573,7 @@ body {
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-wrap: wrap;
 }
 .rec-label {
   font-size: 11px;
@@ -765,6 +822,10 @@ body.big .task .tedit {
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    /* Flicking past the top of the card list must not chain into the document
+       and drag the bar up under the Island — this scroller stops at its own
+       edges. */
+    overscroll-behavior: contain;
     gap: 10px;
   }
   .cell {
@@ -948,6 +1009,84 @@ body.big .task .tedit {
 }
 .term .cpop .sw.clear:hover {
   color: var(--text);
+}
+
+/* Ephemeral-secret popover (🔒) */
+.term .spop {
+  position: absolute;
+  top: 23px;
+  right: 6px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 220px;
+  padding: 9px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  font-size: 11px;
+}
+.term .spop input,
+.term .spop select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 7px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+}
+.term .spop button.spop-go {
+  padding: 6px;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.term .spop button.spop-go:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.term .spop-warn {
+  color: var(--warn, #e3b341);
+  line-height: 1.4;
+}
+.term .spop-status {
+  color: var(--text-dim);
+  min-height: 13px;
+  word-break: break-word;
+}
+.term .spop-active {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.term .spop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 6px;
+  background: var(--bg);
+  border-radius: 5px;
+  color: var(--text-dim);
+}
+.term .spop-revoke {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 2px;
+  font: inherit;
+}
+.term .spop-revoke:hover {
+  color: var(--danger, #f85149);
 }
 .term .title {
   display: flex;

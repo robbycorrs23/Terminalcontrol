@@ -8,6 +8,8 @@ import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
 import { AgentManager } from "./agent-manager.js";
 import { createRegistry } from "./pane-registry.js";
+import { SecretVault } from "./secret-vault.js";
+import { gateConfigured, verifyStepUpToken } from "./step-up-token.js";
 import { collectSnapshot, saveSnapshot, SNAPSHOT_DIR } from "./snapshot.js";
 import { openInEditor, openFolder } from "./open-file.js";
 import { findPathLinks } from "./path-links.js";
@@ -60,6 +62,11 @@ const agents = new AgentManager(join(ROOT, "agent-sessions.json"), broadcast);
 // direct only for the kind-specific surface (`attach`, `tmux`, `on()` for
 // ptys) the registry deliberately doesn't cover.
 const registry = createRegistry(ptys, agents);
+
+// Ephemeral, per-pane secrets ("give Claude a code without it ending up in the
+// transcript") — see secret-vault.js for the full model. PTY panes only.
+const secrets = new SecretVault(ptys, join(ROOT, "pane-secrets.json"));
+secrets.restore();
 
 // --- Subscription limit monitor ----------------------------------------
 // Reading limits costs nothing (verified: no tokens, no quota — see usage.js),
@@ -118,6 +125,11 @@ ptys.on("exit", (pane, session) => broadcast(session, { t: "closed", pane }));
 // A pane's tmux session vanished unexpectedly — it's now dormant (recoverable),
 // not gone. Tell the window so it can offer a respawn instead of dropping the box.
 ptys.on("died", (pane, session, info) => broadcast(session, { t: "died", pane: info }));
+// The tmux session (and with it, anything setPaneEnv put in its env table)
+// is gone either way once a pane dies — drop our own bookkeeping so a
+// pointless timer doesn't sit around trying to unset a var that's already
+// unreachable.
+ptys.on("died", (pane) => secrets.releaseAllForPane(pane));
 
 // Dropped images are written here so Claude can read them by absolute path —
 // the same contract as dragging a file into a native terminal.
@@ -257,6 +269,7 @@ app.put("/api/prefs", (req, res) => res.json(layouts.setPrefs(req.body || {})));
 
 app.delete("/api/panes/:id", (req, res) => {
   const session = registry.sessionOf(req.params.id);
+  secrets.releaseAllForPane(req.params.id);
   registry.kill(req.params.id);
   broadcast(session, { t: "closed", pane: req.params.id });
   res.status(204).end();
@@ -352,6 +365,55 @@ app.post("/api/panes/:id/name", (req, res) => {
     .slice(0, 60);
   registry.setName(id, name);
   broadcast(registry.sessionOf(id), { t: "renamed", pane: id, name });
+  res.status(204).end();
+});
+
+// --- Ephemeral secrets (terminal panes only) ------------------------------
+// See secret-vault.js for the full model: the value goes straight into the
+// pane's tmux env table, never into pane.buffer/events, so it can't reach
+// the transcript, the ring buffer, or a snapshot. Claude only ever sees the
+// var name it's told to reference.
+app.get("/api/panes/:id/secret-status", (req, res) => {
+  res.json({
+    tmux: !!ptys.tmux,
+    gateConfigured: gateConfigured(),
+    active: secrets.listForPane(req.params.id),
+  });
+});
+
+app.post("/api/panes/:id/secret", (req, res) => {
+  const id = req.params.id;
+  const paneSession = registry.sessionOf(id);
+  if (!paneSession) return res.status(404).json({ error: "no such (live) terminal pane" });
+  const { name, value, ttlMs, session, stepUpToken } = req.body || {};
+  // Ownership: only the browser window that currently has this pane can
+  // inject into it — a paneId can't be replayed from an unrelated tab/window.
+  if (!session || session !== paneSession) {
+    return res.status(403).json({ error: "this window doesn't own that pane" });
+  }
+  // Step-up is OPTIONAL, not required: if the gate was never set up, or this
+  // request bypassed it entirely (reaching FleetView's port directly is
+  // already "get a shell, no auth" per the server's whole threat model —
+  // see the top-of-file comment), there is no token to check. But a PRESENTED
+  // token must be genuine and scoped to this exact pane — a garbage or
+  // mis-scoped token is more suspicious than none, so that's rejected outright.
+  let stepUpVerified = false;
+  if (stepUpToken) {
+    if (!verifyStepUpToken(stepUpToken, `secret:${id}`)) {
+      return res.status(401).json({ error: "step-up verification failed" });
+    }
+    stepUpVerified = true;
+  }
+  try {
+    const result = secrets.inject({ paneId: id, name, value, ttlMs, session });
+    res.json({ ...result, stepUpVerified });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/panes/:id/secret/:name", (req, res) => {
+  secrets.release(req.params.id, req.params.name);
   res.status(204).end();
 });
 
@@ -509,7 +571,12 @@ function handleUpgrade(req, socket, head) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.fleetSession = session;
       controlClients.add(ws);
-      ws.on("close", () => controlClients.delete(ws));
+      ws.on("close", () => {
+        controlClients.delete(ws);
+        // "Only while I'm here": this window is gone, so any secret it
+        // injected expires now instead of riding out its full TTL unwatched.
+        secrets.releaseAllForSession(session);
+      });
       ws.on("message", (raw) => {
         try {
           const m = JSON.parse(raw);

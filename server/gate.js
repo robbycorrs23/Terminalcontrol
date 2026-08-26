@@ -13,6 +13,7 @@ import {
 } from "@simplewebauthn/server";
 import { WebAuthnStore } from "./webauthn-store.js";
 import { GateSessions, readCookie } from "./gate-session.js";
+import { mintStepUpToken } from "./step-up-token.js";
 
 // Phase 1 of the passkey gate (see TAILSCALE.md "Going further"): sits in
 // front of FleetView's real app and requires a passkey-backed session before
@@ -167,6 +168,53 @@ gate.post("/login/finish", async (req, res) => {
     store.updateCounter(response.id, result.authenticationInfo.newCounter);
     setSessionCookie(res);
     res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ---- Step-up: a FRESH assertion on top of an already-valid session --------
+// Used by FleetView's secret-inject feature (see server/secret-vault.js):
+// releasing a secret into a pane's environment wants proof someone is at the
+// keyboard *right now*, not just "logged in sometime in the last 24h" (the
+// normal session cookie only proves that). Requires isLoggedIn — this is a
+// step UP from an existing session, not an alternate way to establish one;
+// letting an unauthenticated caller run this ceremony would just be a second
+// login endpoint with extra steps.
+let pendingStepUp = null; // { challenge, scope }
+
+gate.post("/stepup/start", async (req, res) => {
+  if (!isLoggedIn(req)) return res.status(401).json({ error: "sign in required" });
+  const scope = req.body && typeof req.body.scope === "string" ? req.body.scope : "";
+  if (!scope) return res.status(400).json({ error: "scope is required" });
+  const options = await generateAuthenticationOptions({
+    rpID: RP_ID,
+    userVerification: "required", // step-up should force biometric/PIN, not just "key present"
+  });
+  pendingStepUp = { challenge: options.challenge, scope };
+  res.json(options);
+});
+
+gate.post("/stepup/finish", async (req, res) => {
+  if (!isLoggedIn(req)) return res.status(401).json({ error: "sign in required" });
+  if (!pendingStepUp) return res.status(400).json({ error: "no step-up in progress" });
+  const { challenge, scope } = pendingStepUp;
+  pendingStepUp = null;
+  const response = req.body;
+  const credential = store.forVerification(response.id);
+  if (!credential) return res.status(400).json({ error: "unrecognized passkey" });
+  try {
+    const result = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: challenge,
+      expectedOrigin: ORIGIN,
+      expectedRPID: RP_ID,
+      credential,
+      requireUserVerification: true,
+    });
+    if (!result.verified) return res.status(400).json({ error: "step-up could not be verified" });
+    store.updateCounter(response.id, result.authenticationInfo.newCounter);
+    res.json({ token: mintStepUpToken(scope) });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }

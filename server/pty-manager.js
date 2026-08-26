@@ -570,6 +570,41 @@ export class PtyManager extends EventEmitter {
     this._persistState();
   }
 
+  /**
+   * Push `name=value` into this pane's tmux session environment table (NOT
+   * pty input — a control command tmux keeps out-of-band from the pane's
+   * data stream). It never touches `pane.buffer`, so it's invisible to the
+   * WS broadcast, the scrollback replay, and snapshots; it does reach any
+   * NEW subprocess the pane's shell spawns afterward (tmux merges its
+   * session environment into processes it starts), which is exactly what
+   * lets a Bash-tool command reference `$name` without the agent ever
+   * having seen the value as chat text. See secret-vault.js for the
+   * lifecycle (TTL, single-window binding) built on top of this primitive.
+   * Live panes only — no tmux, no pane, no dice.
+   */
+  setPaneEnv(id, name, value) {
+    const pane = this.panes.get(id);
+    if (!this.tmux || !pane) return false;
+    const r = spawnSync(
+      this.tmuxBin,
+      this._tx(["set-environment", "-t", "fleet_" + id, name, value], pane.sock),
+      { stdio: "ignore" }
+    );
+    return r.status === 0;
+  }
+
+  /** Undo setPaneEnv. Best-effort: a pane/session that's already gone is not an error here. */
+  unsetPaneEnv(id, name) {
+    const pane = this.panes.get(id) || this.dormant.get(id);
+    if (!this.tmux || !pane) return false;
+    const r = spawnSync(
+      this.tmuxBin,
+      this._tx(["set-environment", "-u", "-t", "fleet_" + id, name], pane.sock),
+      { stdio: "ignore" }
+    );
+    return r.status === 0;
+  }
+
   /** User closed the pane (×) — destroy it for good. */
   kill(id) {
     const pane = this.panes.get(id);
