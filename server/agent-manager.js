@@ -164,8 +164,17 @@ export class AgentManager {
   }
 
   _handleEvent(pane, ev) {
-    pane.events.push(ev);
-    if (pane.events.length > RING_BUFFER_SIZE) pane.events.shift();
+    // Deltas are LIVE-ONLY, never stored: codex streams one assistant message
+    // as hundreds of assistant_delta events, so ringing them would evict the
+    // entire 300-event replay history on a single long reply — a reattached
+    // codex pane would come back showing the tail of one message and nothing
+    // else. The assistant_done that follows carries the full text, so replay
+    // loses nothing. Tradeoff: a message interrupted before item/completed
+    // fires isn't in the replay (it stays on screen for connected clients).
+    if (ev.t !== "assistant_delta") {
+      pane.events.push(ev);
+      if (pane.events.length > RING_BUFFER_SIZE) pane.events.shift();
+    }
 
     if (ev.t === "permission_request" || ev.t === "question") {
       this.setAttention(pane.id, "question");

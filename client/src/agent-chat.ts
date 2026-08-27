@@ -62,6 +62,7 @@ export class AgentChat implements PaneView {
   private pinnedEl: HTMLElement;
   private badgeSlot: HTMLElement;
   private modeSel: HTMLSelectElement;
+  private isCodex: boolean;
   private inputEl: HTMLTextAreaElement;
   private ws?: WebSocket;
   private reconnectTimer?: number;
@@ -117,39 +118,44 @@ export class AgentChat implements PaneView {
     (this.titleBar.querySelector(".path") as HTMLElement).title = info.cwd;
     this.badgeSlot = this.titleBar.querySelector(".badge-slot") as HTMLElement;
 
-    // Permission-mode selector: which of the SDK's modes (default = ask for
+    // Permission-mode selector: which mode this session runs under, and the
+    // only way to change it — there's no separate terminal TUI here to show
+    // the agent's own mode indicator, since this view talks to the Agent SDK /
+    // app-server directly.
+    //
+    // The two providers do NOT share a mode vocabulary, so neither does this
+    // control. Claude has one permissionMode enum (default = ask for
     // everything, acceptEdits = auto-approve file edits, auto = route each
-    // prompt through a model classifier instead of asking you, plan =
-    // read-only/no execution, bypassPermissions = approve everything) this
-    // session runs under, and the only way to change it — there's no separate terminal
-    // TUI here to show Claude Code's own mode indicator/Shift+Tab toggle,
-    // since this view talks to the Agent SDK directly (see claude-driver.js).
-    // Only wired for claude-driver.js today — codex-driver.js's app-server
-    // protocol doesn't have a confirmed equivalent (see that file's own
-    // comment on not guessing at unverified wire behavior), so the control
-    // is hidden rather than silently doing nothing for a codex pane.
+    // prompt through a model classifier, plan = read-only/no execution,
+    // bypassPermissions = approve everything). Codex has two orthogonal axes
+    // (approvalPolicy × sandboxPolicy), so it gets its OWN three options named
+    // the way Codex names them, rather than being squeezed into Claude's
+    // words — see CODEX_MODES in codex-driver.js for the exact pairs.
     this.modeSel = this.titleBar.querySelector(".mode-sel") as HTMLSelectElement;
+    this.isCodex = info.cmd === "codex" || info.cmd === "codex-work";
+    if (this.isCodex) {
+      this.modeSel.innerHTML =
+        `<option value="read-only">Read Only</option>` +
+        `<option value="auto">Auto</option>` +
+        `<option value="full-access">Full Access</option>`;
+    }
     // Right side, immediately before the flag button — grouped with the
     // other pane-level (not per-message) controls, rather than crowding the
     // name on the left. Written in the HTML string next to .path above only
     // because that's where its <option> list was easiest to author; this
     // moves the actual node (not a clone) to where it's meant to render.
     this.titleBar.querySelector(".flag")!.before(this.modeSel);
-    if (info.cmd === "codex" || info.cmd === "codex-work") {
-      this.modeSel.hidden = true;
-    } else {
-      this.setModeUI(info.mode || "default");
-      // Not `.ctl` (which enableDrag() in main.ts already excludes from the
-      // drag handle) — that class also carries Term's 20x18 icon-button
-      // sizing, which would squash this chip-styled <select>. Stopping
-      // pointerdown/click here does the same drag/zoom exclusion without
-      // pulling that sizing in.
-      this.modeSel.addEventListener("pointerdown", (e) => e.stopPropagation());
-      this.modeSel.addEventListener("click", (e) => e.stopPropagation());
-      this.modeSel.addEventListener("change", () => {
-        this.wsSend({ t: "setMode", mode: this.modeSel!.value });
-      });
-    }
+    this.setModeUI(info.mode || (this.isCodex ? "auto" : "default"));
+    // Not `.ctl` (which enableDrag() in main.ts already excludes from the
+    // drag handle) — that class also carries Term's 20x18 icon-button
+    // sizing, which would squash this chip-styled <select>. Stopping
+    // pointerdown/click here does the same drag/zoom exclusion without
+    // pulling that sizing in.
+    this.modeSel.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.modeSel.addEventListener("click", (e) => e.stopPropagation());
+    this.modeSel.addEventListener("change", () => {
+      this.wsSend({ t: "setMode", mode: this.modeSel!.value });
+    });
 
     // Work-account panes (opened via "claude (work)" / "codex (work)") get a
     // didit-blue title tint, same as Term's — `.term.work .title` in
@@ -392,15 +398,33 @@ export class AgentChat implements PaneView {
       case "user":
         this.appendBubble("user", ev.text);
         break;
-      case "assistant_done":
+      case "assistant_done": {
+        // codex-driver.js streams this SAME message as assistant_delta first,
+        // so a bubble for this id usually already exists and is fully
+        // rendered — finalize it in place. Appending unconditionally rendered
+        // every codex message twice. (`AgentMessageDeltaNotification.itemId`
+        // and the `agentMessage` `ThreadItem.id` are the same item id —
+        // verified against `codex app-server generate-ts` — so this lookup
+        // hits.) claude-driver.js sends no deltas, so it takes the else branch
+        // exactly as before.
+        const streamed = this.streamingEls.get(ev.id);
         this.streamingEls.delete(ev.id);
-        this.appendBubble("assistant", ev.text);
+        if (streamed) {
+          // Trust the completed item's text over the accumulated deltas: it's
+          // the authoritative final form, and re-rendering from it repairs a
+          // bubble that dropped a delta mid-stream.
+          streamed.dataset.raw = ev.text;
+          streamed.innerHTML = renderMarkdown(ev.text);
+        } else {
+          this.appendBubble("assistant", ev.text);
+        }
         break;
+      }
       case "assistant_delta": {
-        // Not emitted by claude-driver.js yet (no partial-message streaming
-        // in the Phase 1 MVP) — handled here for forward compatibility. Keeps
-        // the raw source in a dataset field so each delta re-renders the whole
-        // accumulated Markdown rather than appending to already-rendered HTML.
+        // Emitted by codex-driver.js (claude-driver.js has no partial-message
+        // streaming). Keeps the raw source in a dataset field so each delta
+        // re-renders the whole accumulated Markdown rather than appending to
+        // already-rendered HTML.
         let bubble = this.streamingEls.get(ev.id);
         if (!bubble) {
           bubble = this.appendBubble("assistant", "");
@@ -759,12 +783,16 @@ export class AgentChat implements PaneView {
 
   /** Reflects the session's current permission mode in the title-bar selector — see the `mode` AgentEvent. */
   private setModeUI(mode: string) {
+    // A codex pane created before this control existed has "default"
+    // persisted, which matches none of the codex <option> values and would
+    // render the select blank. Codex's own default is Auto, so land there.
+    if (this.isCodex && !["read-only", "auto", "full-access"].includes(mode)) mode = "auto";
     this.modeSel.value = mode;
-    // bypassPermissions skips every approval prompt — worth a visual "this is
-    // the dangerous one" cue distinct from the other three, which all still
-    // ask before something destructive happens (plan asks by never running
-    // anything at all).
-    this.modeSel.classList.toggle("bypass", mode === "bypassPermissions");
+    // The one mode per provider that skips every approval prompt — worth a
+    // visual "this is the dangerous one" cue distinct from the others, which
+    // all still ask before something destructive happens (plan/read-only ask
+    // by never running anything at all).
+    this.modeSel.classList.toggle("bypass", mode === "bypassPermissions" || mode === "full-access");
   }
 
   private scrollToBottom() {
