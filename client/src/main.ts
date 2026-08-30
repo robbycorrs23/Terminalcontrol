@@ -437,8 +437,12 @@ scrim.addEventListener("click", unzoom);
 addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const om = document.getElementById("openmode") as HTMLElement;
+  const sshEditEl = document.getElementById("sshEdit") as HTMLElement;
+  const sshManagerEl = document.getElementById("sshManager") as HTMLElement;
   if (!picker.hidden) closePicker();
   else if (om && !om.hidden) om.hidden = true;
+  else if (sshEditEl && !sshEditEl.hidden) sshEditEl.hidden = true;
+  else if (sshManagerEl && !sshManagerEl.hidden) sshManagerEl.hidden = true;
   else if (settingsPanel.classList.contains("open")) closeSettings();
   else if (closeTasksIfOpen()) {
     /* closed the task sidebar */
@@ -749,6 +753,7 @@ const crumbsEl = document.getElementById("crumbs")!;
 const plistEl = document.getElementById("plist")!;
 const precentEl = document.getElementById("precent")!;
 const agentSelect = document.getElementById("agentSelect") as HTMLSelectElement;
+const sshOptGroup = document.getElementById("sshOptGroup") as HTMLOptGroupElement;
 const chatViewEl = document.getElementById("chatView") as HTMLInputElement;
 const searchEl = document.getElementById("psearch") as HTMLInputElement;
 const sortEl = document.getElementById("psort") as HTMLSelectElement;
@@ -800,6 +805,7 @@ async function openPicker() {
   // Resume where we left off; on first open use the saved default (or home).
   await navigate(pickPath ?? prefs.defaultDir);
   loadPickerRecents();
+  loadSshHosts(); // cheap re-read of ~/.ssh/config in case it was hand-edited since last open
   searchEl.focus();
 }
 function closePicker() {
@@ -944,7 +950,7 @@ async function loadPickerRecents() {
 
 function choose(path: string) {
   const kind = chatViewAvailable(agentSelect.value) && chatViewEl.checked ? "agent" : "pty";
-  openTermAt(path, agentSelect.value, kind);
+  openTermAt(path, resolveCmd(agentSelect.value), kind);
   closePicker();
 }
 async function openTermAt(cwd: string, cmd: string, kind: "pty" | "agent" = "pty") {
@@ -953,6 +959,34 @@ async function openTermAt(cwd: string, cmd: string, kind: "pty" | "agent" = "pty
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ cwd, cmd, session: SESSION, kind }),
   });
+}
+
+// ---- SSH: turning an agentSelect value into the real typed command --------
+// "claude" / "claude-work" / "codex" / "codex-work" / "" (plain shell) pass
+// through unchanged — the option value IS the command, same as always. SSH
+// picks are encoded as "sshprofile:<name>" (a FleetView-managed profile,
+// resolved via its stored host/port/user/identityFile) or "sshhost:<alias>"
+// (an alias auto-discovered read-only from ~/.ssh/config — ssh itself applies
+// the rest of that config, so we just type `ssh <alias>`).
+function resolveCmd(value: string): string {
+  if (value.startsWith("sshprofile:")) {
+    const p = sshProfiles.find((p) => p.name === value.slice("sshprofile:".length));
+    return p ? buildSshCommand(p) : "";
+  }
+  if (value.startsWith("sshhost:")) return "ssh " + shQuote(value.slice("sshhost:".length));
+  return value;
+}
+function buildSshCommand(p: SshProfile): string {
+  const parts = ["ssh"];
+  if (p.port && p.port !== 22) parts.push("-p", String(p.port));
+  if (p.identityFile) parts.push("-o", "IdentitiesOnly=yes", "-i", shQuote(p.identityFile));
+  parts.push(shQuote(`${p.user}@${p.host}`));
+  return parts.join(" ");
+}
+// POSIX single-quote escaping, so a value with spaces/special chars still
+// types as one literal argument into the pane's shell.
+function shQuote(s: string): string {
+  return "'" + s.replace(/'/g, `'\\''`) + "'";
 }
 function prettyPath(p: string): string {
   if (pickHome && (p === pickHome || p.startsWith(pickHome + "/")))
@@ -1082,6 +1116,9 @@ function connectControl() {
       }
       case "layouts":
         loadLayouts(); // a layout was saved/removed in some window
+        break;
+      case "ssh-profiles":
+        loadSshProfiles(); // an SSH server profile was added/edited/removed in some window
         break;
     }
   };
@@ -1253,6 +1290,197 @@ async function loadLayouts() {
   // Preserve the user's selection (or pin to the current layout) across refreshes.
   layoutSel.value = currentLayout || keep || "";
 }
+
+// ---- SSH servers --------------------------------------------------------
+// Two sources, merged in the picker's "SSH" optgroup: FleetView-managed
+// profiles (sshProfiles, editable via the Manage… modal, key/agent auth
+// only — see server/ssh-profiles.js) and aliases auto-discovered read-only
+// from ~/.ssh/config (sshHosts — see server/ssh-hosts.js). FleetView never
+// writes to ~/.ssh/config; it only reads it.
+type SshProfile = { name: string; host: string; port: number; user: string; identityFile?: string };
+type SshHost = { alias: string; hostName: string; user: string; port: number };
+let sshProfiles: SshProfile[] = [];
+let sshHosts: SshHost[] = [];
+
+async function loadSshProfiles() {
+  sshProfiles = await fetch("/api/ssh-profiles").then((r) => r.json());
+  renderSshOptions();
+  renderSshManagerList();
+}
+async function loadSshHosts() {
+  sshHosts = await fetch("/api/ssh-hosts").then((r) => r.json());
+  renderSshOptions();
+  renderSshManagerList();
+}
+
+function renderSshOptions() {
+  const keep = agentSelect.value;
+  sshOptGroup.innerHTML = "";
+  for (const p of sshProfiles) {
+    const o = document.createElement("option");
+    o.value = "sshprofile:" + p.name;
+    o.textContent = p.name;
+    sshOptGroup.append(o);
+  }
+  for (const h of sshHosts) {
+    const o = document.createElement("option");
+    o.value = "sshhost:" + h.alias;
+    o.textContent = h.alias + " (~/.ssh/config)";
+    sshOptGroup.append(o);
+  }
+  // Re-selecting the same value after rebuilding options only "sticks" if it
+  // still exists (e.g. a profile that was just deleted falls back to "claude").
+  agentSelect.value = keep;
+  if (agentSelect.value !== keep) agentSelect.value = "claude";
+  updateChatViewAvailability();
+}
+
+// ---- SSH server manager modal -------------------------------------------
+const sshManager = document.getElementById("sshManager") as HTMLElement;
+const sshList = document.getElementById("sshList")!;
+const sshEdit = document.getElementById("sshEdit") as HTMLElement;
+const sshEditTitle = document.getElementById("sshEditTitle")!;
+const sshNameEl = document.getElementById("sshName") as HTMLInputElement;
+const sshHostEl = document.getElementById("sshHost") as HTMLInputElement;
+const sshPortEl = document.getElementById("sshPort") as HTMLInputElement;
+const sshUserEl = document.getElementById("sshUser") as HTMLInputElement;
+const sshIdentityEl = document.getElementById("sshIdentity") as HTMLInputElement;
+let sshEditOriginalName: string | null = null; // set when editing, so Save can rename via delete+create
+
+function openSshManager() {
+  sshManager.hidden = false;
+  renderSshManagerList();
+}
+function closeSshManager() {
+  sshManager.hidden = true;
+}
+function renderSshManagerList() {
+  if (sshManager.hidden) return;
+  sshList.innerHTML = "";
+  if (!sshProfiles.length) {
+    const empty = document.createElement("div");
+    empty.className = "prow empty";
+    empty.textContent = "no saved servers yet — “+ Add server” below";
+    sshList.append(empty);
+  }
+  for (const p of sshProfiles) {
+    const row = document.createElement("div");
+    row.className = "prow sshrow";
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    const main = document.createElement("span");
+    main.textContent = p.name;
+    const sub = document.createElement("span");
+    sub.className = "sub";
+    sub.textContent = `${p.user}@${p.host}${p.port !== 22 ? ":" + p.port : ""}${p.identityFile ? " · " + p.identityFile : ""}`;
+    nm.append(main, sub);
+    const actions = document.createElement("span");
+    actions.className = "ssh-actions";
+    const edit = document.createElement("button");
+    edit.textContent = "✎";
+    edit.title = "Edit";
+    edit.onclick = () => openSshEdit(p);
+    const del = document.createElement("button");
+    del.className = "ssh-del";
+    del.textContent = "✕";
+    del.title = "Delete";
+    del.onclick = () => deleteSshProfile(p.name);
+    actions.append(edit, del);
+    row.append(nm, actions);
+    sshList.append(row);
+  }
+  if (sshHosts.length) {
+    const label = document.createElement("div");
+    label.className = "prow empty";
+    label.textContent = "From ~/.ssh/config (read-only):";
+    sshList.append(label);
+    for (const h of sshHosts) {
+      const row = document.createElement("div");
+      row.className = "prow sshrow";
+      const nm = document.createElement("span");
+      nm.className = "nm";
+      const main = document.createElement("span");
+      main.textContent = h.alias;
+      const sub = document.createElement("span");
+      sub.className = "sub";
+      sub.textContent = h.user ? `${h.user}@${h.hostName}` : h.hostName;
+      nm.append(main, sub);
+      row.append(nm);
+      sshList.append(row);
+    }
+  }
+}
+function openSshEdit(p?: SshProfile) {
+  sshEditOriginalName = p ? p.name : null;
+  sshEditTitle.textContent = p ? "Edit SSH server" : "Add SSH server";
+  sshNameEl.value = p?.name ?? "";
+  sshHostEl.value = p?.host ?? "";
+  sshPortEl.value = p ? String(p.port) : "";
+  sshUserEl.value = p?.user ?? "";
+  sshIdentityEl.value = p?.identityFile ?? "";
+  sshEdit.hidden = false;
+  sshNameEl.focus();
+}
+function closeSshEdit() {
+  sshEdit.hidden = true;
+}
+async function saveSshProfile() {
+  const name = sshNameEl.value.trim();
+  const host = sshHostEl.value.trim();
+  const user = sshUserEl.value.trim();
+  if (!name || !host || !user) {
+    alert("Name, host, and user are required.");
+    return;
+  }
+  const renaming = sshEditOriginalName && sshEditOriginalName !== name;
+  // Renaming onto another profile's name would silently overwrite it (save()
+  // upserts by name) — confirm rather than clobber it quietly.
+  if (renaming && sshProfiles.some((p) => p.name === name)) {
+    if (!confirm(`“${name}” already exists — replace it?`)) return;
+  }
+  // Renaming = a new record under the new name; drop the old one so it
+  // doesn't linger as a duplicate.
+  if (renaming) {
+    await fetch(`/api/ssh-profiles/${encodeURIComponent(sshEditOriginalName!)}`, { method: "DELETE" });
+  }
+  const r = await fetch("/api/ssh-profiles", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name,
+      host,
+      user,
+      port: sshPortEl.value ? Number(sshPortEl.value) : 22,
+      identityFile: sshIdentityEl.value.trim(),
+    }),
+  }).then((r) => r.json());
+  if (r?.error) {
+    alert("Couldn't save: " + r.error);
+    return;
+  }
+  closeSshEdit();
+  await loadSshProfiles(); // also arrives via the "ssh-profiles" broadcast, but don't wait on it
+}
+async function deleteSshProfile(name: string) {
+  if (!confirm(`Delete saved server “${name}”?`)) return;
+  await fetch(`/api/ssh-profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
+  await loadSshProfiles();
+}
+
+document.getElementById("sshManageBtn")!.addEventListener("click", () => {
+  closeSettings();
+  openSshManager();
+});
+document.getElementById("sshManagerClose")!.addEventListener("click", closeSshManager);
+document.getElementById("sshAddBtn")!.addEventListener("click", () => openSshEdit());
+document.getElementById("sshEditCancel")!.addEventListener("click", closeSshEdit);
+document.getElementById("sshEditSave")!.addEventListener("click", saveSshProfile);
+sshManager.addEventListener("click", (e) => {
+  if (e.target === sshManager) closeSshManager();
+});
+sshEdit.addEventListener("click", (e) => {
+  if (e.target === sshEdit) closeSshEdit();
+});
 
 // ---- Usage (subscription limits, per account) --------------------------
 // Rows are per ACCOUNT, not per pane: every claude box draws on the same
@@ -1508,6 +1736,8 @@ confirmCloseEl.addEventListener("change", () => {
 applySettings(); // instant, from the localStorage mirror; loadPrefs() reconciles with the server
 connectControl();
 loadLayouts();
+loadSshProfiles();
+loadSshHosts();
 loadPrefs();
 setCurrentLayout(currentLayout); // restore the indicator after a refresh
 renderQueue(); // draw the idle favicon / base title before any attention arrives

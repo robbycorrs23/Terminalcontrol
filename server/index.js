@@ -15,6 +15,8 @@ import { openInEditor, openFolder } from "./open-file.js";
 import { findPathLinks } from "./path-links.js";
 import { LayoutStore } from "./layout-store.js";
 import { TaskStore } from "./task-store.js";
+import { SshProfileStore } from "./ssh-profiles.js";
+import { listSshConfigHosts } from "./ssh-hosts.js";
 import { UsageMonitor } from "./usage-monitor.js";
 import { normalizeCodexSnapshot, normalizeClaudeEvent } from "./usage.js";
 import { ensureHooks } from "./setup-hooks.js";
@@ -93,6 +95,10 @@ agents.onRateLimit = (accountId, data) => {
 };
 const layouts = new LayoutStore(join(ROOT, "layouts.json"));
 const tasks = new TaskStore(join(ROOT, "tasks.json"));
+// User-added SSH server profiles (key/agent auth only — see ssh-profiles.js).
+// Never contains password/secret material, so unlike pane-secrets.json this
+// is safe to keep as a plain JSON file alongside layouts/tasks.
+const sshProfiles = new SshProfileStore(join(ROOT, "ssh-profiles.json"));
 // The loud "tmux missing" warning is handled by preflight() above; here we just
 // confirm the durable path when it IS available.
 if (ptys.tmux) console.log("[fleetview] tmux-backed terminals — they survive server restarts.");
@@ -475,6 +481,32 @@ app.delete("/api/layouts/:name", (req, res) => {
   broadcastAll({ t: "layouts" });
   res.status(204).end();
 });
+
+// --- SSH profiles ----------------------------------------------------------
+// Key/agent-auth-only server profiles the picker can open a pane against (see
+// ssh-profiles.js). `/api/ssh-hosts` is a SEPARATE, read-only surface: it just
+// reflects whatever's already in ~/.ssh/config so it can be offered alongside
+// FleetView-managed profiles — FleetView never writes to that file.
+app.get("/api/ssh-profiles", (_req, res) => res.json(sshProfiles.list()));
+
+app.post("/api/ssh-profiles", (req, res) => {
+  let saved;
+  try {
+    saved = sshProfiles.save(req.body);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+  broadcastAll({ t: "ssh-profiles" });
+  res.json(saved);
+});
+
+app.delete("/api/ssh-profiles/:name", (req, res) => {
+  sshProfiles.remove(req.params.name);
+  broadcastAll({ t: "ssh-profiles" });
+  res.status(204).end();
+});
+
+app.get("/api/ssh-hosts", (_req, res) => res.json(listSshConfigHosts()));
 
 app.post("/api/layouts/:name/open", (req, res) => {
   const layout = layouts.get(req.params.name);

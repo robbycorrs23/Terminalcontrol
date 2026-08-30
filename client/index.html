@@ -12,18 +12,22 @@
       <div id="barRow">
         <span class="brand">▦ FleetView</span>
         <span id="current" class="current" hidden></span>
-        <!-- Status, plus the one action that's only useful the moment it appears:
-             "Jump to next" is contextual (hidden unless something is waiting), so
-             it stays out here next to the chips it belongs to rather than behind ⚙. -->
-        <div class="bar-chips">
-          <div id="queue" title="Terminals waiting on you"></div>
-          <span id="followups"></span>
-          <span id="recovery" title="Terminals that died or were set aside — click to bring back"></span>
-          <button id="nextBtn" hidden>Jump to next ⏎</button>
-        </div>
         <span class="spacer"></span>
         <button id="settingsBtn" class="icon" title="Settings">⚙</button>
         <button id="addBtn">+ Terminal</button>
+      </div>
+
+      <!-- Attention chips live on their OWN row under #barRow, not inside it.
+           Inline, they competed with ⚙ / "+ Terminal" for a phone's worth of
+           width: one waiting terminal was enough to squeeze those buttons into
+           unreadable, barely-tappable slivers. On their own row they wrap
+           instead of squeezing, and the controls above keep a fixed size no
+           matter how many terminals are shouting. Collapses to nothing when
+           empty (CSS :has, see styles.css) so an idle fleet costs no height. -->
+      <div id="barChips">
+        <div id="queue" title="Terminals waiting on you"></div>
+        <span id="followups"></span>
+        <span id="recovery" title="Terminals that died or were set aside — click to bring back"></span>
       </div>
 
       <!-- Settings: everything that isn't "+ Terminal". One dropdown on every
@@ -52,7 +56,19 @@
         </section>
 
         <section class="set-sec">
+          <h3 class="set-h">SSH Servers</h3>
+          <div class="set-btns">
+            <button id="sshManageBtn">Manage…</button>
+          </div>
+        </section>
+
+        <section class="set-sec">
           <h3 class="set-h">View</h3>
+          <!-- Contextual: stays hidden unless something is actually waiting.
+               It used to sit in the bar next to the chips, but it's a
+               rarely-used shortcut that was costing permanent bar width on the
+               screen that can least afford it. -->
+          <button id="nextBtn" hidden>Jump to next ⏎</button>
           <button id="tasksBtn" title="Show / hide the task list">✓ Tasks</button>
           <div class="set-row">
             <span class="set-label">Theme</span>
@@ -168,6 +184,7 @@
               <option value="codex">codex</option>
               <option value="codex-work">codex (work)</option>
               <option value="">plain shell</option>
+              <optgroup label="SSH" id="sshOptGroup"></optgroup>
             </select>
             on open
           </label>
@@ -178,6 +195,41 @@
           <span class="spacer"></span>
           <button id="pcancel">Cancel</button>
           <button id="popen" class="primary">Open here</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SSH server manager modal -->
+    <div id="sshManager" hidden>
+      <div class="panel small">
+        <div class="phead"><span class="ptitle">SSH Servers</span></div>
+        <div class="plist" id="sshList"></div>
+        <div class="pfoot">
+          <button id="sshAddBtn">+ Add server</button>
+          <span class="spacer"></span>
+          <button id="sshManagerClose" class="primary">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SSH server add/edit modal -->
+    <div id="sshEdit" hidden>
+      <div class="panel small">
+        <div class="phead"><span class="ptitle" id="sshEditTitle">Add SSH server</span></div>
+        <div class="sshform">
+          <label>Name<input id="sshName" type="text" placeholder="my-server" /></label>
+          <label>Host<input id="sshHost" type="text" placeholder="203.0.113.5" /></label>
+          <label>Port<input id="sshPort" type="number" min="1" max="65535" placeholder="22" /></label>
+          <label>User<input id="sshUser" type="text" placeholder="root" /></label>
+          <label>
+            Identity file <span class="hint">(optional — blank uses ssh-agent / default keys)</span>
+            <input id="sshIdentity" type="text" placeholder="~/.ssh/id_ed25519" />
+          </label>
+        </div>
+        <div class="pfoot">
+          <span class="spacer"></span>
+          <button id="sshEditCancel">Cancel</button>
+          <button id="sshEditSave" class="primary">Save</button>
         </div>
       </div>
     </div>
