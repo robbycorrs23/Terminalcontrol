@@ -234,7 +234,18 @@ app.use("/gate", gate);
 const proxy = httpProxy.createProxyServer({ target: TARGET, ws: true, xfwd: true });
 proxy.on("error", (err, _req, res) => {
   console.warn(`[fleetview-gate] proxy error: ${err.message}`);
-  if (res && !res.headersSent) res.writeHead(502).end("FleetView is unreachable through the gate");
+  if (!res) return;
+  // For a plain HTTP request `res` is a real http.ServerResponse. For a failed
+  // WebSocket upgrade (ws:true above — /term, /control) http-proxy instead
+  // hands back the raw net.Socket, which has no writeHead/headersSent. Calling
+  // writeHead() on it throws, uncaught, and takes the whole gate process down
+  // with it — turning a backend blip into a crash loop for every open tab's
+  // reconnect attempt. Branch on which one we actually got.
+  if (typeof res.writeHead === "function") {
+    if (!res.headersSent) res.writeHead(502).end("FleetView is unreachable through the gate");
+  } else if (typeof res.destroy === "function") {
+    res.destroy();
+  }
 });
 
 // The handful of files a browser needs BEFORE anyone is signed in, purely to
