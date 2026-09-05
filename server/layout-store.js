@@ -25,6 +25,11 @@ const DEFAULT_PREFS = {
   sound: true, // play a tone when a terminal needs you / finishes
   volume: 70, // 0-100, scales the generated tones
   notify: false, // OS notification when the tab is backgrounded (needs browser permission)
+  // Web Push categories (server/push-notifier.js). These say WHAT to push; the
+  // per-device "should this device get pushes at all" switch is not a pref —
+  // it's whether the device has a row in ~/.fleetview/push-subscriptions.json.
+  pushQuestion: true, // a terminal needs an approval or an answer
+  pushDone: false, // a turn finished, or was cut off — off by default, it's noisy on a busy fleet
   // Safety
   confirmClose: false, // ask before ✕ kills a terminal
 };

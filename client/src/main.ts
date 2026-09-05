@@ -4,6 +4,7 @@ import { play } from "./sound";
 import { setTabAttention } from "./tab";
 import { initTasks, applyRemoteTasks, closeTasksIfOpen } from "./tasks";
 import { getSettings, patchSettings, loadSettings, putPrefs, xtermTheme, xtermFontSize, FX_ORDER, Settings } from "./settings";
+import { initPush, enablePush, disablePush, pushActive, setBadge } from "./push";
 
 const grid = document.getElementById("grid")!;
 const scrim = document.getElementById("scrim")!;
@@ -23,6 +24,12 @@ const layoutSel = document.getElementById("layoutSel") as HTMLSelectElement;
 // copyable, not just ones that arrived via a shared link.
 const SESSION = (() => {
   const params = new URLSearchParams(location.search);
+  // NOTE: this id no longer decides which panes you see — the server shows every
+  // client the same fleet ("one workspace per machine", see pane-registry.js).
+  // It's still generated and sent because the server keys ephemeral-secret
+  // release on the window that authorised the secret, and because reorder/
+  // layout calls carry it. A cold-launched PWA minting a fresh id is therefore
+  // harmless: it still lands on the full fleet.
   let s = params.get("session") || sessionStorage.getItem("fleet-session");
   if (!s) s = (crypto.randomUUID?.() || String(Math.random()).slice(2)) as string;
   sessionStorage.setItem("fleet-session", s);
@@ -590,6 +597,11 @@ function onAttention(id: string, kind: "question" | "done" | "aborted") {
  * of stacking a second one.
  */
 function notifyAttention(t: PaneView, kind: "question" | "done" | "aborted") {
+  // Exactly one notifier per device. If this device holds a push subscription,
+  // the service worker will raise the notification (and can do it with the app
+  // fully closed, which this path cannot) — so stand down rather than showing a
+  // second, duplicate banner for the same event.
+  if (pushActive()) return;
   if (!getSettings().notify || !document.hidden) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   try {
@@ -657,6 +669,9 @@ function renderQueue() {
     head ? displayName(head.info) : "",
     head ? head.waitingKind() : null
   );
+  // Same count on the installed app's home-screen icon. Piggybacks on the tab
+  // indicator's choke point so the two can't drift.
+  setBadge(queue.length);
 }
 nextBtn.onclick = () => {
   const t = queue[0] && panes.get(queue[0]);
@@ -1137,6 +1152,43 @@ picker.addEventListener("click", (e) => {
 
 // ---- Control socket (grid-level events) -------------------------------
 let controlWs: WebSocket | null = null;
+// ---- Deep links from a tapped notification -----------------------------
+// A notification carries `#pane=<id>`. The fragment is the only part of the URL
+// that survives clients.openWindow() into a cold-started app in a form we can
+// read on boot — but we can't act on it immediately, because no pane exists
+// until the first `panes` snapshot arrives over the control socket. So it's
+// parked here and consumed there, once.
+let pendingDeepLink: string | null = (() => {
+  const m = /(?:^|[#&])pane=([^&]+)/.exec(location.hash);
+  return m ? decodeURIComponent(m[1]) : null;
+})();
+
+function consumeDeepLink() {
+  if (!pendingDeepLink) return;
+  const t = panes.get(pendingDeepLink);
+  pendingDeepLink = null;
+  if (!t) return; // the pane died between the push and the tap
+  zoom(t);
+  // Drop the fragment so a later refresh doesn't re-zoom, without adding a
+  // history entry.
+  history.replaceState(null, "", `${location.pathname}${location.search}`);
+}
+
+// The service worker talks to us for two things: a tapped notification that
+// found this window already open (focus-pane), and a courtesy heads-up that a
+// push arrived (push-attention). The latter is only a hint — the control socket
+// is the authority on pane state and the two race by design.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (ev: MessageEvent) => {
+    const m = ev.data || {};
+    if (m.t === "focus-pane" && m.pane) {
+      const t = panes.get(m.pane);
+      if (t) zoom(t);
+      else pendingDeepLink = m.pane; // not here yet — let the next snapshot catch it
+    }
+  });
+}
+
 function connectControl() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/control?session=${encodeURIComponent(SESSION)}`);
@@ -1151,6 +1203,7 @@ function connectControl() {
         const live = new Set((m.panes as PaneInfo[]).map((p) => p.id));
         for (const info of m.panes as PaneInfo[]) addTerm(info);
         for (const id of [...panes.keys()]) if (!live.has(id)) removeTerm(id);
+        consumeDeepLink(); // panes only exist now — see the note on pendingDeepLink
         break;
       }
       case "created":
@@ -1733,6 +1786,11 @@ const volRow = document.getElementById("volRow")!;
 const notifyEl = document.getElementById("setNotify") as HTMLInputElement;
 const notifyNote = document.getElementById("notifyNote")!;
 const confirmCloseEl = document.getElementById("setConfirmClose") as HTMLInputElement;
+const pushDeviceEl = document.getElementById("setPushDevice") as HTMLInputElement;
+const pushNote = document.getElementById("pushNote")!;
+const pushCats = document.getElementById("pushCats")!;
+const pushQuestionEl = document.getElementById("setPushQuestion") as HTMLInputElement;
+const pushDoneEl = document.getElementById("setPushDone") as HTMLInputElement;
 
 /** Mark the selected button in a segmented control. */
 function seg(id: string, value: string) {
@@ -1774,6 +1832,12 @@ function applySettings() {
   volRow.classList.toggle("off", !s.sound);
   notifyEl.checked = s.notify;
   confirmCloseEl.checked = s.confirmClose;
+  pushQuestionEl.checked = s.pushQuestion;
+  pushDoneEl.checked = s.pushDone;
+  // The device switch is NOT a pref — it reflects whether this device actually
+  // holds a push subscription, which only push.ts knows.
+  pushDeviceEl.checked = pushActive();
+  pushCats.setAttribute("aria-disabled", pushActive() ? "false" : "true");
 
   renderQueue(); // favicon colours come from CSS vars — repaint after a theme flip
 }
@@ -1832,6 +1896,35 @@ confirmCloseEl.addEventListener("change", () => {
   applySettings();
 });
 
+// Push, per device. This handler IS the user gesture that iOS requires before
+// Notification.requestPermission() will resolve to anything but "denied", which
+// is why enabling can't happen at boot or from a settings reconcile.
+pushDeviceEl.addEventListener("change", async () => {
+  pushNote.hidden = true;
+  if (!pushDeviceEl.checked) {
+    await disablePush();
+    applySettings();
+    return;
+  }
+  const res = await enablePush();
+  if (!res.ok) {
+    // Say what went wrong rather than letting the checkbox silently spring
+    // back — on iPhone the reason is almost always the fixable "add it to your
+    // Home Screen first", which is worth spelling out.
+    pushNote.textContent = res.reason || "Couldn't enable push on this device.";
+    pushNote.hidden = false;
+  }
+  applySettings();
+});
+pushQuestionEl.addEventListener("change", () => {
+  patchSettings({ pushQuestion: pushQuestionEl.checked });
+  applySettings();
+});
+pushDoneEl.addEventListener("change", () => {
+  patchSettings({ pushDone: pushDoneEl.checked });
+  applySettings();
+});
+
 // ---- Boot -------------------------------------------------------------
 applySettings(); // instant, from the localStorage mirror; loadPrefs() reconciles with the server
 connectControl();
@@ -1842,3 +1935,7 @@ loadPrefs();
 setCurrentLayout(currentLayout); // restore the indicator after a refresh
 renderQueue(); // draw the idle favicon / base title before any attention arrives
 initTasks(); // task-list sidebar (tree arrives via the control socket)
+// Register the service worker and re-validate an existing subscription. Never
+// prompts (see push.ts); applySettings() afterwards so the per-device checkbox
+// reflects the subscription we just confirmed rather than defaulting to off.
+void initPush(SESSION).then(applySettings);

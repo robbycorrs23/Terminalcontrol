@@ -15,6 +15,10 @@ import { openInEditor, openFolder } from "./open-file.js";
 import { findPathLinks } from "./path-links.js";
 import { LayoutStore } from "./layout-store.js";
 import { TaskStore } from "./task-store.js";
+import { PushStore } from "./push-store.js";
+import { VapidKeys } from "./push-vapid.js";
+import { createSender } from "./push-send.js";
+import { createPushNotifier } from "./push-notifier.js";
 import { SshProfileStore } from "./ssh-profiles.js";
 import { listSshConfigHosts } from "./ssh-hosts.js";
 import { UsageMonitor } from "./usage-monitor.js";
@@ -99,20 +103,48 @@ const tasks = new TaskStore(join(ROOT, "tasks.json"));
 // Never contains password/secret material, so unlike pane-secrets.json this
 // is safe to keep as a plain JSON file alongside layouts/tasks.
 const sshProfiles = new SshProfileStore(join(ROOT, "ssh-profiles.json"));
+// Web Push state lives in ~/.fleetview/ at 0600, not here in the repo root: a
+// push endpoint is a capability URL and the VAPID private key can mint messages
+// to your devices, so both belong with passkeys.json rather than layouts.json.
+const FLEET_DIR = join(homedir(), ".fleetview");
+const pushStore = new PushStore(join(FLEET_DIR, "push-subscriptions.json"));
+const vapid = new VapidKeys(join(FLEET_DIR, "vapid.json"));
 // The loud "tmux missing" warning is handled by preflight() above; here we just
 // confirm the durable path when it IS available.
 if (ptys.tmux) console.log("[fleetview] tmux-backed terminals — they survive server restarts.");
 
-// Grid-level events are scoped to a session (= one browser window). Each control
-// socket carries its window's session id; events only reach that window.
+// Grid events go to EVERY open window — see the "one workspace per machine"
+// note in pane-registry.js. The `session` argument is kept because callers all
+// have one to hand and it still identifies the pane's owner for secret release,
+// but it no longer selects an audience: a phone and a laptop looking at the
+// same FleetView are looking at the same fleet, so they must see the same
+// events. (broadcastAll below is now equivalent; it's kept for the handful of
+// call sites that never had a session to pass.)
 const controlClients = new Set();
+// Assigned just below, once broadcast/broadcastAll are defined. Declared here
+// (rather than constructed inline) so that broadcast() — which is hoisted and
+// handed to AgentManager well above this line — can never hit a temporal dead
+// zone if something ever broadcasts during startup.
+let pushes = null;
 function broadcast(session, msg) {
   const s = JSON.stringify(msg);
   for (const ws of controlClients) {
-    if (ws.fleetSession !== session) continue;
     try {
       ws.send(s);
     } catch {}
+  }
+  // Web Push piggybacks here, and this spot is deliberate: it is the ONLY
+  // choke point that sees attention from both pane kinds. PTY panes arrive via
+  // ptys.on("attention") below, but agent/chat panes call broadcast() directly
+  // from agent-manager.js, so hooking the emitter would miss every chat pane.
+  // Fire-and-forget — never await, this function is hot for `work` events on a
+  // pane streaming megabytes.
+  if (msg && msg.t === "attention") {
+    try {
+      pushes?.onAttention(msg.pane, msg.kind, session);
+    } catch (e) {
+      console.warn(`[fleetview] push notify failed: ${e.message}`);
+    }
   }
 }
 // Layouts are global (shared across windows), so their changes go to everyone.
@@ -157,6 +189,14 @@ function scheduleSecretRelease(session) {
   t.unref?.();
   pendingSecretRelease.set(session, t);
 }
+
+// Web Push fan-out, now that broadcast() and the stores all exist.
+pushes = createPushNotifier({
+  registry,
+  prefs: () => layouts.prefs(),
+  store: pushStore,
+  send: createSender(vapid),
+});
 
 ptys.on("attention", (pane, kind) => broadcast(registry.sessionOf(pane), { t: "attention", pane, kind }));
 // A pane started/stopped working (see PtyManager's work-detection notes). Edge-
@@ -310,6 +350,25 @@ app.post("/api/mkdir", async (req, res) => {
 
 app.get("/api/prefs", (_req, res) => res.json(layouts.prefs()));
 app.put("/api/prefs", (req, res) => res.json(layouts.setPrefs(req.body || {})));
+
+// --- Web Push -----------------------------------------------------------
+// Sits behind the same sameOrigin() guard and express.json() as everything
+// above, so these inherit the CSRF/DNS-rebinding protection for free.
+//
+// Note there is no "enabled" flag to toggle: a device is subscribed if it has a
+// row here, and unsubscribed if it doesn't.
+app.get("/api/push/key", (_req, res) =>
+  res.json({ key: vapid.publicKeyB64(), devices: pushStore.count() })
+);
+app.post("/api/push/subscribe", (req, res) => {
+  const row = pushStore.upsert(req.body || {});
+  if (!row) return res.status(400).json({ error: "not a valid push subscription" });
+  res.json({ ok: true, devices: pushStore.count() });
+});
+app.post("/api/push/unsubscribe", (req, res) => {
+  pushStore.remove(req.body?.endpoint);
+  res.status(204).end();
+});
 
 app.delete("/api/panes/:id", (req, res) => {
   const session = registry.sessionOf(req.params.id);
@@ -700,8 +759,23 @@ app.post("/hook/prompt", (req, res) => {
 // filenames anyway.
 const noStoreIndexHtml = (res, path) => {
   if (path.endsWith("index.html")) res.setHeader("Cache-Control", "no-store");
+  // The service worker script is fetched out-of-band by the browser, not via a
+  // content-hashed filename, so it needs to revalidate rather than sit in the
+  // HTTP cache. (Browsers already cap SW script caching at 24h, but be explicit.)
+  if (path.endsWith("sw.js")) res.setHeader("Cache-Control", "no-cache");
 };
 app.use(express.static(DIST, { setHeaders: noStoreIndexHtml }));
+
+// These two are FILES, not SPA routes. Without this, an unbuilt or missing
+// sw.js/manifest falls through to the catch-all below and comes back as
+// index.html with Content-Type: text/html — which surfaces as a baffling MIME
+// type error at registration ("the script has an unsupported MIME type") or a
+// silent "manifest is invalid", instead of an obvious 404. Costs nothing and
+// turns a confusing failure into a clear one.
+app.get(["/sw.js", "/manifest.webmanifest"], (_req, res) =>
+  res.status(404).type("text/plain").end("not found — run `npm run build`")
+);
+
 app.get("*", (_req, res) => res.sendFile(join(DIST, "index.html"), { headers: { "Cache-Control": "no-store" } }));
 
 // --- HTTP + WebSocket wiring ---------------------------------------------

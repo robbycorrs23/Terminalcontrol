@@ -500,6 +500,20 @@ body {
   color: var(--waiting);
 }
 
+/* Sub-options that only make sense while their parent toggle is on (the push
+   categories under "Push to this device"). Indented and dimmed rather than
+   hidden, so you can see what you'd be turning on before you turn it on. */
+.set-sub {
+  margin-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.set-sub[aria-disabled="true"] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 @media (max-width: 640px) {
   /* Belt-and-braces on the notch clearance: Safari reports a smaller top inset
      than the system's own in some UI states (mid toolbar-collapse, for one), and

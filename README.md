@@ -189,11 +189,23 @@ signed-in, approved device on your tailnet.
 
 ## Windows & sessions
 
-Each browser window is an independent workspace (a "session", kept in
-`sessionStorage`). A **refresh reconnects** to that window's terminals; a **new
-window starts empty** so you can run a different layout in each window. Terminals,
-dings, and the attention queue are scoped per window; layouts are shared across
-all windows (saving one updates every window's dropdown live).
+**One workspace per machine.** Every window looking at the same FleetView sees the
+same fleet — your laptop browser, a second window next to it, and the app on your
+phone are all views of one set of terminals. Open a terminal on the laptop and it
+appears on the phone; the attention queue, dings and layouts match everywhere.
+Separate workspaces come from running FleetView on separate machines, which is
+already how a tailnet is laid out.
+
+This changed. Windows used to each be an independent workspace (a "session" in
+`sessionStorage`), so a new window started empty. That model couldn't survive a
+phone: an installed home-screen web app cold-launches with no session and a
+manifest `start_url` with nowhere to put one, so it always opened an empty grid
+instead of the fleet you actually run — and sharing by hand-copying a `?session=`
+URL is not a substitute for the app icon just working.
+
+A session id is still generated per window and still appears in the URL, but it no
+longer decides what you see. It survives because ephemeral pane secrets are
+released against the window that authorised them (see "Ephemeral secrets").
 
 ## How the alerting works (no output scraping)
 
@@ -208,6 +220,46 @@ So Claude tells FleetView *exactly* which box needs attention — nothing is par
 from the terminal text. The hook commands are guarded with
 `[ -n "$FLEET_PANE_ID" ]`, meaning they're a **no-op in any shell that isn't a
 FleetView terminal**.
+
+### Phone notifications (install it to your Home Screen)
+
+The glow, the ding and the browser-tab indicator all need FleetView to be *open*
+somewhere. To be told a terminal needs you while the app is closed — on a phone
+in your pocket — install FleetView as a web app and turn on push:
+
+1. Reach FleetView over **HTTPS**. Web Push and service workers require a secure
+   context, so this means the `tailscale serve` setup in
+   [TAILSCALE.md](TAILSCALE.md) (`http://localhost` also counts, for desktop
+   testing). A plain `http://` LAN address will not work.
+2. On iPhone/iPad: Safari → Share → **Add to Home Screen**, then open it from
+   there. This step is not cosmetic — **iOS gives the Push API only to
+   home-screen web apps**, never to a Safari tab. Android/desktop Chrome can
+   subscribe from an ordinary tab.
+3. Settings (⚙) → Alerts → **"Push to this device even when FleetView is
+   closed"**. That checkbox is the per-device switch; the two options under it
+   choose *what* gets pushed — a terminal needing an answer (on by default), and
+   a turn finishing or being cut off (off by default, since it's noisy on a busy
+   fleet). Those two are ordinary settings, so they follow you across devices;
+   the device switch does not.
+
+Tapping a notification opens the app with that terminal zoomed. The home-screen
+icon carries a badge with the number of terminals waiting on you.
+
+**What's in a notification:** the terminal's name and what happened — *"didit-web
+needs you"*. Never the folder path, the command, the prompt, or any output. The
+payload is also end-to-end encrypted (RFC 8291) with keys your browser generated,
+so Apple's or Google's push service relays ciphertext it cannot read.
+
+**Configuration.** Nothing is required. Two knobs exist if you want them:
+
+| Var | Default | Notes |
+|---|---|---|
+| `FLEET_PUSH_CONTACT` | this repo's URL | The VAPID `sub` — who a push service contacts about this app server. Must be a `mailto:` or `https:` URL; Apple rejects anything else with `403 BadJwtToken`. |
+
+The identity keypair is generated once at `~/.fleetview/vapid.json` (0600), and
+subscriptions live beside it in `~/.fleetview/push-subscriptions.json`. ⚠ Deleting
+`vapid.json` invalidates **every** device's subscription — each one only recovers
+when you open FleetView on it again and re-subscribe.
 
 ### Removing the hooks
 

@@ -60,6 +60,8 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `server/transcript.js` | rebuild an agent pane's chat log from the SDK's on-disk transcript |
 | `server/snapshot.js` | point-in-time dump of every pane (also written on shutdown) |
 | `server/index.js` | HTTP + WS wiring, REST, hook endpoints, static client |
+| `server/push-vapid.js` / `push-store.js` | VAPID identity / per-device Web Push subscriptions (both `~/.fleetview`, 0600) |
+| `server/push-send.js` / `push-notifier.js` | the one `web-push` caller / attention → category filter → fan-out → prune |
 | `client/src/terminal.ts` | one xterm box bound to one PTY socket (auto-reconnects) |
 | `client/src/main.ts` | grid, zoom, tray, drag, picker, attention queue, control socket |
 | `client/src/tasks.ts` | the task-list sidebar (tree, drag, debounced save) |
@@ -67,6 +69,7 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/markdown.ts` | Markdown → safe HTML for chat bubbles (tables, media, task lists) |
 | `client/src/rich.ts` | post-render pass: charts, table→chart toggle, copy buttons, clipping |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
+| `client/src/push.ts` / `client/public/sw.js` | Web Push subscribe/badge / the service worker that shows notifications |
 
 ## Key invariants / model (don't break these)
 - **tmux durability:** each pane is a detached `fleet_<id>` tmux session on a STABLE
@@ -105,6 +108,17 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   nothing. `◍` in the top bar cycles `body.fx-full` → `.fx-edge` → `.fx-off`.
 - **WebSockets:** `/term?pane=` (per box, reconnects after sleep) and `/control?session=`
   (per browser window; grid events + initial panes/dormant/tasks snapshot).
+- **One workspace per machine.** Panes are NOT scoped to a browser window any
+  more: `registry.list()`/`dormantList()`/`idsOf()` ignore the `session`
+  argument and `broadcast()` goes to every control socket, so a laptop window
+  and the phone app see one identical fleet. Separate workspaces = separate
+  machines. This exists because an installed PWA cold-launches with no session
+  and a manifest `start_url` that can't carry one, so per-window workspaces
+  meant the phone always opened an empty grid. A session id is still minted per
+  window and still rides on the URL — it keys **ephemeral-secret release** (the
+  window that authorised a secret is the one whose disconnect releases it, see
+  `SESSION_GRACE_MS`) and nothing else. Don't reintroduce session filtering in
+  a list/broadcast path.
 - **Agent panes survive restarts in two halves, and BOTH are needed.** The
   *conversation* is durable via `sdkSessionId` → `_ensureDriver` resumes it. The
   *visible log* is not: `pane.events` is an in-memory ring (`RING_BUFFER_SIZE`,
@@ -121,6 +135,31 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   FleetView agent pane, your own session. Terminal panes are tmux-backed and
   don't care.
 - **Tasks** are one global tree in `tasks.json`, broadcast to ALL windows on change.
+- **Web Push / PWA** (phone notifications — the only alert that works with the app
+  closed). Four things here are load-bearing and easy to undo by accident:
+  1. **The push trigger lives in `broadcast()`**, not in `ptys.on("attention")`.
+     PTY panes reach the client via the emitter, but agent/chat panes call
+     `broadcast()` *directly* from `agent-manager.js` — hook the emitter and every
+     chat pane silently stops notifying. Fire-and-forget; never `await` it, that
+     function is hot for `work` events.
+  2. **`sw.js` must show a notification on EVERY push**, including the
+     malformed-payload path. WebKit revokes the subscription of a worker that
+     receives a push and displays nothing, and recovery needs the user to delete
+     and re-add the home-screen app. This is why foreground suppression is a
+     positive Chrome/Firefox UA allowlist rather than a default — on iOS we show
+     a redundant banner on purpose.
+  3. **`sw.js` has NO `fetch` handler, deliberately.** Caching the app shell
+     reintroduces the stale-bundle bug that `index.html`'s `no-store` exists to
+     prevent (see the comment above `noStoreIndexHtml`), and a SW cache survives
+     a hard reload. Offline support is meaningless for a live view of PTYs.
+  4. **iOS gives the Push API only to home-screen web apps**, over HTTPS. So the
+     manifest is a prerequisite for push, `tailscale serve` is a prerequisite for
+     testing it, and the manifest must stay in `gate.js`'s `PUBLIC_PWA` allowlist
+     *and* carry `crossorigin="use-credentials"` — browsers fetch a manifest with
+     credentials omitted, so a gated manifest makes the app un-installable.
+  Notification text is pane name + kind only: no cwd path, command, or prompt
+  text reaches a lock screen. Payloads are RFC 8291 encrypted, so the push
+  service relays ciphertext it can't read.
 
 ## Rich chat view (agent panes)
 

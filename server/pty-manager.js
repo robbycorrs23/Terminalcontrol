@@ -688,17 +688,22 @@ export class PtyManager extends EventEmitter {
     return (this.panes.get(id) || this.dormant.get(id))?.session ?? null;
   }
 
-  idsOf(session) {
-    return [...this.panes.values()]
-      .filter((p) => p.session === session)
-      .map((p) => p.id);
+  // `session` ignored — one workspace per machine (see pane-registry.js). Used
+  // by layout "Replace", which must set aside EVERY pane on screen; filtering
+  // by the requesting window's session would leave panes another window (or an
+  // older session id) created sitting there after the replace.
+  idsOf() {
+    return [...this.panes.values()].map((p) => p.id);
   }
 
-  reorder(session, ids) {
+  // `session` ignored — see idsOf above. Every window shows every pane now, so
+  // a drag-reorder has to apply to whatever ids the client sent, regardless of
+  // which window originally created them.
+  reorder(_session, ids) {
     let i = 0;
     for (const id of ids) {
       const p = this.panes.get(id);
-      if (p && p.session === session) p.order = i++;
+      if (p) p.order = i++;
     }
     this._persistState();
   }

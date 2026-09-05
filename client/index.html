@@ -4,7 +4,33 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>▦ FleetView</title>
-    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- PWA shell. Installing to the iOS Home Screen isn't cosmetic: the Push
+         API is available ONLY to home-screen web apps on iOS (16.4+), so this
+         manifest is a hard prerequisite for the phone notifications, not a
+         nice-to-have.
+
+         crossorigin="use-credentials" is REQUIRED here, not optional. Browsers
+         fetch a same-origin manifest with credentials OMITTED by default —
+         behind server/gate.js that arrives with no session cookie, gets a 401,
+         and the app silently becomes non-installable (which on iOS means no
+         push at all). The gate also allowlists this path; both halves are
+         needed. Absolute paths throughout, because vite's base:"./" resolves
+         relative URLs against the document, and server/index.js's SPA
+         catch-all answers a wrong path with index.html instead of a 404 — so a
+         relative slip fails as "manifest is invalid", not as a missing file. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#0d1117" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- black-translucent puts our own bar under the status bar, which is why
+         the viewport above is viewport-fit=cover and #bar pads itself with
+         env(safe-area-inset-*) (see styles.css). -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="FleetView" />
+
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
@@ -109,6 +135,26 @@
             Notify me when this tab is in the background
           </label>
           <div class="set-note" id="notifyNote" hidden></div>
+
+          <!-- Push: reaches you when FleetView ISN'T open, unlike the option
+               above which needs a live tab. The device checkbox is per-device
+               (it creates/removes a subscription server-side); the two category
+               checkboxes are ordinary prefs and so follow you everywhere. -->
+          <label class="set-check">
+            <input type="checkbox" id="setPushDevice" />
+            Push to this device even when FleetView is closed
+          </label>
+          <div class="set-note" id="pushNote" hidden></div>
+          <div class="set-sub" id="pushCats">
+            <label class="set-check">
+              <input type="checkbox" id="setPushQuestion" />
+              …when a terminal needs an answer
+            </label>
+            <label class="set-check">
+              <input type="checkbox" id="setPushDone" />
+              …when a turn finishes or is cut off
+            </label>
+          </div>
         </section>
 
         <section class="set-sec">

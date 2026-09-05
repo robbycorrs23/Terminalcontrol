@@ -470,19 +470,20 @@ export class AgentManager {
     return this.panes.get(id)?.session ?? null;
   }
 
-  idsOf(session) {
-    return [...this.panes.values()].filter((p) => p.session === session).map((p) => p.id);
+  // `session` ignored — one workspace per machine (see pane-registry.js).
+  idsOf() {
+    return [...this.panes.values()].map((p) => p.id);
   }
 
   // Mirrors PtyManager.reorder's per-manager-local sequential numbering
   // exactly (increments only on a match) — see pane-registry.js for the
   // known limitation this produces when a drag-reorder mixes pty and agent
   // panes in the same window.
-  reorder(session, ids) {
+  reorder(_session, ids) {
     let i = 0;
     for (const id of ids) {
       const p = this.panes.get(id);
-      if (p && p.session === session) p.order = i++;
+      if (p) p.order = i++;
     }
     this._persist();
   }

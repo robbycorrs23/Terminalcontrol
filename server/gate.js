@@ -237,7 +237,29 @@ proxy.on("error", (err, _req, res) => {
   if (res && !res.headersSent) res.writeHead(502).end("FleetView is unreachable through the gate");
 });
 
+// The handful of files a browser needs BEFORE anyone is signed in, purely to
+// decide the site is an installable web app: the manifest and its icons. They
+// have to bypass the session check because browsers fetch a same-origin
+// manifest with credentials omitted, so it can never carry the gate cookie —
+// gate it and the site is simply not installable, which on iOS also means no
+// push notifications (the Push API is home-screen-only there).
+//
+// Safe to expose: an app name, a theme colour, and a square logo. Note what is
+// deliberately NOT in here — /sw.js stays gated. It's only ever registered from
+// an already-authenticated page, and a 401 on a background update check just
+// leaves the existing worker in place.
+const PUBLIC_PWA = new Set([
+  "/manifest.webmanifest",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-512.png",
+  "/apple-touch-icon.png",
+  "/badge-96.png",
+  "/favicon.svg",
+]);
+
 app.use((req, res) => {
+  if (req.method === "GET" && PUBLIC_PWA.has(req.path)) return proxy.web(req, res);
   if (!isLoggedIn(req)) {
     if (req.method === "GET" && req.headers.accept?.includes("text/html")) {
       return res.redirect("/gate/login");

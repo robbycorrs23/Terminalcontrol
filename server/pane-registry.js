@@ -26,8 +26,25 @@ export function createRegistry(ptys, agents) {
   const ownerOf = (id) => (ptys.info(id) ? ptys : agents.info(id) ? agents : null);
 
   return {
-    list: (session) => [...ptys.list(session), ...agents.list(session)],
-    dormantList: (session) => ptys.dormantList(session),
+    // ONE WORKSPACE PER MACHINE — the `session` argument is deliberately
+    // ignored here.
+    //
+    // Panes used to be scoped to a session (= one browser window), so every
+    // window got its own independent set of terminals and a second window
+    // started empty. That model can't survive a phone: an installed PWA cold-
+    // launches with no session and a manifest `start_url` that has nowhere to
+    // put one, so it would always open an empty grid instead of the fleet you
+    // actually run. Sharing via a hand-copied `?session=` URL is not a
+    // substitute for the app icon just working.
+    //
+    // So the workspace boundary is now the SERVER, not the browser window:
+    // every client of this FleetView sees the same panes, and separate
+    // workspaces come from running FleetView on separate machines (which is
+    // already how the tailnet is laid out). Panes still carry a `session`
+    // field and `sessionOf()` still reports it — it's what secret release and
+    // reorder key on — but nothing filters visibility by it any more.
+    list: () => [...ptys.list(), ...agents.list()],
+    dormantList: () => ptys.dormantList(),
     info: (id) => ownerOf(id)?.info(id) ?? null,
     sessionOf: (id) => ownerOf(id)?.sessionOf(id) ?? null,
     idsOf: (session) => [...ptys.idsOf(session), ...agents.idsOf(session)],
