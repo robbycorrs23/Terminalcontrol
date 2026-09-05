@@ -188,6 +188,17 @@
             </select>
             on open
           </label>
+          <label class="runclaude" id="sshRunRow" hidden>
+            and run
+            <select id="sshAgentSelect">
+              <option value="" selected>plain shell</option>
+              <option value="claude">claude</option>
+              <option value="claude-work">claude (work)</option>
+              <option value="codex">codex</option>
+              <option value="codex-work">codex (work)</option>
+            </select>
+            there
+          </label>
           <label class="chatview" title="Chat UI instead of a terminal — no xterm, native scrolling, tap-to-approve.">
             <input type="checkbox" id="chatView" checked />
             💬 Chat view

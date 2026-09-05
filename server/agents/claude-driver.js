@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { spawnOverSsh } from "../ssh-remote-agent.js";
 
 /**
  * A minimal push-based async iterable — feeds `query()`'s streaming `prompt`
@@ -43,11 +44,12 @@ function stringifyBlockContent(content) {
  *   resume?: string,
  *   env?: Record<string,string|undefined>,
  *   mode?: "default"|"acceptEdits"|"auto"|"plan"|"bypassPermissions",
+ *   remote?: { target: string, port?: number, identityFile?: string, envPrefix?: string },
  *   onEvent: (ev: import("./event-schema.js").AgentEvent) => void,
  *   onSessionId: (id: string) => void,
  * }} opts
  */
-export function startClaudeSession({ cwd, resume, env, mode, onEvent, onSessionId, onRateLimit }) {
+export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, onSessionId, onRateLimit }) {
   const promptQueue = new PushQueue();
   const pendingPermissions = new Map(); // requestId -> (decision: "allow"|"deny"|"always") => void
   const pendingQuestions = new Map(); // requestId -> (answers|null) => void
@@ -126,8 +128,21 @@ export function startClaudeSession({ cwd, resume, env, mode, onEvent, onSessionI
       // -work path builds an explicit CLAUDE_CONFIG_DIR-bearing env in
       // agent-manager.js, which also strips ANTHROPIC_API_KEY so a stray
       // key in the parent env can never silently switch this off subscription
-      // billing.
+      // billing. Irrelevant for a `remote` session below — that env object
+      // would only affect the LOCAL `ssh` process, not the remote `claude`.
       ...(env ? { env } : {}),
+      // Redirect the SDK's local spawn to a remote one over ssh (see
+      // ssh-remote-agent.js). `opts.args` arrives pre-built by the SDK with
+      // every CLI flag (--output-format/--resume/etc.) already resolved —
+      // forwarded verbatim, only the transport changes. Uses a bare "claude"
+      // (resolved on the REMOTE PATH), not `opts.command` (the SDK's
+      // resolved LOCAL binary path, meaningless on another host).
+      ...(remote
+        ? {
+            spawnClaudeCodeProcess: (opts) =>
+              spawnOverSsh(remote, remote.envPrefix, ["claude", ...opts.args], { signal: opts.signal }),
+          }
+        : {}),
     },
   });
   // Tell whoever's attached (including a client reconnecting mid-session,
@@ -144,7 +159,12 @@ export function startClaudeSession({ cwd, resume, env, mode, onEvent, onSessionI
       case "assistant":
         for (const block of msg.message.content || []) {
           if (block.type === "text" && block.text) {
-            onEvent({ t: "assistant_done", id: msg.uuid, text: block.text });
+            // `msg.aborted`: "true when this assistant message was truncated
+            // by an interrupt/abort before the stream completed — stop_reason
+            // was never received and the content may end mid-word" (SDK's own
+            // doc comment). Flagged on the bubble itself, not just the pane's
+            // overall status — see agent-chat.ts.
+            onEvent({ t: "assistant_done", id: msg.uuid, text: block.text, ...(msg.aborted ? { aborted: true } : {}) });
           } else if (block.type === "tool_use") {
             onEvent({ t: "tool_call", id: block.id, name: block.name, input: block.input });
           }
@@ -169,13 +189,23 @@ export function startClaudeSession({ cwd, resume, env, mode, onEvent, onSessionI
           }
         }
         break;
-      case "result":
+      case "result": {
+        // `terminal_reason` distinguishes a clean finish ('completed') from
+        // everything else the SDK can end a turn with — an interrupt/restart
+        // ('aborted_streaming'/'aborted_tools') or a mid-stream API problem
+        // ('api_error'/'blocking_limit'/'prompt_too_long'/'model_error'/
+        // 'budget_exhausted'/…) — and can be present even when `is_error` is
+        // falsy. Without this, any of those looked identical to a normal
+        // completion: same "idle" status, same "done" attention, even though
+        // the last visible message may end mid-word (see msg.aborted above).
+        const abortedReason = msg.terminal_reason && msg.terminal_reason !== "completed";
         onEvent({
           t: "status",
-          state: msg.is_error ? "error" : "idle",
-          detail: msg.is_error ? msg.result : undefined,
+          state: msg.is_error ? "error" : abortedReason ? "aborted" : "idle",
+          detail: msg.is_error ? msg.result : abortedReason ? `Turn ended early (${msg.terminal_reason})` : undefined,
         });
         break;
+      }
       case "rate_limit_event":
         // Subscription limit utilization, pushed by the SDK whenever it
         // changes. Deliberately NOT an AgentEvent: limits belong to the

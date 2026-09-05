@@ -35,6 +35,36 @@ function accountConfigDirFor(cmd, provider) {
   return String(cmd || "").endsWith("-work") ? join(homedir(), `.${provider}-work`) : null;
 }
 
+/**
+ * The REMOTE counterpart of accountConfigDirFor: a `$HOME`-relative shell
+ * env-var assignment instead of a local homedir()-joined path, since a
+ * remote pane's account isolation has to be set on the far end of the ssh
+ * connection (baked into the command line — see ssh-remote-agent.js), not
+ * via a local spawn() env option that never crosses the connection.
+ */
+function remoteEnvPrefix(cmd, provider) {
+  if (!String(cmd || "").endsWith("-work")) return "";
+  const v = provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
+  return `${v}="$HOME/.${provider}-work" `;
+}
+
+/**
+ * Validates/whitelists a client-supplied `remote` descriptor before it's
+ * stored on a pane or shelled out to — same trust model as ssh-profiles.js's
+ * save(): this is a local-only, unauthenticated tool, so the goal is
+ * catching mistakes, not defending against a hostile caller.
+ */
+function sanitizeRemote(r) {
+  if (!r || typeof r !== "object") return null;
+  const target = String(r.target || "").trim().slice(0, 256);
+  if (!target) return null;
+  const out = { target };
+  const port = parseInt(r.port, 10);
+  if (Number.isFinite(port) && port > 0 && port <= 65535) out.port = port;
+  if (r.identityFile) out.identityFile = String(r.identityFile).trim().slice(0, 512);
+  return out;
+}
+
 export class AgentManager {
   /**
    * @param {string} stateFile
@@ -64,6 +94,7 @@ export class AgentManager {
         // Recomputed, never read back from the record — see accountConfigDirFor.
         accountConfigDir: accountConfigDirFor(r.cmd, provider),
         mode: r.mode || "default", // older records predate mode-switching — default is what they always ran as
+        remote: sanitizeRemote(r.remote), // re-validated, not trusted verbatim off disk
         driver: null,
         events: [],
         clients: new Set(),
@@ -89,6 +120,7 @@ export class AgentManager {
       name: p.name,
       createdAt: p.createdAt,
       mode: p.mode,
+      remote: p.remote || null,
     }));
     writeFileSync(this.stateFile, JSON.stringify(records, null, 2));
   }
@@ -127,7 +159,11 @@ export class AgentManager {
    */
   _resumableSessionId(pane) {
     const sid = pane.sdkSessionId;
-    if (!sid || pane.provider === "codex") return sid || undefined;
+    // codex ids are never verified (see the comment above), and neither is a
+    // remote pane's — the local ~/.claude/projects scan below can only see
+    // THIS machine's transcripts, which is meaningless for a session running
+    // against a remote account. Trust the persisted id in both cases.
+    if (!sid || pane.provider === "codex" || pane.remote) return sid || undefined;
     const projects = join(pane.accountConfigDir || join(homedir(), ".claude"), "projects");
     try {
       for (const proj of readdirSync(projects)) {
@@ -148,6 +184,7 @@ export class AgentManager {
       resume: this._resumableSessionId(pane),
       mode: pane.mode || "default",
       env: this._buildEnv(pane),
+      remote: pane.remote ? { ...pane.remote, envPrefix: remoteEnvPrefix(pane.cmd, pane.provider) } : null,
       onEvent: (ev) => this._handleEvent(pane, ev),
       onSessionId: (sid) => {
         if (pane.sdkSessionId !== sid) {
@@ -186,6 +223,11 @@ export class AgentManager {
       if (wasWorking !== (ev.state === "working"))
         this.broadcast(pane.session, { t: "work", pane: pane.id, on: ev.state === "working" });
       if (ev.state === "idle") this.setAttention(pane.id, "done");
+      // Cut off (interrupt/restart/rate-limit/API hiccup), not a genuine
+      // finish — see claude-driver.js/codex-driver.js. Its own attention
+      // kind, not "done": the pane does need a look, but for a different
+      // reason than "here's your answer."
+      else if (ev.state === "aborted") this.setAttention(pane.id, "aborted");
     } else if (ev.t === "mode" && pane.mode !== ev.mode) {
       pane.mode = ev.mode;
       this._persist();
@@ -201,7 +243,7 @@ export class AgentManager {
 
   // ---- Creation / lifecycle, mirrors PtyManager's surface ---------------
 
-  create({ cwd, cmd, session }) {
+  create({ cwd, cmd, session, remote }) {
     const provider = cmd.startsWith("codex") ? "codex" : "claude";
     const id = randomUUID().slice(0, 8);
     const home = homedir();
@@ -213,6 +255,9 @@ export class AgentManager {
       cmd,
       provider,
       accountConfigDir: accountConfigDirFor(cmd, provider),
+      // Set only when this pane's claude/codex runs over ssh on another
+      // host instead of locally — see ssh-remote-agent.js / the plan.
+      remote: sanitizeRemote(remote),
       session: session || null,
       order: this.seq++,
       sdkSessionId: null,
@@ -260,6 +305,7 @@ export class AgentManager {
     if (pane._hydrated || pane.events.length || !pane.sdkSessionId) return;
     pane._hydrated = true;
     if (pane.provider === "codex") return; // different on-disk layout — see transcript.js
+    if (pane.remote) return; // transcript lives on the REMOTE disk — same "comes back empty" precedent as codex above
     try {
       const configDir = pane.accountConfigDir || join(homedir(), ".claude");
       const events = restoreEvents(configDir, pane.sdkSessionId, RING_BUFFER_SIZE - 10);
@@ -404,6 +450,7 @@ export class AgentManager {
       name: p.name || "",
       createdAt: p.createdAt,
       mode: p.mode || "default",
+      remote: p.remote || null,
     };
   }
 

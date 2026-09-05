@@ -64,6 +64,9 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/main.ts` | grid, zoom, tray, drag, picker, attention queue, control socket |
 | `client/src/tasks.ts` | the task-list sidebar (tree, drag, debounced save) |
 | `client/src/tab.ts` | browser-tab title + favicon attention indicator |
+| `client/src/markdown.ts` | Markdown → safe HTML for chat bubbles (tables, media, task lists) |
+| `client/src/rich.ts` | post-render pass: charts, table→chart toggle, copy buttons, clipping |
+| `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
 
 ## Key invariants / model (don't break these)
 - **tmux durability:** each pane is a detached `fleet_<id>` tmux session on a STABLE
@@ -118,6 +121,32 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   FleetView agent pane, your own session. Terminal panes are tmux-backed and
   don't care.
 - **Tasks** are one global tree in `tasks.json`, broadcast to ALL windows on change.
+
+## Rich chat view (agent panes)
+
+Agent panes render Markdown, not terminal bytes, so a reply can carry real
+structure instead of a wall of lines. Three things are worth knowing:
+
+- **Charts.** A fenced ```chart block whose body is JSON renders as an inline SVG:
+  `{"type":"bar|hbar|line|area|donut|stat","title":…,"labels":[…],"series":[{"name":…,"data":[…]}]}`.
+  Shorthands work too (`"data":{"a":1,"b":2}`, `"data":[{"label":…,"value":…}]`).
+  **Separately, every numeric Markdown table gets a "Chart" toggle for free** —
+  that path needs no cooperation from the agent, so emitting a plain table is
+  usually enough. An unparseable spec degrades to a visible code block.
+- **Media.** `![alt](/tmp/plot.png)` — and even a bare `/tmp/plot.png` in prose —
+  embeds as an image; `.mp4`/`.webm` become a `<video>`, audio a `<audio>`.
+  Local paths are served by `GET /api/file`, which is extension-allowlisted to
+  image/video/audio and responds under `default-src 'none'; sandbox`.
+- **Readability.** Messages render in full, never clipped behind a "Show more"
+  toggle — that was tried and removed. Text is deliberately NOT width-capped
+  (see the note in `styles.css`): capping prose while tables/charts stayed
+  full-width made wide panes look misaligned.
+
+⚠️ `markdown.ts`'s invariant is that raw model output NEVER reaches innerHTML
+unescaped, and `charts.ts` builds every node with `createElementNS`. Keep both
+that way. The categorical palette in `styles.css` (`--viz-1..8`) is validated as
+an ordered set for colour-vision deficiency against each mode's chart surface —
+re-run the check before changing a value or the order.
 
 ## Gotchas
 - `index.js` hardcodes `sessions.json`/`layouts.json`/`tasks.json` under repo ROOT.

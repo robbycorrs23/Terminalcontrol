@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { spawnOverSsh } from "../ssh-remote-agent.js";
 
 // Client → server decision values are our own "allow"|"deny"|"always"
 // vocabulary (same as claude-driver.js, so agent-chat.ts's UI never needs to
@@ -117,16 +118,23 @@ function modeFromSettings(sandbox) {
  *   cwd: string,
  *   resume?: string,
  *   env?: Record<string,string|undefined>,
+ *   remote?: { target: string, port?: number, identityFile?: string, envPrefix?: string },
  *   onEvent: (ev: import("./event-schema.js").AgentEvent) => void,
  *   onSessionId: (id: string) => void,
  * }} opts
  */
-export function startCodexSession({ cwd, resume, mode, env, onEvent, onSessionId, onRateLimit }) {
-  const proc = spawn("codex", ["app-server", "--stdio"], {
-    cwd,
-    env: env || process.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+export function startCodexSession({ cwd, resume, mode, env, remote, onEvent, onSessionId, onRateLimit }) {
+  // `remote` runs the exact same "app-server --stdio" invocation over ssh on
+  // another host instead of locally (see ssh-remote-agent.js) — every line
+  // below this only ever touches proc.stdin/proc.stdout, so nothing else in
+  // this file needs to know which case it is.
+  const proc = remote
+    ? spawnOverSsh(remote, remote.envPrefix, ["codex", "app-server", "--stdio"])
+    : spawn("codex", ["app-server", "--stdio"], {
+        cwd,
+        env: env || process.env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
 
   let nextId = 0;
   const pending = new Map(); // our request id -> {resolve, reject}
@@ -193,13 +201,25 @@ export function startCodexSession({ cwd, resume, mode, env, onEvent, onSessionId
         currentTurnId = params.turn.id;
         onEvent({ t: "status", state: "working" });
         break;
-      case "turn/completed":
+      case "turn/completed": {
+        // Turn.status (verified via `codex app-server generate-ts`, ground
+        // truth per this file's own rule — not guessed): "completed" |
+        // "interrupted" | "failed" | "inProgress". "interrupted" is a real,
+        // distinct value — a restart/manual interrupt ends a turn this way,
+        // not as "failed" and not as a normal "completed" finish, so without
+        // this branch it looked identical to a clean completion (same "idle"
+        // status, same "done" attention) even though the last visible
+        // agentMessage may be cut off mid-word. `Turn.error` is only
+        // populated when status is "failed" (per the generated type's own
+        // doc comment), so it's naturally absent here.
+        const { status } = params.turn;
         onEvent({
           t: "status",
-          state: params.turn.status === "failed" ? "error" : "idle",
-          detail: params.turn.error?.message,
+          state: status === "failed" ? "error" : status === "interrupted" ? "aborted" : "idle",
+          detail: params.turn.error?.message ?? (status === "interrupted" ? "Turn was interrupted" : undefined),
         });
         break;
+      }
       case "error":
         onEvent({ t: "status", state: "error", detail: params.error?.message });
         break;

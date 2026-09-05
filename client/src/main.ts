@@ -230,14 +230,13 @@ function reflow() {
 }
 
 // Mobile-only visual ordering: terminals needing you float to the top of the
-// scroll stack (question > done > idle), stable otherwise. Pure presentation —
-// doesn't touch the underlying grid order that drag-to-reorder persists, so
-// desktop layouts and saved layouts are unaffected.
+// scroll stack (question > aborted > done > idle), stable otherwise. Pure
+// presentation — doesn't touch the underlying grid order that drag-to-reorder
+// persists, so desktop layouts and saved layouts are unaffected.
 function reflowMobileOrder() {
+  const rank = { question: 0, aborted: 1, done: 2 } as const;
   for (const t of panes.values()) {
-    t.cell.style.order = mobileQuery.matches
-      ? String(t.isWaiting() ? (t.waitingKind() === "done" ? 1 : 0) : 2)
-      : "";
+    t.cell.style.order = mobileQuery.matches ? String(t.isWaiting() ? rank[t.waitingKind()] : 3) : "";
   }
 }
 mobileQuery.addEventListener("change", reflow);
@@ -290,8 +289,8 @@ function renderTray() {
     const t = panes.get(id);
     if (!t) continue;
     const chip = document.createElement("div");
-    chip.className =
-      "tchip" + (t.isWaiting() ? " waiting" + (t.waitingKind() === "done" ? " done" : "") : "");
+    const wKind = t.isWaiting() ? t.waitingKind() : null;
+    chip.className = "tchip" + (wKind ? " waiting" + (wKind === "question" ? "" : " " + wKind) : "");
     chip.innerHTML = `<span class="tname"></span><span class="tclose" title="Close">✕</span>`;
     (chip.querySelector(".tname") as HTMLElement).textContent = displayName(t.info);
     chip.addEventListener("click", (e) => {
@@ -570,7 +569,7 @@ function setDropTarget(cell: HTMLElement | null) {
 }
 
 // ---- Attention queue --------------------------------------------------
-function onAttention(id: string, kind: "question" | "done") {
+function onAttention(id: string, kind: "question" | "done" | "aborted") {
   const t = panes.get(id);
   if (!t) return;
   if (zoomed === t) return; // you're already looking at it
@@ -590,16 +589,19 @@ function onAttention(id: string, kind: "question" | "done") {
  * `tag: id` means a pane that pings twice replaces its own notification instead
  * of stacking a second one.
  */
-function notifyAttention(t: PaneView, kind: "question" | "done") {
+function notifyAttention(t: PaneView, kind: "question" | "done" | "aborted") {
   if (!getSettings().notify || !document.hidden) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   try {
     const name = displayName(t.info);
-    const n = new Notification(kind === "done" ? `${name} finished` : `${name} needs you`, {
-      body: kind === "done" ? "The agent ended its turn." : "Waiting on an approval or an answer.",
-      tag: t.id,
-      icon: "/favicon.svg",
-    });
+    const title = kind === "done" ? `${name} finished` : kind === "aborted" ? `${name} was cut off` : `${name} needs you`;
+    const body =
+      kind === "done"
+        ? "The agent ended its turn."
+        : kind === "aborted"
+          ? "The turn was interrupted before finishing — the response may be incomplete."
+          : "Waiting on an approval or an answer.";
+    const n = new Notification(title, { body, tag: t.id, icon: "/favicon.svg" });
     n.onclick = () => {
       window.focus();
       const live = panes.get(t.id);
@@ -611,7 +613,7 @@ function notifyAttention(t: PaneView, kind: "question" | "done") {
   }
 }
 
-function enqueue(id: string, _kind: "question" | "done") {
+function enqueue(id: string, _kind: "question" | "done" | "aborted") {
   if (!queue.includes(id)) queue.push(id);
   renderQueue();
 }
@@ -637,8 +639,8 @@ function renderQueue() {
   for (const id of queue) {
     const t = panes.get(id);
     const chip = document.createElement("span");
-    const kind = t?.waitingKind() === "done" ? "done" : "question";
-    chip.className = "qchip" + (kind === "done" ? " done" : "");
+    const kind = t?.waitingKind() ?? "question";
+    chip.className = "qchip" + (kind === "question" ? "" : " " + kind);
     chip.textContent = t ? displayName(t.info) : id;
     chip.onclick = () => t && zoom(t);
     queueEl.append(chip);
@@ -754,6 +756,8 @@ const plistEl = document.getElementById("plist")!;
 const precentEl = document.getElementById("precent")!;
 const agentSelect = document.getElementById("agentSelect") as HTMLSelectElement;
 const sshOptGroup = document.getElementById("sshOptGroup") as HTMLOptGroupElement;
+const sshRunRow = document.getElementById("sshRunRow") as HTMLElement;
+const sshAgentSelect = document.getElementById("sshAgentSelect") as HTMLSelectElement;
 const chatViewEl = document.getElementById("chatView") as HTMLInputElement;
 const searchEl = document.getElementById("psearch") as HTMLInputElement;
 const sortEl = document.getElementById("psort") as HTMLSelectElement;
@@ -775,13 +779,19 @@ async function loadPrefs() {
   applySettings(); // server values may differ from the localStorage mirror we booted on
 }
 
-// Chat view (see agent-chat.ts) is available for all four claude/codex agent
-// options (backed by claude-driver.js / codex-driver.js — see the plan).
-// Every new agent box defaults to it, on desktop as well as mobile; opting
-// back into the classic terminal is a per-open, explicit uncheck. Existing
-// boxes are unaffected — this only decides what a NEWLY created box becomes.
-function chatViewAvailable(cmd: string): boolean {
-  return cmd === "claude" || cmd === "claude-work" || cmd === "codex" || cmd === "codex-work";
+// Chat view (see agent-chat.ts) is available for the four local claude/codex
+// agent options (backed by claude-driver.js / codex-driver.js), OR for an
+// SSH pick once "and run — there" (sshAgentSelect) also names one of those
+// four profiles — the remote counterpart, driven the same way but over ssh
+// (see server/ssh-remote-agent.js). Every new agent box defaults to it, on
+// desktop as well as mobile; opting back into the classic terminal is a
+// per-open, explicit uncheck. Existing boxes are unaffected — this only
+// decides what a NEWLY created box becomes.
+function isAgentProfile(v: string): boolean {
+  return v === "claude" || v === "claude-work" || v === "codex" || v === "codex-work";
+}
+function chatViewAvailable(cmd: string, remoteAgentCmd: string = ""): boolean {
+  return isAgentProfile(cmd) || (isSshValue(cmd) && isAgentProfile(remoteAgentCmd));
 }
 // What the user wants for THIS picker session, so that bouncing the agent
 // select through "plain shell" (which force-unchecks, since a shell has no
@@ -789,19 +799,38 @@ function chatViewAvailable(cmd: string): boolean {
 // re-checks itself out of. Reset to the default on every picker open.
 let chatViewWanted = true;
 function updateChatViewAvailability() {
-  const available = chatViewAvailable(agentSelect.value);
+  const available = chatViewAvailable(agentSelect.value, sshAgentSelect.value);
   chatViewEl.disabled = !available;
   chatViewEl.checked = available && chatViewWanted;
 }
 agentSelect.addEventListener("change", updateChatViewAvailability);
+sshAgentSelect.addEventListener("change", updateChatViewAvailability);
 chatViewEl.addEventListener("change", () => {
   if (!chatViewEl.disabled) chatViewWanted = chatViewEl.checked;
 });
+
+// "and run — there": only meaningful once an SSH server is picked. Combined
+// with Chat view (above), it decides which pane gets created: plain shell →
+// PTY typing `ssh ...`; an agent profile + Chat view unchecked → PTY typing
+// `ssh -t ... '<agent>; exec $SHELL -l'`; an agent profile + Chat view
+// checked → an "agent" pane whose claude/codex runs over ssh instead of
+// locally (see choose()/resolveRemoteTarget() below). Hidden/reset the rest
+// of the time.
+function isSshValue(v: string): boolean {
+  return v.startsWith("sshprofile:") || v.startsWith("sshhost:");
+}
+function updateSshRunRow() {
+  const isSsh = isSshValue(agentSelect.value);
+  sshRunRow.hidden = !isSsh;
+  if (!isSsh) sshAgentSelect.value = "";
+}
+agentSelect.addEventListener("change", updateSshRunRow);
 
 async function openPicker() {
   picker.hidden = false;
   chatViewWanted = true;
   updateChatViewAvailability();
+  updateSshRunRow();
   // Resume where we left off; on first open use the saved default (or home).
   await navigate(pickPath ?? prefs.defaultDir);
   loadPickerRecents();
@@ -949,16 +978,48 @@ async function loadPickerRecents() {
 }
 
 function choose(path: string) {
-  const kind = chatViewAvailable(agentSelect.value) && chatViewEl.checked ? "agent" : "pty";
-  openTermAt(path, resolveCmd(agentSelect.value), kind);
+  const ssh = isSshValue(agentSelect.value);
+  const remoteAgent = ssh ? sshAgentSelect.value : "";
+  const wantsChat = chatViewAvailable(agentSelect.value, remoteAgent) && chatViewEl.checked;
+  if (ssh && remoteAgent && wantsChat) {
+    // Remote CHAT VIEW pane: cmd stays the bare profile name (agent-manager.js
+    // derives provider/account from it exactly like a local agent pane) plus
+    // a structured `remote` target — never a typed shell command.
+    const remote = resolveRemoteTarget(agentSelect.value);
+    if (remote) {
+      openTermAt(path, remoteAgent, "agent", remote);
+      closePicker();
+      return;
+    }
+  }
+  // Everything else (local agent/shell, or SSH terminal-view with or without
+  // an agent running there) keeps the existing typed-shell-command path.
+  openTermAt(path, resolveCmd(agentSelect.value), wantsChat ? "agent" : "pty");
   closePicker();
 }
-async function openTermAt(cwd: string, cmd: string, kind: "pty" | "agent" = "pty") {
+type RemoteTarget = { target: string; port?: number; identityFile?: string };
+async function openTermAt(cwd: string, cmd: string, kind: "pty" | "agent" = "pty", remote?: RemoteTarget) {
   await fetch("/api/panes", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ cwd, cmd, session: SESSION, kind }),
+    body: JSON.stringify({ cwd, cmd, session: SESSION, kind, ...(remote ? { remote } : {}) }),
   });
+}
+// The structured counterpart of resolveCmd's sshprofile:/sshhost: branching,
+// for the remote-CHAT-VIEW path above — a target descriptor instead of a
+// shell string (agent-manager.js/ssh-remote-agent.js build the ssh argv
+// server-side; nothing here gets typed into a shell).
+function resolveRemoteTarget(value: string): RemoteTarget | null {
+  if (value.startsWith("sshprofile:")) {
+    const p = sshProfiles.find((p) => p.name === value.slice("sshprofile:".length));
+    if (!p) return null;
+    const t: RemoteTarget = { target: `${p.user}@${p.host}` };
+    if (p.port && p.port !== 22) t.port = p.port;
+    if (p.identityFile) t.identityFile = p.identityFile;
+    return t;
+  }
+  if (value.startsWith("sshhost:")) return { target: value.slice("sshhost:".length) };
+  return null;
 }
 
 // ---- SSH: turning an agentSelect value into the real typed command --------
@@ -967,21 +1028,59 @@ async function openTermAt(cwd: string, cmd: string, kind: "pty" | "agent" = "pty
 // picks are encoded as "sshprofile:<name>" (a FleetView-managed profile,
 // resolved via its stored host/port/user/identityFile) or "sshhost:<alias>"
 // (an alias auto-discovered read-only from ~/.ssh/config — ssh itself applies
-// the rest of that config, so we just type `ssh <alias>`).
+// the rest of that config). Either way, `sshAgentSelect` (the "and run …
+// there" row, only shown once an SSH pick is made) optionally names an agent
+// profile to launch on the REMOTE box. This function ONLY handles the
+// terminal-view case (a plain interactive process typed into a real shell —
+// see remoteAgentCmd() below for how each of the four profiles turns into
+// what's actually typed remotely); the chat-view case is resolveRemoteTarget()
+// above, which never builds a shell string at all.
 function resolveCmd(value: string): string {
+  const agentCmd = isSshValue(value) ? sshAgentSelect.value : "";
   if (value.startsWith("sshprofile:")) {
     const p = sshProfiles.find((p) => p.name === value.slice("sshprofile:".length));
-    return p ? buildSshCommand(p) : "";
+    return p ? buildSshCommand(p, agentCmd) : "";
   }
-  if (value.startsWith("sshhost:")) return "ssh " + shQuote(value.slice("sshhost:".length));
+  if (value.startsWith("sshhost:")) {
+    const parts = ["ssh"];
+    if (agentCmd) parts.push("-t");
+    parts.push(shQuote(value.slice("sshhost:".length)));
+    if (agentCmd) parts.push(shQuote(remoteAgentCmd(agentCmd)));
+    return parts.join(" ");
+  }
   return value;
 }
-function buildSshCommand(p: SshProfile): string {
+function buildSshCommand(p: SshProfile, agentCmd: string): string {
   const parts = ["ssh"];
+  if (agentCmd) parts.push("-t"); // force a pty — needed for an interactive remote command
   if (p.port && p.port !== 22) parts.push("-p", String(p.port));
   if (p.identityFile) parts.push("-o", "IdentitiesOnly=yes", "-i", shQuote(p.identityFile));
   parts.push(shQuote(`${p.user}@${p.host}`));
+  if (agentCmd) parts.push(shQuote(remoteAgentCmd(agentCmd)));
   return parts.join(" ");
+}
+// Turns an sshAgentSelect value into what actually gets typed on the REMOTE
+// host, then falls back to an interactive login shell when the agent exits
+// (so quitting claude/codex doesn't just drop the ssh connection).
+//
+// claude/codex run as-is. The "-work" profiles can't rely on the local
+// `claude-work` wrapper script existing remotely (~/.local/bin/claude-work is
+// a local PATH convenience, not something any given remote box has) — instead
+// they set the same env var that script sets, inline: CLAUDE_CONFIG_DIR for
+// claude, CODEX_HOME for codex (same mapping agent-manager.js uses for the
+// local SDK-driven "-work" panes, agent-manager.js:108-112). This assumes the
+// remote account has its own ~/.claude-work / ~/.codex-work set up — same
+// assumption the local "-work" picker options already make about this
+// machine.
+function remoteAgentCmd(agentCmd: string): string {
+  const runners: Record<string, string> = {
+    claude: "claude",
+    "claude-work": 'CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude',
+    codex: "codex",
+    "codex-work": 'CODEX_HOME="$HOME/.codex-work" codex',
+  };
+  const run = runners[agentCmd] || agentCmd;
+  return `${run}; exec $SHELL -l`;
 }
 // POSIX single-quote escaping, so a value with spaces/special chars still
 // types as one literal argument into the pane's shell.
@@ -1333,6 +1432,7 @@ function renderSshOptions() {
   agentSelect.value = keep;
   if (agentSelect.value !== keep) agentSelect.value = "claude";
   updateChatViewAvailability();
+  updateSshRunRow();
 }
 
 // ---- SSH server manager modal -------------------------------------------

@@ -13,7 +13,7 @@ export interface PaneInfo {
   kind: "pty" | "agent";
   cwd: string;
   cmd: string;
-  attention?: { waiting: boolean; kind: "question" | "done" | null };
+  attention?: { waiting: boolean; kind: "question" | "done" | "aborted" | null };
   /** Is something running in this pane right now? (see PtyManager's work detection) */
   working?: boolean;
   followUp?: boolean;
@@ -23,6 +23,8 @@ export interface PaneInfo {
   createdAt: number;
   /** Claude Agent SDK permission mode (agent panes only — see agent-chat.ts's mode selector). */
   mode?: "default" | "acceptEdits" | "auto" | "plan" | "bypassPermissions";
+  /** Set only for an agent pane whose claude/codex runs over ssh on another host (see agent-chat.ts). */
+  remote?: { target: string; port?: number; identityFile?: string } | null;
 }
 
 /** What to call this pane everywhere it's shown: custom name, else folder name. */
@@ -43,8 +45,8 @@ export interface PaneView {
   el: HTMLElement; // the .term box (this is what zooms/drags)
   titleBar: HTMLElement; // drag handle
   isWaiting(): boolean;
-  waitingKind(): "question" | "done";
-  setWaiting(on: boolean, kind?: "question" | "done"): void;
+  waitingKind(): "question" | "done" | "aborted";
+  setWaiting(on: boolean, kind?: "question" | "done" | "aborted"): void;
   setBusy(on: boolean): void;
   isFlagged(): boolean;
   setFollowUp(on: boolean): void;
@@ -627,17 +629,20 @@ export class Term implements PaneView {
   isWaiting() {
     return this.el.classList.contains("waiting");
   }
-  waitingKind(): "question" | "done" {
-    return this.el.classList.contains("done") ? "done" : "question";
+  waitingKind(): "question" | "done" | "aborted" {
+    if (this.el.classList.contains("done")) return "done";
+    if (this.el.classList.contains("aborted")) return "aborted";
+    return "question";
   }
 
-  setWaiting(on: boolean, kind: "question" | "done" = "question") {
+  setWaiting(on: boolean, kind: "question" | "done" | "aborted" = "question") {
     this.el.classList.toggle("waiting", on);
     this.el.classList.toggle("done", on && kind === "done");
+    this.el.classList.toggle("aborted", on && kind === "aborted");
     this.badgeSlot.innerHTML = "";
     if (on) {
       const badge = el("span", "badge");
-      badge.textContent = kind === "done" ? "done" : "needs you";
+      badge.textContent = kind === "done" ? "done" : kind === "aborted" ? "cut off" : "needs you";
       this.badgeSlot.append(badge);
     }
   }

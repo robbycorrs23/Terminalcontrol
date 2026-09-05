@@ -2,6 +2,7 @@ import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, se
 import { AgentEvent, AgentQuestion } from "./agent-events";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown } from "./markdown";
+import { enhanceRich } from "./rich";
 import { attachSecretPopover } from "./secret-popover";
 
 function el(tag: string, cls: string): HTMLElement {
@@ -63,6 +64,7 @@ export class AgentChat implements PaneView {
   private badgeSlot: HTMLElement;
   private modeSel: HTMLSelectElement;
   private isCodex: boolean;
+  private isRemote: boolean;
   private inputEl: HTMLTextAreaElement;
   private ws?: WebSocket;
   private reconnectTimer?: number;
@@ -177,6 +179,17 @@ export class AgentChat implements PaneView {
       badge.title = "Work account";
       this.modeSel.before(badge);
     }
+    // Remote (ssh) panes: claude/codex is running on another host, not here
+    // (see server/ssh-remote-agent.js) — a small text badge, same slot/sizing
+    // family as the work-account image badge above, since there's no logo
+    // asset for an arbitrary hostname.
+    this.isRemote = !!info.remote;
+    if (info.remote) {
+      const badge = el("span", "remote-badge");
+      badge.textContent = "⇢ " + info.remote.target;
+      badge.title = "Running on " + info.remote.target;
+      this.modeSel.before(badge);
+    }
 
     const cwdline = el("div", "cwdline");
     cwdline.textContent = info.cwd;
@@ -205,9 +218,21 @@ export class AgentChat implements PaneView {
 
     this.wireRename(host);
     this.wireTitleBarButtons(host);
-    attachSecretPopover(this.titleBar.querySelector(".secret") as HTMLElement, this.el, host, this);
-    wireFilePicker(attachBtn, this.el, (files) => void this.attachFiles(files));
-    wireFileDrop(this.el, (files) => void this.attachFiles(files));
+    // Both features write a file/secret to a path on FLEETVIEW'S OWN local
+    // disk and hand that path to the driver as chat text — meaningless for a
+    // remote pane, since claude/codex is running on a different machine and
+    // can't read it (see the plan: a real fix means scp'ing bytes to the
+    // remote host instead, not done here). Hide, don't wire — a visible but
+    // silently-broken button would be worse than no button.
+    const secretBtn = this.titleBar.querySelector(".secret") as HTMLElement;
+    if (this.isRemote) {
+      secretBtn.hidden = true;
+      attachBtn.hidden = true;
+    } else {
+      attachSecretPopover(secretBtn, this.el, host, this);
+      wireFilePicker(attachBtn, this.el, (files) => void this.attachFiles(files));
+      wireFileDrop(this.el, (files) => void this.attachFiles(files));
+    }
 
     sendBtn.addEventListener("click", () => this.submit());
     this.inputEl.addEventListener("keydown", (e) => {
@@ -409,15 +434,27 @@ export class AgentChat implements PaneView {
         // exactly as before.
         const streamed = this.streamingEls.get(ev.id);
         this.streamingEls.delete(ev.id);
+        let bubbleEl: HTMLElement;
         if (streamed) {
           // Trust the completed item's text over the accumulated deltas: it's
           // the authoritative final form, and re-rendering from it repairs a
           // bubble that dropped a delta mid-stream.
           streamed.dataset.raw = ev.text;
           streamed.innerHTML = renderMarkdown(ev.text);
+          // Charts/tables/clipping are built HERE and not on each delta: a
+          // half-streamed ```chart block is invalid JSON, and rebuilding SVG
+          // per token would thrash. The bubble reads as plain Markdown while
+          // it streams and gains its rich layer the moment it's complete.
+          enhanceRich(streamed);
+          bubbleEl = streamed;
         } else {
-          this.appendBubble("assistant", ev.text);
+          bubbleEl = this.appendBubble("assistant", ev.text);
         }
+        // claude-driver.js only sets this when the SDK itself says the
+        // message was truncated by an interrupt/abort — the content may end
+        // mid-word. Mark it the same way updateToolCard marks a failed tool
+        // result, so it doesn't read as a normal, if oddly-worded, finish.
+        bubbleEl.classList.toggle("aborted", !!ev.aborted);
         break;
       }
       case "assistant_delta": {
@@ -461,15 +498,21 @@ export class AgentChat implements PaneView {
     }
   }
 
-  private appendBubble(role: "user" | "assistant" | "error", text: string): HTMLElement {
+  private appendBubble(role: "user" | "assistant" | "error" | "aborted", text: string): HTMLElement {
     this.endToolGroup();
     const bubble = el("div", `msg ${role}`);
     // Assistant text is Markdown (renderMarkdown escapes untrusted source
-    // before adding any markup — see markdown.ts). User and error text stays
-    // literal: the user typed it, and an error string shouldn't be reinterpreted.
+    // before adding any markup — see markdown.ts). User/error/aborted text
+    // stays literal: the user typed it, or it's FleetView's own notice text,
+    // neither should be reinterpreted as Markdown.
     if (role === "assistant") bubble.innerHTML = renderMarkdown(text);
     else bubble.textContent = text;
     this.logEl.append(bubble);
+    // After the append, so the rich pass can measure real laid-out height.
+    // Runs for user bubbles too — they carry no Markdown, but a pasted wall of
+    // text is exactly as unreadable from either speaker, and clipping is the
+    // only step that finds anything to do there.
+    if (role !== "error" && role !== "aborted") enhanceRich(bubble);
     return bubble;
   }
 
@@ -779,6 +822,10 @@ export class AgentChat implements PaneView {
       this.statusEl.hidden = true;
     }
     if (state === "error") this.appendBubble("error", detail || "Something went wrong.");
+    // Distinct from "error": the turn was cut off (interrupt/restart/rate
+    // limit/API hiccup), not necessarily something to fix — see
+    // claude-driver.js/codex-driver.js's terminal_reason/Turn.status handling.
+    else if (state === "aborted") this.appendBubble("aborted", detail || "This turn was interrupted before finishing.");
   }
 
   /** Reflects the session's current permission mode in the title-bar selector — see the `mode` AgentEvent. */
@@ -804,16 +851,19 @@ export class AgentChat implements PaneView {
   isWaiting(): boolean {
     return this.el.classList.contains("waiting");
   }
-  waitingKind(): "question" | "done" {
-    return this.el.classList.contains("done") ? "done" : "question";
+  waitingKind(): "question" | "done" | "aborted" {
+    if (this.el.classList.contains("done")) return "done";
+    if (this.el.classList.contains("aborted")) return "aborted";
+    return "question";
   }
-  setWaiting(on: boolean, kind: "question" | "done" = "question") {
+  setWaiting(on: boolean, kind: "question" | "done" | "aborted" = "question") {
     this.el.classList.toggle("waiting", on);
     this.el.classList.toggle("done", on && kind === "done");
+    this.el.classList.toggle("aborted", on && kind === "aborted");
     this.badgeSlot.innerHTML = "";
     if (on) {
       const badge = el("span", "badge");
-      badge.textContent = kind === "done" ? "done" : "needs you";
+      badge.textContent = kind === "done" ? "done" : kind === "aborted" ? "cut off" : "needs you";
       this.badgeSlot.append(badge);
     }
   }

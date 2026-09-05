@@ -4,7 +4,7 @@
 
 const BASE_TITLE = "▦ FleetView";
 
-export type AttentionKind = "question" | "done";
+export type AttentionKind = "question" | "done" | "aborted";
 
 let iconEl: HTMLLinkElement | null = null;
 function iconLink(): HTMLLinkElement {
@@ -65,13 +65,19 @@ function drawFavicon(kind: AttentionKind | null): string {
     }
   }
 
-  // Attention dot badge, top-right: orange = needs you, yellow = done. Colours
-  // come from the same CSS variables the boxes and chips use, so the favicon
-  // can't drift out of sync with the palette (and follows light/dark too).
+  // Attention dot badge, top-right: orange = needs you, yellow = done,
+  // red = cut off. Colours come from the same CSS variables the boxes and
+  // chips use, so the favicon can't drift out of sync with the palette (and
+  // follows light/dark too).
   if (kind) {
     x.beginPath();
     x.arc(S - 8, 8, 6, 0, Math.PI * 2);
-    x.fillStyle = kind === "done" ? cssVar("--done", "#f5d142") : cssVar("--waiting", "#f0a35e");
+    x.fillStyle =
+      kind === "done"
+        ? cssVar("--done", "#f5d142")
+        : kind === "aborted"
+          ? cssVar("--aborted", "#f85149")
+          : cssVar("--waiting", "#f0a35e");
     x.fill();
     x.lineWidth = 2;
     x.strokeStyle = "#0d1117";

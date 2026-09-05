@@ -124,6 +124,40 @@ function broadcastAll(msg) {
     } catch {}
   }
 }
+// "Only while I'm here" (see secret-vault.js) has to survive the client
+// deliberately dropping its own control socket: main.ts re-opens it on wake
+// from sleep, on `online`, on bfcache restore, and whenever a hidden tab's
+// throttled heartbeat looks like a suspend. A close is therefore NOT proof the
+// window is gone — so hold injected secrets for a grace period and only expire
+// them if no control socket for that session comes back. Anything shorter
+// silently ate 15-minute secrets seconds after they were set.
+const SESSION_GRACE_MS = 45_000;
+const pendingSecretRelease = new Map(); // session -> timer
+
+function sessionIsConnected(session) {
+  for (const ws of controlClients) if (ws.fleetSession === session) return true;
+  return false;
+}
+function cancelSecretRelease(session) {
+  const t = pendingSecretRelease.get(session);
+  if (t) clearTimeout(t);
+  pendingSecretRelease.delete(session);
+}
+function scheduleSecretRelease(session) {
+  if (session == null) return;
+  cancelSecretRelease(session);
+  // Another socket for this window is still open (two tabs sharing a
+  // ?session=, or a reconnect that raced ahead of this close) — nothing to do.
+  if (sessionIsConnected(session)) return;
+  const t = setTimeout(() => {
+    pendingSecretRelease.delete(session);
+    if (sessionIsConnected(session)) return; // it came back
+    secrets.releaseAllForSession(session);
+  }, SESSION_GRACE_MS);
+  t.unref?.();
+  pendingSecretRelease.set(session, t);
+}
+
 ptys.on("attention", (pane, kind) => broadcast(registry.sessionOf(pane), { t: "attention", pane, kind }));
 // A pane started/stopped working (see PtyManager's work-detection notes). Edge-
 // triggered, so this is cheap even while a pane is streaming output.
@@ -239,10 +273,13 @@ app.delete("/api/dormant/:id", (req, res) => {
 });
 
 app.post("/api/panes", (req, res) => {
-  const { cwd, cmd, session, kind } = req.body || {};
+  // `remote` is only meaningful for kind:"agent" (a chat-view session
+  // running claude/codex over ssh — see ssh-remote-agent.js); PtyManager.create
+  // ignores the extra field harmlessly for kind:"pty".
+  const { cwd, cmd, session, kind, remote } = req.body || {};
   let pane;
   try {
-    pane = registry.create({ cwd, cmd, session, kind });
+    pane = registry.create({ cwd, cmd, session, kind, remote });
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -337,6 +374,78 @@ function mimeExt(mime) {
     }[mime] || ""
   );
 }
+
+// --- Local media -----------------------------------------------------------
+// The chat view renders `![shot](/tmp/plot.png)` and bare links to video/audio
+// as real embedded media (see client/src/markdown.ts). Those files live on this
+// machine's disk, not under `dist/`, so the browser needs one route that can
+// hand them back.
+//
+// This is deliberately an EXTENSION allowlist, not a directory allowlist: the
+// whole point is that an agent writes a chart to `/tmp`, a screenshot to its
+// own cwd, or a diagram wherever it likes, and the user sees it inline. Scoping
+// it to a directory would miss the common case. That is not the security
+// give-away it looks like — this server already spawns unauthenticated shells,
+// so anything that can reach the port can `cat` any file anyway (see the
+// Security note in CLAUDE.md); reading a .png through here grants nothing new.
+// The allowlist exists to keep the route boring, not to contain it: it can't be
+// pointed at `~/.ssh/id_rsa` and get text back.
+const MEDIA_TYPES = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+  ".svg": "image/svg+xml",
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".ogv": "video/ogg",
+  ".mov": "video/quicktime",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".wav": "audio/wav",
+  ".oga": "audio/ogg",
+  ".ogg": "audio/ogg",
+  ".flac": "audio/flac",
+};
+app.get("/api/file", (req, res) => {
+  const raw = String(req.query.path || "");
+  if (!raw) return res.status(400).end("missing path");
+  const file = resolve(raw);
+  const type = MEDIA_TYPES[extname(file).toLowerCase()];
+  // Unknown extension → 415, never a fallback to octet-stream. The client only
+  // ever points this route at media it already decided was media.
+  if (!type) return res.status(415).end("not a supported media type");
+  let st;
+  try {
+    st = statSync(file);
+  } catch {
+    return res.status(404).end("no such file");
+  }
+  if (!st.isFile()) return res.status(404).end("not a file");
+  res.type(type);
+  // An SVG is the one allowlisted type that can carry <script>. As an <img>
+  // source that script is inert, but pasting the URL into the address bar would
+  // run it on this origin — so every media response is served under a CSP that
+  // permits nothing and a sandbox with no allow-* tokens (a unique opaque
+  // origin, scripting disabled). Belt-and-braces with nosniff, which stops a
+  // mislabelled .png from being re-interpreted as anything executable.
+  res.set("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.set("X-Content-Type-Options", "nosniff");
+  // Local files change under us (an agent re-runs a script and rewrites
+  // plot.png), and the URL carries no content hash to bust — so revalidate
+  // every time rather than serving a stale frame from the memory cache.
+  res.set("Cache-Control", "no-cache");
+  // sendFile (not readFileSync) so <video> range requests work: seeking a
+  // multi-hundred-MB screen recording must not buffer the whole file first.
+  res.sendFile(file, (err) => {
+    if (err && !res.headersSent) res.status(500).end("read failed");
+  });
+});
 
 app.post("/api/panes/:id/clear", (req, res) => {
   const session = registry.sessionOf(req.params.id);
@@ -611,11 +720,16 @@ function handleUpgrade(req, socket, head) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.fleetSession = session;
       controlClients.add(ws);
+      // This window is back (first load, refresh, or a reconnect after
+      // sleep/blip) — call off any pending expiry of the secrets it injected.
+      cancelSecretRelease(session);
       ws.on("close", () => {
         controlClients.delete(ws);
-        // "Only while I'm here": this window is gone, so any secret it
-        // injected expires now instead of riding out its full TTL unwatched.
-        secrets.releaseAllForSession(session);
+        // "Only while I'm here": if this window really is gone, the secrets it
+        // injected expire early instead of riding out their TTL unwatched —
+        // but only after a grace period, since the client re-opens this socket
+        // on its own (see scheduleSecretRelease).
+        scheduleSecretRelease(session);
       });
       ws.on("message", (raw) => {
         try {
