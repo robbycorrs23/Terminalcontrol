@@ -19,6 +19,7 @@ import { PushStore } from "./push-store.js";
 import { VapidKeys } from "./push-vapid.js";
 import { createSender } from "./push-send.js";
 import { createPushNotifier } from "./push-notifier.js";
+import { createIdentity } from "./identity.js";
 import { SshProfileStore } from "./ssh-profiles.js";
 import { listSshConfigHosts } from "./ssh-hosts.js";
 import { UsageMonitor } from "./usage-monitor.js";
@@ -109,6 +110,9 @@ const sshProfiles = new SshProfileStore(join(ROOT, "ssh-profiles.json"));
 const FLEET_DIR = join(homedir(), ".fleetview");
 const pushStore = new PushStore(join(FLEET_DIR, "push-subscriptions.json"));
 const vapid = new VapidKeys(join(FLEET_DIR, "vapid.json"));
+// Which machine this is, for the app name / icon colour / in-app label. Reads
+// from DIST because that's where vite copies client/public/icons/.
+const identity = createIdentity(DIST);
 // The loud "tmux missing" warning is handled by preflight() above; here we just
 // confirm the durable path when it IS available.
 if (ptys.tmux) console.log("[fleetview] tmux-backed terminals — they survive server restarts.");
@@ -347,6 +351,11 @@ app.post("/api/mkdir", async (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+
+// Machine identity for the running UI (top bar + tab title). Separate from
+// /api/prefs on purpose: prefs are YOUR settings and sync across devices,
+// this is a property of the machine you happen to be connected to.
+app.get("/api/identity", (_req, res) => res.json({ label: identity.label, color: identity.color }));
 
 app.get("/api/prefs", (_req, res) => res.json(layouts.prefs()));
 app.put("/api/prefs", (req, res) => res.json(layouts.setPrefs(req.body || {})));
@@ -764,15 +773,35 @@ const noStoreIndexHtml = (res, path) => {
   // HTTP cache. (Browsers already cap SW script caching at 24h, but be explicit.)
   if (path.endsWith("sw.js")) res.setHeader("Cache-Control", "no-cache");
 };
+// --- Per-machine identity: manifest + icons ------------------------------
+// Registered BEFORE express.static so these win over any file of the same
+// name, which is what lets the colour be a server-side choice while the URLs
+// stay constant (see server/identity.js).
+app.get("/manifest.webmanifest", (_req, res) => {
+  res.type("application/manifest+json").set("Cache-Control", "no-cache").json(identity.manifest());
+});
+
+// One canonical URL per icon, whatever colour this machine is. Keeping the
+// paths stable means index.html, sw.js and gate.js's public allowlist never
+// have to know which palette entry is in play.
+for (const file of ["icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png"]) {
+  app.get(`/${file}`, (_req, res) => {
+    // no-cache, not immutable: the URL doesn't change when FLEET_ICON_COLOR
+    // does, so a cached copy would keep showing the old machine's colour.
+    res.set("Cache-Control", "no-cache").sendFile(identity.iconPath(file), (err) => {
+      if (err && !res.headersSent) res.status(404).type("text/plain").end("icon set missing — run scripts/make-icons.sh");
+    });
+  });
+}
+
 app.use(express.static(DIST, { setHeaders: noStoreIndexHtml }));
 
-// These two are FILES, not SPA routes. Without this, an unbuilt or missing
-// sw.js/manifest falls through to the catch-all below and comes back as
-// index.html with Content-Type: text/html — which surfaces as a baffling MIME
-// type error at registration ("the script has an unsupported MIME type") or a
-// silent "manifest is invalid", instead of an obvious 404. Costs nothing and
-// turns a confusing failure into a clear one.
-app.get(["/sw.js", "/manifest.webmanifest"], (_req, res) =>
+// sw.js is a FILE, not an SPA route. Without this, an unbuilt or missing sw.js
+// falls through to the catch-all below and comes back as index.html with
+// Content-Type: text/html — which surfaces as a baffling MIME type error at
+// registration ("the script has an unsupported MIME type") instead of an
+// obvious 404. Costs nothing and turns a confusing failure into a clear one.
+app.get("/sw.js", (_req, res) =>
   res.status(404).type("text/plain").end("not found — run `npm run build`")
 );
 

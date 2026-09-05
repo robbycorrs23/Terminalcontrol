@@ -250,11 +250,30 @@ needs you"*. Never the folder path, the command, the prompt, or any output. The
 payload is also end-to-end encrypted (RFC 8291) with keys your browser generated,
 so Apple's or Google's push service relays ciphertext it cannot read.
 
-**Configuration.** Nothing is required. Two knobs exist if you want them:
+### Naming each machine's app
+
+Because the workspace is per-machine, you'll often have FleetView installed for
+more than one — and identical tiles called "FleetView" on a Home Screen full of
+real shells is a genuinely bad idea. So each server declares an identity, which
+shows up in the app name, the icon colour, and the in-app top bar and tab title:
 
 | Var | Default | Notes |
 |---|---|---|
+| `FLEET_LABEL` | the machine's short hostname, lowercased | Home Screen caption, top bar, tab title. |
+| `FLEET_ICON_COLOR` | picked from the palette by hashing the label | One of `blue`, `violet`, `green`, `amber`, `red`, `teal`. The default already differs between machines; set it to choose deliberately. |
 | `FLEET_PUSH_CONTACT` | this repo's URL | The VAPID `sub` — who a push service contacts about this app server. Must be a `mailto:` or `https:` URL; Apple rejects anything else with `403 BadJwtToken`. |
+
+Set them where the server actually runs — for the auto-start service that means
+exporting them *before* `npm run service:install`, since a launchd/systemd unit
+inherits nothing from your shell (`scripts/install-service.js` bakes them in).
+
+⚠ **iOS caches an installed web app's name and icon at install time.** Changing
+either means deleting the app from the Home Screen and re-adding it on that
+device; a running server can't push the change.
+
+To change the palette itself, edit and re-run `scripts/make-icons.sh` (needs
+macOS `sips`, or swap in `rsvg-convert`) — the PNGs are committed artifacts, not
+a build step.
 
 The identity keypair is generated once at `~/.fleetview/vapid.json` (0600), and
 subscriptions live beside it in `~/.fleetview/push-subscriptions.json`. ⚠ Deleting

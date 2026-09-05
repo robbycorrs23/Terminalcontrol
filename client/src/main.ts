@@ -1,12 +1,13 @@
 import { Term, PaneInfo, PaneView, TermHost, displayName } from "./terminal";
 import { AgentChat } from "./agent-chat";
 import { play } from "./sound";
-import { setTabAttention } from "./tab";
+import { setTabAttention, setAppLabel } from "./tab";
 import { initTasks, applyRemoteTasks, closeTasksIfOpen } from "./tasks";
 import { getSettings, patchSettings, loadSettings, putPrefs, xtermTheme, xtermFontSize, FX_ORDER, Settings } from "./settings";
 import { initPush, enablePush, disablePush, pushActive, setBadge } from "./push";
 
 const grid = document.getElementById("grid")!;
+const brandEl = document.querySelector<HTMLElement>(".brand")!;
 const scrim = document.getElementById("scrim")!;
 const tray = document.getElementById("tray")!;
 const queueEl = document.getElementById("queue")!;
@@ -1939,3 +1940,22 @@ initTasks(); // task-list sidebar (tree arrives via the control socket)
 // prompts (see push.ts); applySettings() afterwards so the per-device checkbox
 // reflects the subscription we just confirmed rather than defaulting to off.
 void initPush(SESSION).then(applySettings);
+loadIdentity(); // name this machine in the top bar + tab title
+
+/**
+ * Ask the server which machine this is (see server/identity.js). One workspace
+ * = one machine, so with two of these open — a laptop's and a box's — the bar
+ * and tab strip need to say which host's shells you're looking at. Best-effort:
+ * on failure the UI just keeps the generic "FleetView" branding.
+ */
+async function loadIdentity() {
+  try {
+    const { label } = await fetch("/api/identity").then((r) => r.json());
+    if (!label) return;
+    brandEl.textContent = `▦ ${label}`;
+    brandEl.title = `FleetView on ${label}`;
+    setAppLabel(label);
+  } catch {
+    /* keep the default branding */
+  }
+}

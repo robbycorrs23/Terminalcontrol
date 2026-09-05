@@ -2,7 +2,24 @@
 // you notice even when FleetView isn't the focused tab. One entry point,
 // `setTabAttention`, driven from the attention queue in main.ts.
 
-const BASE_TITLE = "▦ FleetView";
+// The machine's label (see server/identity.js). Since one workspace = one
+// machine, a tab titled just "FleetView" is ambiguous the moment you have two
+// of them open — and these tabs contain shells on different hosts, so the tab
+// strip should say which. Set once at boot; falls back to plain "FleetView"
+// until /api/identity answers (or if it never does).
+let appLabel = "";
+export function setAppLabel(label: string) {
+  appLabel = label || "";
+  // Repaint the idle title immediately; an attention title will pick it up on
+  // the next setTabAttention() call.
+  if (!document.title.startsWith("(")) document.title = baseTitle();
+}
+function baseTitle() {
+  return appLabel ? `▦ ${appLabel}` : "▦ FleetView";
+}
+function suffix() {
+  return appLabel || "FleetView";
+}
 
 export type AttentionKind = "question" | "done" | "aborted";
 
@@ -32,7 +49,7 @@ let lastIconKey = "";
  * @param kind  its kind, or null when nothing is waiting
  */
 export function setTabAttention(count: number, name: string, kind: AttentionKind | null) {
-  document.title = count > 0 ? `(${count}) ${name} — FleetView` : BASE_TITLE;
+  document.title = count > 0 ? `(${count}) ${name} — ${suffix()}` : baseTitle();
 
   const key = count > 0 && kind ? kind : "idle";
   if (key === lastIconKey) return;
