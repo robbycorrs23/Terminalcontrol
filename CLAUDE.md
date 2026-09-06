@@ -71,6 +71,7 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/rich.ts` | post-render pass: charts, table→chart toggle, copy buttons, clipping |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
 | `client/src/push.ts` / `client/public/sw.js` | Web Push subscribe/badge / the service worker that shows notifications |
+| `server/gate.js` | optional passkey-auth reverse proxy (`fleetview-gate` service) that `tailscale serve` fronts instead of the app directly — a SEPARATE process from `server/index.js`, own port (`FLEET_GATE_PORT`, default 4290), own launchd/systemd unit (`com.fleetview.gate`). See Gotchas. |
 
 ## Key invariants / model (don't break these)
 - **tmux durability:** each pane is a detached `fleet_<id>` tmux session on a STABLE
@@ -210,6 +211,35 @@ re-run the check before changing a value or the order.
   one, so "the change didn't work" is usually "the tab wasn't reloaded". Confirm
   what's actually being served with
   `curl -s localhost:4280/ | grep -oE 'assets/index-[^"]+'`.
+- **`npm run service:install` fully REPLACES the baked env every time it runs —
+  nothing carries over from the plist it's overwriting.** `scripts/install-service.js`
+  only bakes `FLEET_PORT`/`FLEET_HOST`/`FLEET_ALLOWED_HOSTS`/`FLEET_LABEL`/
+  `FLEET_ICON_COLOR`/`FLEET_PUSH_CONTACT` from whatever's in *your current shell*
+  at the moment you run it. Re-running it from a plain shell (no exports) silently
+  drops all of them, even if a previous install had them set. The concrete failure
+  mode on a `tailscale serve`-fronted machine: `FLEET_ALLOWED_HOSTS` gets dropped →
+  `server/index.js`'s same-origin/CSRF guard (`sameOrigin()`, ~line 253) rejects the
+  tailnet `Host` header it now sees from the proxy → every request 403s with
+  `"forbidden: cross-origin"`, even though the server is up and healthy. Fix:
+  always re-supply every var you need on the same command line, e.g.
+  `FLEET_ALLOWED_HOSTS=<tailnet-host> FLEET_LABEL=<name> npm run service:install`.
+  Sanity-check what actually landed with
+  `grep -A1 FLEET_ALLOWED_HOSTS ~/Library/LaunchAgents/com.fleetview.server.plist`
+  (macOS) or the systemd unit's `Environment=` lines (Linux).
+- **A `tailscale serve`-fronted install is TWO independent services, not one** —
+  `com.fleetview.gate` (`server/gate.js`, default port 4290, what Tailscale actually
+  proxies to) and `com.fleetview.server` (`server/index.js`, default port 4280, the
+  real app; the gate reverse-proxies to it). Either can be up while the other is
+  down, and the symptoms don't obviously point at which: app server down but gate up
+  → gate returns its own "FleetView is unreachable through the gate" 502 (or, before
+  a fix landed in `c2d79a7`, the gate itself could crash-loop on that condition — a
+  failed WebSocket-upgrade proxy hands `proxy.on("error")` a raw `net.Socket` instead
+  of an `http.ServerResponse`, and calling `.writeHead()` on it threw uncaught and
+  took the whole gate process down on every reconnect attempt). A blank/white tab or
+  a gate-branded error means: check `com.fleetview.gate` AND `com.fleetview.server`
+  (or the Linux systemd equivalents) SEPARATELY — `launchctl list | grep fleetview` /
+  each one's own log (`~/Library/Logs/fleetview*.log` on macOS) — don't assume "the
+  server" is one process.
 
 ## Conventions
 - Small, single-purpose modules; match the surrounding style and comment density.
