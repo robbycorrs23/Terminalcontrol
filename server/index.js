@@ -574,13 +574,21 @@ app.get("/api/panes/:id/secret-status", (req, res) => {
 
 app.post("/api/panes/:id/secret", (req, res) => {
   const id = req.params.id;
-  const paneSession = registry.sessionOf(id);
-  if (!paneSession) return res.status(404).json({ error: "no such (live) pane" });
+  if (!registry.info(id)) return res.status(404).json({ error: "no such (live) pane" });
   const { name, value, ttlMs, session, stepUpToken } = req.body || {};
-  // Ownership: only the browser window that currently has this pane can
-  // inject into it — a paneId can't be replayed from an unrelated tab/window.
-  if (!session || session !== paneSession) {
-    return res.status(403).json({ error: "this window doesn't own that pane" });
+  // NOT gated on `session` matching the pane's original CREATOR session
+  // (registry.sessionOf(id)) — that was a holdover from before "one workspace
+  // per machine" (pane-registry.js) and added no real access control, since
+  // every window can already read/type into every pane once it's on the
+  // fleet. It only ever succeeded in blocking injection from any window OTHER
+  // than the one that happened to create the pane — which broke it entirely
+  // for a PWA-only setup, since an iOS cold launch mints a fresh session every
+  // time (main.ts) and can never equal an old pane's creator session. `session`
+  // is still required, just not compared to anything: it's what secrets.inject()
+  // records below so the secret auto-releases when THIS window disconnects
+  // (see SESSION_GRACE_MS) — it identifies the injecting window, not a permission.
+  if (!session) {
+    return res.status(400).json({ error: "missing session" });
   }
   // Step-up is OPTIONAL, not required: if the gate was never set up, or this
   // request bypassed it entirely (reaching FleetView's port directly is

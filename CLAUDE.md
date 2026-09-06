@@ -120,7 +120,16 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   window and still rides on the URL — it keys **ephemeral-secret release** (the
   window that authorised a secret is the one whose disconnect releases it, see
   `SESSION_GRACE_MS`) and nothing else. Don't reintroduce session filtering in
-  a list/broadcast path.
+  a list/broadcast path. That includes secret INJECTION itself: it used to
+  additionally require `session === registry.sessionOf(id)` (the pane's
+  original CREATOR session) before accepting a secret, which was a pre-"one
+  workspace" holdover — every window can already read/type into every pane, so
+  it added no real access control, it just broke injection from any window
+  other than whichever one happened to create the pane (fatal for a PWA-only
+  setup, since a cold launch mints a fresh session every time). Removed; a
+  `session` is still required on the request, just not compared to anything —
+  it only identifies which window to attribute the eventual disconnect-release
+  to.
 - **Agent panes survive restarts in two halves, and BOTH are needed.** The
   *conversation* is durable via `sdkSessionId` → `_ensureDriver` resumes it. The
   *visible log* is not: `pane.events` is an in-memory ring (`RING_BUFFER_SIZE`,
