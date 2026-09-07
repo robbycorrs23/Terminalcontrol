@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
 import { dirname, join, extname, resolve } from "node:path";
-import { mkdtempSync, writeFileSync, mkdirSync, statSync, existsSync, unlinkSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, statSync, existsSync, unlinkSync, chmodSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
 import { AgentManager } from "./agent-manager.js";
@@ -789,20 +789,59 @@ app.get("/manifest.webmanifest", (_req, res) => {
   res.type("application/manifest+json").set("Cache-Control", "no-cache").json(identity.manifest());
 });
 
-// One canonical URL per icon, whatever colour this machine is. Keeping the
-// paths stable means index.html, sw.js and gate.js's public allowlist never
-// have to know which palette entry is in play.
-for (const file of ["icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png"]) {
-  app.get(`/${file}`, (_req, res) => {
-    // no-cache, not immutable: the URL doesn't change when FLEET_ICON_COLOR
-    // does, so a cached copy would keep showing the old machine's colour.
-    res.set("Cache-Control", "no-cache").sendFile(identity.iconPath(file), (err) => {
-      if (err && !res.headersSent) res.status(404).type("text/plain").end("icon set missing — run scripts/make-icons.sh");
+// Colour-agnostic ALIASES, kept only for client/public/sw.js, which is a static
+// file and so can't know this machine's colour when it names a notification
+// icon. The URLs a platform CACHES (the manifest's icons and the
+// apple-touch-icon link) are colour-scoped instead — see identity.js's
+// iconHref. Don't move those back here: a stable URL is what made iOS keep
+// showing a stale Home Screen icon after the colour changed.
+for (const file of ["icon-192.png", "badge-96.png", "apple-touch-icon.png"]) {
+  app.get(`/${file}`, (_req, res, next) => {
+    const p = file === "badge-96.png" ? join(DIST, file) : identity.iconPath(file);
+    res.set("Cache-Control", "no-cache").sendFile(p, (err) => {
+      if (err && !res.headersSent) next();
     });
   });
 }
 
-app.use(express.static(DIST, { setHeaders: noStoreIndexHtml }));
+/**
+ * index.html, with this machine's apple-touch-icon patched in.
+ *
+ * iOS reads `<link rel="apple-touch-icon">` from the markup when you Add to
+ * Home Screen, and it is NOT part of the manifest — so it's the one icon
+ * reference that can't be expressed as server-side data. Rewriting it here
+ * keeps the built HTML colour-agnostic (nothing in the bundle knows about
+ * palettes) while still handing iOS a colour-scoped, cache-proof URL.
+ *
+ * Cached in memory against the file's mtime so this isn't a read per request,
+ * but still picks up a rebuild without a restart.
+ */
+let indexCache = { mtime: 0, html: "" };
+function sendIndexHtml(res) {
+  const file = join(DIST, "index.html");
+  res.setHeader("Cache-Control", "no-store"); // see noStoreIndexHtml's comment
+  try {
+    const mtime = statSync(file).mtimeMs;
+    if (mtime !== indexCache.mtime) {
+      const html = readFileSync(file, "utf8").replace(
+        /(<link\s+rel="apple-touch-icon"\s+href=")[^"]*(")/,
+        `$1${identity.iconHref("apple-touch-icon.png")}$2`
+      );
+      indexCache = { mtime, html };
+    }
+    res.type("html").send(indexCache.html);
+  } catch {
+    // Unbuilt dist: fall back to the plain file so the error the user sees is
+    // express's own "ENOENT", not a confusing empty 200.
+    res.sendFile(file);
+  }
+}
+
+// Ahead of express.static, and static's own index serving is disabled below, so
+// every route to the app document goes through sendIndexHtml.
+app.get(["/", "/index.html"], (_req, res) => sendIndexHtml(res));
+
+app.use(express.static(DIST, { index: false, setHeaders: noStoreIndexHtml }));
 
 // sw.js is a FILE, not an SPA route. Without this, an unbuilt or missing sw.js
 // falls through to the catch-all below and comes back as index.html with
@@ -813,7 +852,9 @@ app.get("/sw.js", (_req, res) =>
   res.status(404).type("text/plain").end("not found — run `npm run build`")
 );
 
-app.get("*", (_req, res) => res.sendFile(join(DIST, "index.html"), { headers: { "Cache-Control": "no-store" } }));
+// SPA catch-all. Goes through sendIndexHtml so a deep link (e.g. the #pane=
+// URL a tapped notification opens) gets the same patched document as "/".
+app.get("*", (_req, res) => sendIndexHtml(res));
 
 // --- HTTP + WebSocket wiring ---------------------------------------------
 const server = createServer(app);

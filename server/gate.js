@@ -262,15 +262,21 @@ proxy.on("error", (err, _req, res) => {
 const PUBLIC_PWA = new Set([
   "/manifest.webmanifest",
   "/icon-192.png",
-  "/icon-512.png",
-  "/icon-maskable-512.png",
   "/apple-touch-icon.png",
   "/badge-96.png",
   "/favicon.svg",
 ]);
 
+// Icons are colour-scoped per machine (/icons/<colour>/icon-192.png — see
+// server/identity.js), so this is a prefix rather than a fixed list. Narrow on
+// purpose: GET only, must end in .png, and no ".." so it can't be walked out of
+// the icons tree into something that isn't a logo.
+const isPublicIcon = (p) => /^\/icons\/[a-z0-9-]+\/[a-z0-9.-]+\.png$/.test(p) && !p.includes("..");
+
 app.use((req, res) => {
-  if (req.method === "GET" && PUBLIC_PWA.has(req.path)) return proxy.web(req, res);
+  if (req.method === "GET" && (PUBLIC_PWA.has(req.path) || isPublicIcon(req.path))) {
+    return proxy.web(req, res);
+  }
   if (!isLoggedIn(req)) {
     if (req.method === "GET" && req.headers.accept?.includes("text/html")) {
       return res.redirect("/gate/login");

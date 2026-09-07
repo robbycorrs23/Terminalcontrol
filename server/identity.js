@@ -73,6 +73,23 @@ export function createIdentity(publicDir) {
     color,
     /** Absolute path to one of the colour's icon files. */
     iconPath: (file) => join(dir, file),
+
+    /**
+     * Public URL for one of the colour's icons — COLOUR-SCOPED on purpose.
+     *
+     * These used to be stable paths (/icon-192.png) with the server choosing
+     * the bytes, which seemed tidy: nothing outside this module needed to know
+     * about palettes. It was wrong. iOS caches a Home Screen icon per URL, so
+     * a machine that had ever served blue from /apple-touch-icon.png kept
+     * showing blue after the colour changed — the install sheet previewed the
+     * new colour and the installed tile stayed stale. A URL that changes with
+     * the colour is the only thing that reliably beats that cache.
+     *
+     * These are plain files under dist/icons/<colour>/, so express.static
+     * already serves them; no route needed. gate.js allows the whole /icons/
+     * prefix unauthenticated for the same reason the manifest is allowed.
+     */
+    iconHref: (file) => `/icons/${color}/${file}`,
     /** The web app manifest, built fresh so the name follows FLEET_LABEL. */
     manifest: () => ({
       id: "/",
@@ -86,12 +103,16 @@ export function createIdentity(publicDir) {
       display: "standalone",
       background_color: "#0d1117",
       theme_color: "#0d1117",
-      // Stable URLs on purpose: the colour is a server-side decision, so
-      // nothing in index.html, sw.js or the gate allowlist has to know about it.
+      // Colour-scoped URLs — see iconHref above for why stable ones were a bug.
       icons: [
-        { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
-        { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
-        { src: "/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+        { src: `/icons/${color}/icon-192.png`, sizes: "192x192", type: "image/png" },
+        { src: `/icons/${color}/icon-512.png`, sizes: "512x512", type: "image/png" },
+        {
+          src: `/icons/${color}/icon-maskable-512.png`,
+          sizes: "512x512",
+          type: "image/png",
+          purpose: "maskable",
+        },
       ],
     }),
   };
