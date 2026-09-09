@@ -64,8 +64,11 @@ npm run doctor   # checks tmux / curl / claude; offers to install tmux
 npm run go       # build the client, then start the server
 ```
 
-Open **http://localhost:4280**. Click **+ Terminal**, pick a folder, and a shell opens
-there running `claude` (untick "run claude" for a plain shell).
+Open **http://localhost:4280**. Click **+ Terminal**, pick a folder, and a box opens
+there running `claude` — as a **chat pane** by default, or as a classic terminal if you
+untick "💬 Chat view". The "run on open" select also offers `codex` and a plain shell.
+The `💬`/`▤` button in the top bar flips **every** box between the two views at once,
+carrying each conversation across.
 
 > 🌐 A visual tour lives at **[schoppllc.github.io/Terminalcontrol](https://schoppllc.github.io/Terminalcontrol/)**.
 
@@ -78,6 +81,7 @@ Needs **Node.js** (macOS or Linux). Three external tools matter:
 | **tmux** | **durability** — terminals surviving a server restart / sleep | the headline "sleep-safe / survives restart" feature **won't work**; treat tmux as **required** |
 | **curl** | the attention hooks (glow / ding) | no alerts; usually preinstalled |
 | **`claude`** | running `claude` in a box | plain shells still work |
+| **`claude-work`** / **`codex-work`** | a *terminal* box running an agent (a `PATH` wrapper that sets the account's config dir) | chat boxes still work; terminal boxes fail with "command not found" |
 
 `npm run doctor` reports exactly what's missing with the install command for your
 platform, and can install tmux for you (interactive, or set `FLEET_AUTO_INSTALL=1`).

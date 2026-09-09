@@ -54,6 +54,10 @@
         <div id="queue" title="Terminals waiting on you"></div>
         <span id="followups"></span>
         <span id="recovery" title="Terminals that died or were set aside — click to bring back"></span>
+        <!-- Why a per-box view flip (the 💬 / ▤ button in a title bar) was
+             refused — mid-turn, plain shell, no conversation captured yet.
+             Transient; see flipView() in main.ts. -->
+        <span id="viewNote" class="current" hidden></span>
       </div>
 
       <!-- Settings: everything that isn't "+ Terminal". One dropdown on every
@@ -225,9 +229,7 @@
           <label class="runclaude">
             run
             <select id="agentSelect">
-              <option value="claude" selected>claude</option>
-              <option value="claude-work">claude (work)</option>
-              <option value="codex">codex</option>
+              <option value="claude-work" selected>claude (work)</option>
               <option value="codex-work">codex (work)</option>
               <option value="">plain shell</option>
               <optgroup label="SSH" id="sshOptGroup"></optgroup>
@@ -238,9 +240,7 @@
             and run
             <select id="sshAgentSelect">
               <option value="" selected>plain shell</option>
-              <option value="claude">claude</option>
               <option value="claude-work">claude (work)</option>
-              <option value="codex">codex</option>
               <option value="codex-work">codex (work)</option>
             </select>
             there

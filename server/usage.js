@@ -24,16 +24,19 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 const TIMEOUT_MS = 20000;
 
 /**
- * The accounts this machine could have. `configDir` null = that provider's
- * default dir. Mirrors accountConfigDirFor() in agent-manager.js — the same
- * `-work` suffix convention, resolved the same way.
+ * The accounts this machine could have. Mirrors accountConfigDirFor() in
+ * agent-manager.js — the same `-work` suffix convention, resolved the same
+ * way.
+ *
+ * WORK ONLY on this install: the personal claude/codex logins live on another
+ * machine, so their rows are deliberately absent here as well as from the
+ * picker. A `configDir: null` row (= that provider's default ~/.claude or
+ * ~/.codex) is what a personal account would look like if one came back.
  */
 export function knownAccounts() {
   const home = homedir();
   return [
-    { id: "claude", provider: "claude", account: "personal", label: "claude", configDir: null },
     { id: "claude-work", provider: "claude", account: "work", label: "claude (work)", configDir: join(home, ".claude-work") },
-    { id: "codex", provider: "codex", account: "personal", label: "codex", configDir: null },
     { id: "codex-work", provider: "codex", account: "work", label: "codex (work)", configDir: join(home, ".codex-work") },
   ];
 }

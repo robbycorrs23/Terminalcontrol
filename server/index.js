@@ -2,7 +2,7 @@ import express from "express";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
-import { dirname, join, extname, resolve } from "node:path";
+import { basename, dirname, join, extname, resolve } from "node:path";
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, statSync, existsSync, unlinkSync, chmodSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
@@ -331,6 +331,45 @@ app.post("/api/panes", (req, res) => {
   layouts.addRecent(info.cwd);
   broadcast(info.session, { t: "created", pane: info });
   res.json(info);
+});
+
+/**
+ * Flip ONE pane between terminal view and chat view.
+ *
+ * Per-pane on purpose: the two views are genuinely different processes (see
+ * pane-registry.js `flip`), so this is destroy-and-recreate-resuming-the-same-
+ * conversation, and that is a decision worth making one box at a time rather
+ * than sweeping the whole grid.
+ *
+ * Refuses rather than guessing — mid-turn, plain shell, raw ssh box, remote
+ * chat pane, or a terminal whose agent hasn't reported a session id yet. The
+ * reason goes back to the client so it can say why instead of doing nothing
+ * visible.
+ */
+app.post("/api/panes/:id/flip", (req, res) => {
+  const before = registry.info(req.params.id);
+  if (!before) return res.status(404).json({ error: "no such pane" });
+
+  // Captured BEFORE the flip: afterwards the old pane is gone and its grid
+  // position is unrecoverable. The new pane is created at the end of its
+  // manager's sequence, so without this the box jumps to the back of the grid.
+  const order = registry.list(before.session).map((p) => p.id);
+
+  const r = registry.flip(req.params.id);
+  if (!r.ok) return res.status(409).json({ ok: false, reason: r.reason });
+
+  // `replaces` tells the client this is the SAME box in a different view, so it
+  // reclaims the old one's grid slot instead of being appended at the end.
+  broadcast(before.session, { t: "closed", pane: r.id });
+  broadcast(r.info.session, { t: "created", pane: r.info, replaces: r.id });
+
+  const at = order.indexOf(r.id);
+  if (at !== -1) {
+    order[at] = r.info.id;
+    registry.reorder(before.session, order);
+  }
+
+  res.json({ ok: true, info: r.info, resumed: r.resumed });
 });
 
 // --- Filesystem browsing (for the folder picker) ---
@@ -714,7 +753,7 @@ app.post("/api/layouts/:name/open", (req, res) => {
 
   const created = [];
   for (const slot of layout.slots || []) {
-    const cmd = slot.cmd ?? layout.cmd ?? "claude";
+    const cmd = slot.cmd ?? layout.cmd ?? "claude-work";
     const kind = slot.kind ?? "pty";
     const pane = registry.create({ cwd: slot.cwd, cmd, session, kind });
     const info = registry.info(pane.id);
@@ -741,17 +780,42 @@ app.put("/api/tasks", (req, res) => {
 });
 
 // --- Hook endpoint (Claude Code / Codex phone home here) -----------------
+// Two shapes are accepted on purpose. The CURRENT hook (setup-hooks.js) puts
+// pane+kind in the query string and forwards the agent's own hook JSON as the
+// body, which is how we learn `session_id`. The OLDER hook put pane+kind in the
+// body and sent nothing else; a `claude` that is still running with that
+// version installed must keep working, so both are read.
 app.post("/hook", (req, res) => {
-  const { pane, kind } = req.body || {};
-  if (pane) registry.setAttention(pane, kind || "question");
+  const body = req.body || {};
+  const pane = req.query.pane || body.pane;
+  const kind = req.query.kind || body.kind;
+  if (pane) {
+    registry.setAttention(pane, kind || "question");
+    rememberSdkSession(pane, body);
+  }
   res.status(204).end();
 });
+
+/**
+ * Pin the Claude session id a PTY pane's agent is running under, so the pane can
+ * later be flipped into a chat pane that RESUMES that same conversation instead
+ * of starting a blank one (see pane-registry.js `flip`). Agent panes learn their
+ * id from the SDK driver directly and don't need this.
+ *
+ * Best-effort by nature: it only lands once the agent inside the shell has fired
+ * at least one hook, so a terminal pane opened and never prompted has no id yet.
+ */
+function rememberSdkSession(pane, body) {
+  const sid = body && typeof body.session_id === "string" ? body.session_id : "";
+  if (sid) ptys.setSdkSessionId(pane, sid);
+}
 
 // UserPromptSubmit hook forwards the agent's raw hook JSON here (the prompt is in
 // `.prompt`); we pin it as this window's "last input".
 app.post("/hook/prompt", (req, res) => {
   const id = req.query.pane;
   const prompt = req.body && typeof req.body.prompt === "string" ? req.body.prompt : "";
+  if (id) rememberSdkSession(id, req.body);
   if (id && prompt) {
     registry.setLastInput(id, prompt);
     broadcast(registry.sessionOf(id), { t: "input", pane: id, text: registry.lastInputOf(id) });

@@ -47,9 +47,10 @@ function stringifyBlockContent(content) {
  *   remote?: { target: string, port?: number, identityFile?: string, envPrefix?: string },
  *   onEvent: (ev: import("./event-schema.js").AgentEvent) => void,
  *   onSessionId: (id: string) => void,
+ *   onModel?: (model: string) => void,
  * }} opts
  */
-export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, onSessionId, onRateLimit }) {
+export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, onSessionId, onModel, onRateLimit }) {
   const promptQueue = new PushQueue();
   const pendingPermissions = new Map(); // requestId -> (decision: "allow"|"deny"|"always") => void
   const pendingQuestions = new Map(); // requestId -> (answers|null) => void
@@ -154,7 +155,13 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
   function handleMessage(msg) {
     switch (msg.type) {
       case "system":
-        if (msg.subtype === "init") onSessionId(msg.session_id);
+        if (msg.subtype === "init") {
+          onSessionId(msg.session_id);
+          // The init frame is the ONLY place the SDK names the model, so this
+          // is the one chance to learn it — there is no "which model am I"
+          // query. Optional so a driver wired without it still works.
+          if (msg.model) onModel?.(msg.model);
+        }
         break;
       case "assistant":
         for (const block of msg.message.content || []) {

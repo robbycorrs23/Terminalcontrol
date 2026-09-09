@@ -97,9 +97,7 @@ export class PtyManager extends EventEmitter {
         mkdirSync(dir, { recursive: true });
       } catch {}
       this.sock = join(dir, `tmux-${port}.sock`);
-      // Make the inner tmux transparent + snappy for TUIs like Claude Code.
-      spawnSync(this.tmuxBin, this._tx(["start-server"]), { stdio: "ignore" });
-      spawnSync(this.tmuxBin, this._tx(["set-option", "-g", "escape-time", "10"]), { stdio: "ignore" });
+      this._initTmuxGlobals();
       this._restore();
     }
 
@@ -199,6 +197,8 @@ export class PtyManager extends EventEmitter {
       color: p.color || "",
       name: p.name || "",
       createdAt: p.createdAt,
+      sdkSessionId: p.sdkSessionId || null,
+      agentMode: p.agentMode || "",
       sock: p.sock ?? null,
       dormant,
       sessionAlive: dormant ? !!p.sessionAlive : undefined,
@@ -234,6 +234,8 @@ export class PtyManager extends EventEmitter {
       color: m.color || "",
       name: m.name || "",
       createdAt: m.createdAt || Date.now(),
+      sdkSessionId: m.sdkSessionId || null,
+      agentMode: m.agentMode || "",
       sessionAlive: false,
       _intentional: false,
     };
@@ -349,9 +351,62 @@ export class PtyManager extends EventEmitter {
       { stdio: "ignore" }
     );
     // Make it transparent: no status bar, no prefix key stealing input.
-    for (const opt of [["status", "off"], ["prefix", "None"], ["prefix2", "None"]]) {
+    //
+    // `mouse on` is what makes the SCROLL WHEEL work, and it is not optional
+    // polish. tmux keeps the outer terminal in the alternate screen and
+    // repaints in place, so xterm.js's own 5000-line scrollback stays empty and
+    // the real history lives in tmux. With mouse off, xterm sees an alt buffer
+    // with no mouse tracking and falls back to "alternate scroll mode":
+    // wheel-up becomes cursor-up, which Claude Code's prompt reads as "cycle
+    // back through my previous inputs" — you scroll and your own prompts fly
+    // past instead of the output. With mouse on, tmux enables mouse reporting,
+    // xterm forwards the wheel as mouse events, and tmux scrolls its own
+    // history (auto-entering copy-mode) like a normal terminal.
+    //
+    // Tradeoff: tmux now owns click-drag, so a plain drag no longer makes a
+    // native browser text selection. Shift-drag still does (xterm.js bypasses
+    // mouse reporting while Shift is held) — the standard escape hatch.
+    for (const opt of [["status", "off"], ["prefix", "None"], ["prefix2", "None"], ["mouse", "on"]]) {
       spawnSync(this.tmuxBin, this._tx(["set-option", "-t", name, ...opt], sock), { stdio: "ignore" });
     }
+  }
+
+  /**
+   * Set the global tmux options every FleetView session should inherit, in ONE
+   * invocation, against a throwaway session.
+   *
+   * The obvious spelling — `start-server` followed by `set-option -g ...` —
+   * silently does nothing, which is what it used to do here: tmux's `exit-empty`
+   * defaults to ON, so a server with no sessions exits the instant `start-server`
+   * returns, and every following `set-option` dies with "no server running"
+   * straight into `stdio: "ignore"`. So the first option below is `exit-empty
+   * off`, set while a real session is holding the server open; after that the
+   * server survives empty and keeps the rest.
+   *
+   * The ordering also matters for `history-limit`: tmux fixes a pane's history
+   * size when the PANE IS CREATED, so setting it globally after a session exists
+   * is too late for that session. It has to be in place before any fleet_* session
+   * is spawned, which is exactly what this does. (2000, tmux's default, is only a
+   * couple of screens of a chatty agent.)
+   *
+   * Idempotent: safe to re-run on every server start, whether or not a tmux
+   * server with live fleet sessions is already up.
+   */
+  _initTmuxGlobals() {
+    const init = "__fleetview_init__";
+    spawnSync(
+      this.tmuxBin,
+      this._tx([
+        "new-session", "-d", "-s", init, "-x", "80", "-y", "24",
+        ";", "set-option", "-g", "exit-empty", "off",
+        ";", "set-option", "-g", "history-limit", "10000",
+        // Snappy Esc for TUIs like Claude Code — an Esc that waits to see if it
+        // was really an escape sequence feels broken in an agent's prompt.
+        ";", "set-option", "-g", "escape-time", "10",
+        ";", "kill-session", "-t", init,
+      ]),
+      { stdio: "ignore" }
+    );
   }
 
   _runStartup(pane) {
@@ -367,18 +422,32 @@ export class PtyManager extends EventEmitter {
     }, 350);
   }
 
-  create({ cwd, cmd, session } = {}) {
+  create({ cwd, cmd, session, order, sdkSessionId: resumeId, agentMode } = {}) {
     const id = randomUUID().slice(0, 8);
     const home = os.homedir();
     const dir = cwd && String(cwd).trim() ? String(cwd).replace(/^~/, home) : home;
-    const startup = cmd === undefined ? "claude" : cmd;
+    // undefined = caller expressed no preference, so use this machine's agent
+    // (the work account; `claude-work` is a PATH wrapper that sets
+    // CLAUDE_CONFIG_DIR). An explicit "" still means a plain shell.
+    const startup = cmd === undefined ? "claude-work" : cmd;
 
     const pane = {
       id,
       cwd: dir,
       cmd: startup,
       session: session || null,
-      order: this.seq++,
+      order: order ?? this.seq++,
+      // The Claude Code session id this shell's agent is running under, learned
+      // from the hooks (see setLastInput/setSdkSessionId and setup-hooks.js) —
+      // NOT something we can know at spawn time. It is what lets this pane be
+      // flipped into a chat pane that resumes the same conversation
+      // (pane-registry.js `flip`). null for a plain shell, or before the agent
+      // inside has phoned home once.
+      sdkSessionId: resumeId || null,
+      // Terminal panes have no permission-mode UI of their own — this is purely
+      // a stash so that flipping chat → terminal → chat comes back at the mode
+      // you were running at, instead of silently resetting to Ask.
+      agentMode: agentMode || "",
       pty: null,
       buffer: "",
       clients: new Set(),
@@ -650,6 +719,26 @@ export class PtyManager extends EventEmitter {
     return this._dormantInfo(pane);
   }
 
+  /**
+   * Record the Claude Code session id running inside this shell, as reported by
+   * a hook. Cheap and idempotent — hooks fire constantly, so this only writes
+   * state when the id actually changes.
+   */
+  setSdkSessionId(id, sid) {
+    const p = this.panes.get(id);
+    if (!p || !sid || p.sdkSessionId === sid) return;
+    p.sdkSessionId = sid;
+    this._persistState();
+  }
+
+  sdkSessionIdOf(id) {
+    return this.panes.get(id)?.sdkSessionId || null;
+  }
+
+  agentModeOf(id) {
+    return this.panes.get(id)?.agentMode || "";
+  }
+
   info(id) {
     const p = this.panes.get(id);
     if (!p) return null;
@@ -659,6 +748,9 @@ export class PtyManager extends EventEmitter {
       cwd: p.cwd,
       cmd: p.cmd,
       session: p.session,
+      // Exposed so registry.list() can sort ACROSS both managers — without it
+      // that sort silently compares undefined and does nothing.
+      order: p.order,
       attention: p.attention,
       working: p.work.hook || p.work.out,
       followUp: p.followUp,
@@ -704,6 +796,21 @@ export class PtyManager extends EventEmitter {
     for (const id of ids) {
       const p = this.panes.get(id);
       if (p) p.order = i++;
+    }
+    this._persistState();
+  }
+
+  /**
+   * Assign order from an id -> position map computed ACROSS both managers.
+   * `reorder` above can't do that job: it numbers only the ids it owns, 0..n,
+   * so a grid holding both kinds ends up with two independent sequences and
+   * every position collides with its opposite number. That was survivable when
+   * kinds rarely mixed; flipping a pane's view mixes them constantly.
+   */
+  applyOrder(orderById) {
+    for (const [id, n] of orderById) {
+      const p = this.panes.get(id);
+      if (p) p.order = n;
     }
     this._persistState();
   }

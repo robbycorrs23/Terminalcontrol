@@ -1,4 +1,4 @@
-import { Term, PaneInfo, PaneView, TermHost, displayName } from "./terminal";
+import { Term, PaneInfo, PaneView, TermHost, UsageRow, displayName } from "./terminal";
 import { AgentChat } from "./agent-chat";
 import { play } from "./sound";
 import { setTabAttention, setAppLabel } from "./tab";
@@ -140,6 +140,9 @@ const host: TermHost = {
     closeTerm(t.id);
   },
   onMinimize: (t) => minimize(t),
+  onFlipView: (t) => {
+    void flipView(t);
+  },
   onToggleFollowUp: (t) => {
     const on = !t.isFlagged();
     t.setFollowUp(on); // optimistic; server broadcast confirms
@@ -191,23 +194,42 @@ const host: TermHost = {
 };
 
 // ---- Grid -------------------------------------------------------------
-function addTerm(info: PaneInfo): PaneView {
+/**
+ * `at` is the grid slot to drop the box into, used when one pane REPLACES
+ * another in place — a view flip destroys the pane and builds a new one with a
+ * new id, and appending that to the end would make a box visibly jump to the
+ * bottom of the grid for what is supposed to look like the same box changing
+ * clothes. Everything else (a genuinely new terminal, a respawn) appends.
+ */
+function addTerm(info: PaneInfo, at?: number): PaneView {
   const existing = panes.get(info.id);
   if (existing) return existing;
   const t = info.kind === "agent" ? new AgentChat(info, host) : new Term(info, host);
   panes.set(info.id, t);
   t.cell.dataset.id = info.id; // lets us read grid order for layout autosave
-  grid.append(t.cell);
+  if (at !== undefined && at >= 0 && at < grid.children.length) {
+    grid.insertBefore(t.cell, grid.children[at]);
+  } else {
+    grid.append(t.cell);
+  }
   enableDrag(t);
+  t.setUsage(usageFor(t)); // a box created after the last usage broadcast
   reflow();
   if (info.attention?.waiting) enqueue(info.id, info.attention.kind || "question");
   if (info.followUp) setFlagged(info.id, true);
   return t;
 }
 
+// Where a just-removed box was sitting, so a pane that REPLACES it (a view
+// flip) can be dropped into the same slot. Only ever read by the very next
+// `created`, so one entry is all it needs to hold.
+let vacated: { id: string; at: number } | null = null;
+
 function removeTerm(id: string) {
   const t = panes.get(id);
   if (!t) return;
+  const at = [...grid.children].indexOf(t.cell);
+  if (at !== -1) vacated = { id, at };
   if (zoomed === t) unzoom();
   t.dispose();
   panes.delete(id);
@@ -229,12 +251,87 @@ async function closeTerm(id: string) {
 // switch to one full-height terminal per "page" (scroll for the next) instead
 // — see the (max-width: 640px) rules in styles.css for the row sizing.
 const mobileQuery = matchMedia("(max-width: 640px)");
+/** A pane's account row is keyed by its `cmd` ("claude-work" / "codex-work"). */
+function usageFor(t: PaneView): UsageRow | null {
+  return usageRows.find((r) => r.id === t.info.cmd) ?? null;
+}
+
+function pushUsageToPanes() {
+  for (const t of panes.values()) t.setUsage(usageFor(t));
+}
+
 function reflow() {
   const n = Math.max(grid.children.length, 1);
   const cols = mobileQuery.matches ? 1 : Math.ceil(Math.sqrt(n));
   grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
   for (const t of panes.values()) if (!minimized.has(t.id)) t.refit();
   reflowMobileOrder();
+}
+
+
+// ---- Per-pane view flip (terminal ⇄ chat) -------------------------------
+// The 💬 / ▤ button in each box's title bar. The picker's "💬 Chat view"
+// checkbox only decides what a NEW box becomes; this switches a box already on
+// the grid, which is a genuinely different operation: a chat pane is an
+// in-process SDK driver with no terminal behind it, and a terminal pane is a
+// tmux shell with no event stream. So the server tears the pane down and
+// re-creates it in the other kind, and what makes that a view switch rather
+// than a restart is that both halves resume the SAME Claude conversation by
+// session id, at the SAME permission mode (server/pane-registry.js `flip`).
+//
+// Which means it can legitimately fail, and saying why beats doing nothing
+// visible — the server returns a reason and this puts it in the top bar.
+const viewNote = document.getElementById("viewNote")!;
+let viewNoteTimer: number | undefined;
+
+const FLIP_REASON: Record<string, string> = {
+  busy: "it's mid-turn",
+  "not an agent pane": "it isn't running an agent",
+  "remote pane": "its agent runs on another host",
+  // The one users will actually hit: a terminal pane only learns its Claude
+  // session id when the agent inside fires a hook, so a box that hasn't been
+  // prompted yet has nothing to resume from.
+  "no conversation captured yet": "no conversation yet — send it a prompt first",
+  gone: "the box is gone",
+};
+
+function showViewNote(text: string) {
+  viewNote.textContent = "⇄ " + text;
+  viewNote.hidden = false;
+  clearTimeout(viewNoteTimer);
+  viewNoteTimer = setTimeout(() => (viewNote.hidden = true), 6000);
+}
+
+async function flipView(t: PaneView) {
+  const label = displayName(t.info);
+  // Terminal panes keep this in the title bar; chat panes moved it to the
+  // tools row above the composer — so search the whole box, not the title bar.
+  const btn = t.el.querySelector(".view") as HTMLButtonElement | null;
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/panes/${t.info.id}/flip`, { method: "POST" });
+    // A 404 here means the ROUTE is missing, not the pane: the server is still
+    // running code older than this bundle. Worth calling out by name — the
+    // server serving a new bundle while itself running old code is this
+    // project's most recurring trap, and "couldn't switch" sends you hunting
+    // for a bug that isn't there.
+    if (res.status === 404) {
+      showViewNote(`${label}: server is running older code — restart it`);
+      return;
+    }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.ok) {
+      showViewNote(`${label}: ${FLIP_REASON[body.reason] || body.reason || "couldn't switch"}`);
+      return;
+    }
+    // The box itself is replaced by the closed/created pair on the control
+    // socket, so there is nothing to re-render here.
+    if (body.resumed === false) showViewNote(`${label}: switched — started a fresh session`);
+  } catch {
+    showViewNote(`${label}: couldn't reach the server`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // Mobile-only visual ordering: terminals needing you float to the top of the
@@ -803,8 +900,11 @@ async function loadPrefs() {
 // desktop as well as mobile; opting back into the classic terminal is a
 // per-open, explicit uncheck. Existing boxes are unaffected — this only
 // decides what a NEWLY created box becomes.
+// This machine runs the WORK accounts only. The personal claude/codex logins
+// live on a different box, so neither the picker nor this whitelist knows
+// about them — see the note above remoteAgentCmd().
 function isAgentProfile(v: string): boolean {
-  return v === "claude" || v === "claude-work" || v === "codex" || v === "codex-work";
+  return v === "claude-work" || v === "codex-work";
 }
 function chatViewAvailable(cmd: string, remoteAgentCmd: string = ""): boolean {
   return isAgentProfile(cmd) || (isSshValue(cmd) && isAgentProfile(remoteAgentCmd));
@@ -1039,7 +1139,7 @@ function resolveRemoteTarget(value: string): RemoteTarget | null {
 }
 
 // ---- SSH: turning an agentSelect value into the real typed command --------
-// "claude" / "claude-work" / "codex" / "codex-work" / "" (plain shell) pass
+// "claude-work" / "codex-work" / "" (plain shell) pass
 // through unchanged — the option value IS the command, same as always. SSH
 // picks are encoded as "sshprofile:<name>" (a FleetView-managed profile,
 // resolved via its stored host/port/user/identityFile) or "sshhost:<alias>"
@@ -1048,7 +1148,7 @@ function resolveRemoteTarget(value: string): RemoteTarget | null {
 // there" row, only shown once an SSH pick is made) optionally names an agent
 // profile to launch on the REMOTE box. This function ONLY handles the
 // terminal-view case (a plain interactive process typed into a real shell —
-// see remoteAgentCmd() below for how each of the four profiles turns into
+// see remoteAgentCmd() below for how each agent profile turns into
 // what's actually typed remotely); the chat-view case is resolveRemoteTarget()
 // above, which never builds a shell string at all.
 function resolveCmd(value: string): string {
@@ -1079,7 +1179,7 @@ function buildSshCommand(p: SshProfile, agentCmd: string): string {
 // host, then falls back to an interactive login shell when the agent exits
 // (so quitting claude/codex doesn't just drop the ssh connection).
 //
-// claude/codex run as-is. The "-work" profiles can't rely on the local
+// The "-work" profiles can't rely on the local
 // `claude-work` wrapper script existing remotely (~/.local/bin/claude-work is
 // a local PATH convenience, not something any given remote box has) — instead
 // they set the same env var that script sets, inline: CLAUDE_CONFIG_DIR for
@@ -1090,9 +1190,7 @@ function buildSshCommand(p: SshProfile, agentCmd: string): string {
 // machine.
 function remoteAgentCmd(agentCmd: string): string {
   const runners: Record<string, string> = {
-    claude: "claude",
     "claude-work": 'CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude',
-    codex: "codex",
     "codex-work": 'CODEX_HOME="$HOME/.codex-work" codex',
   };
   const run = runners[agentCmd] || agentCmd;
@@ -1207,10 +1305,16 @@ function connectControl() {
         consumeDeepLink(); // panes only exist now — see the note on pendingDeepLink
         break;
       }
-      case "created":
+      case "created": {
         undormant(m.pane.id); // a respawn lands here — drop its recovery chip
-        addTerm(m.pane);
+        // A view flip broadcasts `closed` then `created` with `replaces` set to
+        // the old id, which is what lets the new box reclaim the old one's slot.
+        const slot = vacated;
+        vacated = null;
+        const at = slot !== null && slot.id === m.replaces ? slot.at : undefined;
+        addTerm(m.pane, at);
         break;
+      }
       case "closed":
         removeTerm(m.pane);
         break;
@@ -1232,6 +1336,11 @@ function connectControl() {
       case "usage":
         usageRows = m.usage || [];
         renderUsage();
+        pushUsageToPanes();
+        break;
+      // A pane's driver reported which model it resolved to (agent-manager.js).
+      case "model":
+        panes.get(m.pane)?.setModel(m.model);
         break;
       case "usage-reset":
         onUsageReset(m);
@@ -1482,9 +1591,9 @@ function renderSshOptions() {
     sshOptGroup.append(o);
   }
   // Re-selecting the same value after rebuilding options only "sticks" if it
-  // still exists (e.g. a profile that was just deleted falls back to "claude").
+  // still exists (e.g. a profile that was just deleted falls back to claude).
   agentSelect.value = keep;
-  if (agentSelect.value !== keep) agentSelect.value = "claude";
+  if (agentSelect.value !== keep) agentSelect.value = "claude-work";
   updateChatViewAvailability();
   updateSshRunRow();
 }
@@ -1641,25 +1750,18 @@ sshEdit.addEventListener("click", (e) => {
 // 5-hour bucket, so a row per box would repeat the same number N times.
 // Reading these costs no tokens (see server/usage.js), so the server polls on
 // a timer and also takes free pushes from live panes.
-type UsageWindow = { label: string; percent: number; resetsAt: number | null };
-type UsageRow = {
-  id: string;
-  label: string;
-  plan: string | null;
-  available: boolean;
-  primary: UsageWindow | null;
-  secondary: UsageWindow | null;
-  error: string | null;
-};
 
 const usageListEl = document.getElementById("usageList")!;
 const usageRefreshEl = document.getElementById("usageRefresh") as HTMLButtonElement;
 let usageRows: UsageRow[] = [];
 
 /** Colour by headroom, so a row that's about to bite reads as urgent. */
+// ONE ramp, shared with the usage rings in each chat pane's tools row
+// (usageLevel in agent-chat.ts). If these two ever disagree the same account
+// reads green on a ring and amber in this panel.
 function usageLevel(pct: number): string {
   if (pct >= 90) return "crit";
-  if (pct >= 70) return "warn";
+  if (pct >= 75) return "warn";
   return "ok";
 }
 

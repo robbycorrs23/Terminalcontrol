@@ -12,8 +12,16 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   Install: `brew install tmux` / `apt install tmux`.
 - **curl** — the Claude Code hooks use it to phone home. Usually preinstalled.
 - **`claude`** (Claude Code CLI) and/or **`codex`** (Codex CLI, `npm install -g
-  @openai/codex`) — for the per-box agents (the picker's "run on open" select
-  chooses claude / codex / plain shell).
+  @openai/codex`) — for the per-box agents. The picker's "run on open" select
+  chooses **claude (work) / codex (work) / plain shell**, plus an SSH optgroup;
+  a "💬 Chat view" checkbox decides whether the box becomes a chat pane or a
+  terminal pane. **This machine is work-accounts-only** — see the invariant
+  below.
+- **`~/.local/bin/claude-work` and `~/.local/bin/codex-work`** — one-line
+  wrappers that export `CLAUDE_CONFIG_DIR`/`CODEX_HOME` and exec the real CLI.
+  TERMINAL panes need these on `PATH` (a PTY pane's `cmd` is just typed into a
+  shell, so FleetView sets no env for it); CHAT panes don't, because
+  `agent-manager.js` sets the same vars itself.
 - macOS or Linux. `$SHELL` should be set (falls back to `/bin/zsh`; see
   `server/pty-manager.js`).
 
@@ -74,6 +82,21 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `server/gate.js` | optional passkey-auth reverse proxy (`fleetview-gate` service) that `tailscale serve` fronts instead of the app directly — a SEPARATE process from `server/index.js`, own port (`FLEET_GATE_PORT`, default 4290), own launchd/systemd unit (`com.fleetview.gate`). See Gotchas. |
 
 ## Key invariants / model (don't break these)
+- **tmux globals are set against a THROWAWAY session, not `start-server`.**
+  `_initTmuxGlobals()` looks roundabout and isn't: tmux's `exit-empty` defaults
+  to ON, so a server with no sessions dies the instant `start-server` returns and
+  every following `set-option -g` fails into `stdio:"ignore"` (which is exactly
+  what the old `escape-time` line did — silently nothing, for as long as it had
+  been there). Hence ONE chained invocation that creates a session, sets
+  `exit-empty off` FIRST, then the rest, then kills it. `history-limit`
+  additionally has to be in place before any `fleet_*` session exists, because
+  tmux fixes a pane's history when the PANE is created. `mouse on` is
+  load-bearing for scrolling, not polish: tmux keeps the outer terminal in the
+  alternate screen, so xterm.js's own scrollback stays empty, and with mouse off
+  xterm falls back to "alternate scroll mode" — wheel-up becomes cursor-up,
+  which Claude Code reads as "cycle back through previous inputs", so scrolling
+  replays your own prompts instead of the output. Cost: tmux owns click-drag, so
+  native text selection needs Shift-drag.
 - **tmux durability:** each pane is a detached `fleet_<id>` tmux session on a STABLE
   socket `~/.fleetview/tmux-<port>.sock` (NOT tmux's default `/tmp` socket, which the
   OS sweeps). Sessions outlive the server; on boot `PtyManager._restore` reattaches.
@@ -89,7 +112,13 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   on every server start: **Notification**→needs-you, **Stop**→done, **UserPromptSubmit**
   →pins the prompt. All no-op unless `$FLEET_PANE_ID` is set (i.e., inside a FleetView
   shell). Stripped-and-re-added idempotently (marker = `FLEET_PANE_ID`).
-  `setup-codex-hooks.js` does the same into `~/.codex/hooks.json`, mapping Codex's
+  The Notification/Stop hooks now POST pane+kind in the QUERY STRING and forward
+  Claude's own hook JSON as the body, because that body carries `session_id` —
+  the only channel by which a tmux-hosted `claude` ever tells us which
+  conversation it is running, and therefore a hard prerequisite for flipping a
+  terminal pane into a chat pane. `/hook` still accepts the older body-only
+  `{pane, kind}` form so a `claude` already running with the previous hook keeps
+  working. `setup-codex-hooks.js` does the same into `~/.codex/hooks.json`, mapping Codex's
   **PermissionRequest**→needs-you, **Stop**→done, **UserPromptSubmit**→pins the
   prompt (same `.prompt` field name Claude Code uses, so `/hook/prompt` needs no
   agent-specific branching). Unlike Claude Code, Codex requires non-managed command
@@ -145,6 +174,54 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   every agent pane's live driver — including, if you're working from inside a
   FleetView agent pane, your own session. Terminal panes are tmux-backed and
   don't care.
+- **Work accounts only on this install.** The personal `claude`/`codex` logins
+  live on another machine, so the two personal picker options are gone and
+  `isAgentProfile()` (`client/src/main.ts`), `knownAccounts()` (`server/usage.js`)
+  and `AGENT_PROFILES` (`server/pane-registry.js`) each list ONLY
+  `claude-work`/`codex-work`. Defaults follow (`pty-manager.js`'s startup
+  fallback, `index.js`'s layout-restore fallback, the picker's `selected`
+  option). The server still keys the account purely off the `-work` SUFFIX
+  (`accountConfigDirFor`), so re-adding a personal account means re-adding
+  those list entries, not rewriting the mechanism. `~/.claude`/`~/.codex` are
+  untouched — nothing here deletes a login, it just stops offering it.
+- **Per-pane view flip (terminal ⇄ chat).** The `💬`/`▤` button in each box's
+  TITLE BAR hits `POST /api/panes/:id/flip`. Deliberately per-pane, not a
+  whole-window sweep. This CANNOT be a re-render: a chat pane is an in-process
+  SDK driver with no terminal behind it, and a terminal pane is a tmux shell
+  with no event stream. So `registry.flip()` destroys the pane and re-creates
+  it in the other kind, and the only thing making that a view switch rather
+  than a restart is that both halves **resume the same Claude conversation, at
+  the same permission mode**:
+  - *Session id* — chat panes learn theirs from the SDK driver, terminal panes
+    from the hook JSON that `setup-hooks.js` now forwards (`session_id`),
+    stored as `pane.sdkSessionId` in BOTH managers.
+  - *Permission mode* — carried BOTH ways or a chat→terminal→chat round trip
+    silently resets an Auto pane to Ask. Chat panes own `mode`; terminal panes
+    stash it in `pane.agentMode` and start `claude` at it via
+    `--permission-mode`. The chat "default" (Ask) has NO flag spelling (it is
+    the CLI's default), and any mode outside `CLI_PERMISSION_MODES` is dropped
+    rather than passed through — an invalid value makes `claude` exit at
+    startup and the box just sits there empty.
+
+  Consequences worth keeping: a terminal pane whose agent hasn't fired a hook
+  yet has no id and is REFUSED rather than flipped into a blank conversation; a
+  mid-turn pane is refused rather than interrupted; plain shells, raw ssh boxes
+  and remote chat panes are refused; codex flips but starts fresh
+  (`resumed:false`) because its resume path here is unverified. Every refusal
+  is reported back and surfaced in `#viewNote` — silently doing half the job is
+  the failure mode to avoid.
+
+  **Keeping a flipped box in its grid slot needs three separate things**, and it
+  visibly teleports if any one is missing: (1) `registry.list()` sorts across
+  BOTH managers — it used to concatenate, so every pty pane sorted before every
+  agent pane whatever their `order`, which needs `order` on `info()` to work at
+  all; (2) `registry.reorder()` numbers ONE shared sequence via `applyOrder()`,
+  because each manager's own `reorder` numbers only its own ids 0..n and mixed
+  grids therefore collided (the "known limitation" in that file's header, which
+  flipping triggers constantly); (3) the route captures grid order BEFORE the
+  flip — afterwards the old pane's position is unrecoverable — and broadcasts
+  `created` with `replaces: <oldId>` so the client reclaims the old slot instead
+  of appending.
 - **Tasks** are one global tree in `tasks.json`, broadcast to ALL windows on change.
 - **Web Push / PWA** (phone notifications — the only alert that works with the app
   closed). Four things here are load-bearing and easy to undo by accident:
@@ -183,6 +260,48 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   at build time. iOS caches name+icon at install, so changes need a re-add.
 
 ## Rich chat view (agent panes)
+
+- **The tools row** (`.chat-tools`, between `.chat-log` and `.chat-input`) is the
+  one home for pane-level controls: attach / view-flip / secret / permission
+  mode on the left, model badge + jump-to-latest + stop + usage rings on the
+  right. Four of those MOVED here from the title bar or the input bar, so:
+  `.mode-sel`'s CSS had to be re-scoped off `.term .title`; the work/remote
+  badges re-anchored to `.badge-slot` (they used to hang off `.mode-sel`);
+  `main.ts`'s `flipView()` looks up `.view` on `t.el`, not `t.titleBar`
+  (terminal panes still keep theirs in the title bar); the secret popover gets
+  `.spop.up` because its anchor is now at the BOTTOM of the box, with a
+  `max-height` guard since `.term` is `overflow:hidden` and would otherwise clip
+  it in an unzoomed grid box; and `.chat-tools` had to join the click-to-zoom
+  exclusion list alongside `.ctl`/`.chat-input`.
+- **On mobile the row collapses behind `☰`** in the composer (`.chat-menu`,
+  phone-only), opening as a WRAPPED row above the input rather than a floating
+  popover — `.term` is `overflow:hidden` and would clip one. One exception:
+  while the pane is busy the ■ stays visible outside the menu
+  (`.term.busy:not(.tools-open)`), because a control you need urgently must not
+  be two taps away. ⚠️ The `.term .ctl { width:44px; height:40px }` mobile
+  touch-target rule at ~line 950 is DEAD — it precedes the base `.term .ctl`
+  rule (~1252) at equal specificity, and a media query adds none, so source
+  order overrides it and icon buttons render 20×18 on phones. Only
+  `.ctl.attach` escapes, via the extra class. The tools row re-states the
+  sizing at a winning specificity; the general case is still broken.
+- **Stop (■)** sends `{t:"interrupt"}`, which the server and both drivers always
+  understood — nothing had ever sent it, so a chat pane could not cancel a
+  running turn at all. Visible only while the pane is working (`setBusy`).
+- **Usage rings** are a *meter* (one ratio against a limit), not a pie. The
+  percentage is ALWAYS drawn as text in normal ink: status colour is the
+  glanceable second cue, never the only one — which matters because the amber
+  step is deliberately sub-3:1 on the light surface. Thresholds live in ONE
+  ramp (`usageLevel()` in both `main.ts` and `agent-chat.ts`: crit ≥90, warn
+  ≥75) and the colours are `--use-ok/warn/crit`, fixed rather than themed, and
+  deliberately NOT `--waiting` — that already means "needs you", and one hue
+  must not carry two meanings. A pane finds its row by `usageRow.id ===
+  pane.cmd`; remote panes show none, since their agent bills another machine's
+  account.
+- **The model badge** needs the only new server plumbing here: the SDK names the
+  model *only* in its `init` frame, so `claude-driver.js` forwards it via
+  `onModel`, `agent-manager.js` persists it and broadcasts `{t:"model"}`. Codex
+  reports none, so the badge stays hidden rather than guessing.
+
 
 Agent panes render Markdown, not terminal bytes, so a reply can carry real
 structure instead of a wall of lines. Three things are worth knowing:

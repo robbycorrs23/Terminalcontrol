@@ -120,6 +120,7 @@ export class AgentManager {
       name: p.name,
       createdAt: p.createdAt,
       mode: p.mode,
+      model: p.model || null,
       remote: p.remote || null,
     }));
     writeFileSync(this.stateFile, JSON.stringify(records, null, 2));
@@ -192,6 +193,15 @@ export class AgentManager {
           this._persist();
         }
       },
+      // Which model this session actually resolved to. Persisted so a restored
+      // pane can label itself before its driver has started, and broadcast so
+      // the badge updates without waiting for the next pane-list refresh.
+      onModel: (model) => {
+        if (!model || pane.model === model) return;
+        pane.model = model;
+        this._persist();
+        this.broadcast(pane.session, { t: "model", pane: pane.id, model });
+      },
       // Limits are per-ACCOUNT, so this is keyed by cmd ("claude" / "claude-work"
       // / "codex" / "codex-work") — the same string accountConfigDirFor() reads —
       // not by pane id. Whoever consumes it is watching accounts, not boxes.
@@ -243,7 +253,7 @@ export class AgentManager {
 
   // ---- Creation / lifecycle, mirrors PtyManager's surface ---------------
 
-  create({ cwd, cmd, session, remote }) {
+  create({ cwd, cmd, session, remote, order, sdkSessionId, mode }) {
     const provider = cmd.startsWith("codex") ? "codex" : "claude";
     const id = randomUUID().slice(0, 8);
     const home = homedir();
@@ -259,8 +269,14 @@ export class AgentManager {
       // host instead of locally — see ssh-remote-agent.js / the plan.
       remote: sanitizeRemote(remote),
       session: session || null,
-      order: this.seq++,
-      sdkSessionId: null,
+      order: order ?? this.seq++,
+      // Normally null — the driver reports its own id on first connect. A value
+      // here means this pane was flipped over from a terminal pane
+      // (pane-registry.js `flip`) and should RESUME that conversation rather
+      // than open a blank one; _ensureDriver picks it up via
+      // _resumableSessionId, which also validates it against this account's
+      // transcripts and quietly drops it if it isn't there.
+      sdkSessionId: sdkSessionId || null,
       driver: null,
       events: [],
       clients: new Set(),
@@ -271,7 +287,12 @@ export class AgentManager {
       name: "",
       createdAt: Date.now(),
       status: "idle",
-      mode: "default",
+      // Normally "default". A value here means this pane was flipped over from
+      // a terminal pane and is restoring the permission mode it was last run
+      // at — losing that on a view switch silently downgrades an Auto pane back
+      // to Ask, which is exactly the kind of quiet regression a "view" toggle
+      // must not cause.
+      mode: mode || "default",
     };
     this.panes.set(id, pane);
     this._persist();
@@ -433,6 +454,10 @@ export class AgentManager {
 
   // ---- Generic pane metadata, same method names/shapes as PtyManager ----
 
+  sdkSessionIdOf(id) {
+    return this.panes.get(id)?.sdkSessionId || null;
+  }
+
   info(id) {
     const p = this.panes.get(id);
     if (!p) return null;
@@ -442,6 +467,8 @@ export class AgentManager {
       cwd: p.cwd,
       cmd: p.cmd,
       session: p.session,
+      // See PtyManager.info — needed for registry.list()'s cross-manager sort.
+      order: p.order,
       attention: p.attention,
       working: p.status === "working",
       followUp: p.followUp,
@@ -450,6 +477,7 @@ export class AgentManager {
       name: p.name || "",
       createdAt: p.createdAt,
       mode: p.mode || "default",
+      model: p.model || null,
       remote: p.remote || null,
     };
   }
@@ -484,6 +512,21 @@ export class AgentManager {
     for (const id of ids) {
       const p = this.panes.get(id);
       if (p) p.order = i++;
+    }
+    this._persist();
+  }
+
+  /**
+   * Assign order from an id -> position map computed ACROSS both managers.
+   * `reorder` above can't do that job: it numbers only the ids it owns, 0..n,
+   * so a grid holding both kinds ends up with two independent sequences and
+   * every position collides with its opposite number. That was survivable when
+   * kinds rarely mixed; flipping a pane's view mixes them constantly.
+   */
+  applyOrder(orderById) {
+    for (const [id, n] of orderById) {
+      const p = this.panes.get(id);
+      if (p) p.order = n;
     }
     this._persist();
   }

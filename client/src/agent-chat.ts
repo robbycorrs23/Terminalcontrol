@@ -1,4 +1,4 @@
-import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, setBusyClass } from "./terminal";
+import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, setBusyClass, UsageRow, UsageWindow } from "./terminal";
 import { AgentEvent, AgentQuestion } from "./agent-events";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown } from "./markdown";
@@ -51,6 +51,96 @@ function toolDetail(input: unknown): string {
  * zoom, tray, drag, and attention-queue code needs zero changes to host
  * this alongside terminal panes — see terminal.ts's `PaneView` doc comment.
  */
+/**
+ * Turn a model id into something that fits a badge: "claude-opus-4-5-20260315"
+ * -> "Opus 4.5". Falls back to the raw id minus the vendor prefix and date
+ * suffix, so an unrecognised model still reads as something rather than
+ * vanishing — the full id is always on the title attribute.
+ */
+function shortModel(id: string): string {
+  const m = /(opus|sonnet|haiku)[-_]?(\d+)(?:[-.](\d+))?/i.exec(id);
+  if (!m) return id.replace(/^claude-/, "").replace(/-\d{8}$/, "");
+  const name = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+  return m[3] ? `${name} ${m[2]}.${m[3]}` : `${name} ${m[2]}`;
+}
+
+/** "5-hour" -> "5h", "7-day" -> "7d". Codex labels are data-driven, so fall back. */
+function winShort(label: string): string {
+  const m = /^(\d+)[-\s]*(hour|day|week|min)/i.exec(label);
+  if (!m) return label.slice(0, 3);
+  return m[1] + m[2][0].toLowerCase();
+}
+
+/**
+ * A usage window as a small ring meter. This is the "single ratio against a
+ * limit" case, so it is a meter, not a pie — and the percentage is ALWAYS
+ * rendered in normal ink beside/inside the ring, never conveyed by colour
+ * alone. That matters twice over: status colour must carry a label to be
+ * accessible, and the amber step is deliberately low-contrast on a light
+ * surface, so the numeral is what stays readable.
+ */
+const RING_NS = "http://www.w3.org/2000/svg";
+
+function usageRing(win: UsageWindow): HTMLElement {
+  const size = 26;
+  const stroke = 3;
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, Math.round(win.percent)));
+
+  const wrap = el("span", "ring " + usageLevel(pct));
+  const svg = document.createElementNS(RING_NS, "svg");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  svg.setAttribute("aria-hidden", "true"); // the text below carries it for AT
+
+  const mk = (cls: string, dash?: string) => {
+    const c = document.createElementNS(RING_NS, "circle");
+    c.setAttribute("cx", String(size / 2));
+    c.setAttribute("cy", String(size / 2));
+    c.setAttribute("r", String(r));
+    c.setAttribute("fill", "none");
+    c.setAttribute("stroke-width", String(stroke));
+    c.setAttribute("class", cls);
+    if (dash) {
+      c.setAttribute("stroke-dasharray", dash);
+      c.setAttribute("stroke-linecap", "round");
+      // start at 12 o'clock instead of 3
+      c.setAttribute("transform", `rotate(-90 ${size / 2} ${size / 2})`);
+    }
+    return c;
+  };
+  svg.append(mk("ring-track"));
+  if (pct > 0) svg.append(mk("ring-fill", `${(pct / 100) * circ} ${circ}`));
+
+  const num = el("b", "ring-num");
+  num.textContent = String(pct);
+  const tag = el("i", "ring-tag");
+  tag.textContent = winShort(win.label);
+
+  const face = el("span", "ring-face");
+  face.append(svg, num);
+  wrap.append(face, tag);
+  wrap.title =
+    `${win.label}: ${pct}% used` + (win.resetsAt ? ` · resets ${resetAt(win.resetsAt)}` : "");
+  return wrap;
+}
+
+/** Same thresholds as the settings panel's bars — one shared ramp (main.ts). */
+function usageLevel(pct: number): string {
+  if (pct >= 90) return "crit";
+  if (pct >= 75) return "warn";
+  return "ok";
+}
+
+function resetAt(at: number): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
 export class AgentChat implements PaneView {
   id: string;
   info: PaneInfo;
@@ -66,6 +156,11 @@ export class AgentChat implements PaneView {
   private isCodex: boolean;
   private isRemote: boolean;
   private inputEl: HTMLTextAreaElement;
+  private toolsEl!: HTMLElement;
+  private stopBtn!: HTMLButtonElement;
+  private jumpBtn!: HTMLButtonElement;
+  private modelEl!: HTMLElement;
+  private usageEl!: HTMLElement;
   private ws?: WebSocket;
   private reconnectTimer?: number;
   private disposed = false;
@@ -112,7 +207,6 @@ export class AgentChat implements PaneView {
       `</select>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
-      `<button class="ctl secret" title="Give this chat a secret (never saved to chat memory)">🔒</button>` +
       `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
@@ -141,12 +235,11 @@ export class AgentChat implements PaneView {
         `<option value="auto">Auto</option>` +
         `<option value="full-access">Full Access</option>`;
     }
-    // Right side, immediately before the flag button — grouped with the
-    // other pane-level (not per-message) controls, rather than crowding the
-    // name on the left. Written in the HTML string next to .path above only
-    // because that's where its <option> list was easiest to author; this
-    // moves the actual node (not a clone) to where it's meant to render.
-    this.titleBar.querySelector(".flag")!.before(this.modeSel);
+    // Authored in the title-bar HTML string above only because that is where
+    // its <option> list was easiest to write; it is MOVED (not cloned) into the
+    // tools row below, next to the other pane-level controls. Detach it here so
+    // the title bar is left with just name + flag/min/close.
+    this.modeSel.remove();
     this.setModeUI(info.mode || (this.isCodex ? "auto" : "default"));
     // Not `.ctl` (which enableDrag() in main.ts already excludes from the
     // drag handle) — that class also carries Term's 20x18 icon-button
@@ -177,7 +270,7 @@ export class AgentChat implements PaneView {
       badge.src = "/didit-logo-white.png";
       badge.alt = "Work account";
       badge.title = "Work account";
-      this.modeSel.before(badge);
+      this.badgeSlot.append(badge);
     }
     // Remote (ssh) panes: claude/codex is running on another host, not here
     // (see server/ssh-remote-agent.js) — a small text badge, same slot/sizing
@@ -188,7 +281,7 @@ export class AgentChat implements PaneView {
       const badge = el("span", "remote-badge");
       badge.textContent = "⇢ " + info.remote.target;
       badge.title = "Running on " + info.remote.target;
-      this.modeSel.before(badge);
+      this.badgeSlot.append(badge);
     }
 
     const cwdline = el("div", "cwdline");
@@ -200,17 +293,70 @@ export class AgentChat implements PaneView {
     this.logEl = el("div", "chat-log");
     this.statusEl = el("div", "status-line");
     this.statusEl.hidden = true;
+    // ---- Tools row ------------------------------------------------------
+    // One home for every pane-level control, directly above the composer:
+    // actions on the left (attach, view flip, secret, permission mode), live
+    // state on the right (model, jump-to-latest, stop, usage). These used to be
+    // split between the title bar and the input bar — but a title bar already
+    // carrying a name, a drag handle and four window controls has no room for
+    // state, and a control you reach for WHILE typing belongs next to where you
+    // type.
+    this.toolsEl = el("div", "chat-tools");
+
+    const attachBtn = el("button", "ctl attach") as HTMLButtonElement;
+    attachBtn.textContent = "📎";
+    attachBtn.title = "Add file(s)";
+    const viewBtn = el("button", "ctl view") as HTMLButtonElement;
+    viewBtn.textContent = "▤";
+    viewBtn.title = "Switch this box to terminal view";
+    const secretBtn = el("button", "ctl secret") as HTMLButtonElement;
+    secretBtn.textContent = "🔒";
+    secretBtn.title = "Give this chat a secret (never saved to chat memory)";
+
+    this.modelEl = el("span", "model-badge");
+    this.modelEl.hidden = true;
+    this.jumpBtn = el("button", "ctl jump") as HTMLButtonElement;
+    this.jumpBtn.textContent = "↓";
+    this.jumpBtn.title = "Jump to latest";
+    this.jumpBtn.hidden = true;
+    // Interrupt. Until this existed a chat pane could not cancel a running turn
+    // at all: no softkeys, no PTY, so no Esc to send. The server and both
+    // drivers already understood {t:"interrupt"} — nothing was sending it.
+    this.stopBtn = el("button", "ctl stop") as HTMLButtonElement;
+    this.stopBtn.textContent = "■";
+    this.stopBtn.title = "Stop this turn";
+    this.stopBtn.hidden = true;
+    this.usageEl = el("span", "use-rings");
+
+    this.toolsEl.append(
+      attachBtn,
+      viewBtn,
+      secretBtn,
+      this.modeSel,
+      this.modelEl,
+      el("span", "spacer"),
+      this.jumpBtn,
+      this.stopBtn,
+      this.usageEl
+    );
+    if (info.model) this.setModel(info.model);
+
     const inputBar = el("div", "chat-input");
     this.inputEl = document.createElement("textarea");
     this.inputEl.rows = 1;
     this.inputEl.placeholder = "Message…";
-    const attachBtn = el("button", "chat-attach");
-    attachBtn.textContent = "📎";
-    attachBtn.title = "Add file(s)";
     const sendBtn = el("button", "chat-send");
     sendBtn.textContent = "Send";
-    inputBar.append(attachBtn, this.inputEl, sendBtn);
-    chat.append(this.logEl, this.statusEl, inputBar, workingOverlay());
+    // Phone-only (CSS decides): the tools row is wider than a 390px composer
+    // can spare, so on mobile it collapses behind this and opens as a wrapped
+    // row above the input. Lives in the input bar so it sits where the old
+    // attach button did — thumb-reachable, next to what it acts on.
+    const menuBtn = el("button", "chat-menu") as HTMLButtonElement;
+    menuBtn.textContent = "☰";
+    menuBtn.title = "Tools";
+    menuBtn.setAttribute("aria-label", "Tools");
+    inputBar.append(menuBtn, this.inputEl, sendBtn);
+    chat.append(this.logEl, this.statusEl, this.toolsEl, inputBar, workingOverlay());
 
     this.el.append(this.titleBar, cwdline, this.pinnedEl, chat);
     this.cell.append(this.el);
@@ -224,15 +370,48 @@ export class AgentChat implements PaneView {
     // can't read it (see the plan: a real fix means scp'ing bytes to the
     // remote host instead, not done here). Hide, don't wire — a visible but
     // silently-broken button would be worse than no button.
-    const secretBtn = this.titleBar.querySelector(".secret") as HTMLElement;
     if (this.isRemote) {
       secretBtn.hidden = true;
       attachBtn.hidden = true;
     } else {
       attachSecretPopover(secretBtn, this.el, host, this);
+      // The popover defaults to hanging under the title bar; its anchor now
+      // lives at the BOTTOM of the box, so open it upward instead.
+      this.el.querySelector(".spop")?.classList.add("up");
       wireFilePicker(attachBtn, this.el, (files) => void this.attachFiles(files));
       wireFileDrop(this.el, (files) => void this.attachFiles(files));
     }
+
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.el.classList.toggle("tools-open");
+    });
+    // Any button in the row finishes the job it was opened for, so close after
+    // it. The mode <select> is excluded — picking a mode is the whole action
+    // and the row collapsing out from under an open dropdown is jarring.
+    this.toolsEl.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest(".ctl")) this.el.classList.remove("tools-open");
+    });
+
+    viewBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      host.onFlipView(this);
+    });
+    this.stopBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.wsSend({ t: "interrupt" });
+    });
+    this.jumpBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.logEl.scrollTop = this.logEl.scrollHeight;
+      this.jumpBtn.hidden = true;
+    });
+    // Offer the jump button only when it would actually do something. 24px of
+    // slack keeps it from flickering on during momentum scrolling at the bottom.
+    this.logEl.addEventListener("scroll", () => {
+      const room = this.logEl.scrollHeight - this.logEl.scrollTop - this.logEl.clientHeight;
+      this.jumpBtn.hidden = room < 24;
+    });
 
     sendBtn.addEventListener("click", () => this.submit());
     this.inputEl.addEventListener("keydown", (e) => {
@@ -247,7 +426,7 @@ export class AgentChat implements PaneView {
     // Click the box (outside controls/input) opens/zooms it, same as Term.
     this.el.addEventListener("click", (e) => {
       const tgt = e.target as HTMLElement;
-      if (tgt.closest(".ctl") || tgt.closest(".chat-input")) return;
+      if (tgt.closest(".ctl") || tgt.closest(".chat-input") || tgt.closest(".chat-tools")) return;
       host.onOpen(this);
     });
 
@@ -869,6 +1048,37 @@ export class AgentChat implements PaneView {
   }
   setBusy(on: boolean) {
     setBusyClass(this.el, on);
+    // Only offer to stop something that is actually running.
+    if (this.stopBtn) this.stopBtn.hidden = !on;
+  }
+
+  /**
+   * Render this pane's account usage. A remote pane deliberately shows nothing:
+   * its agent runs on another host against THAT machine's account, so the local
+   * numbers would be confidently wrong.
+   */
+  setUsage(row: UsageRow | null) {
+    this.usageEl.textContent = "";
+    if (!row || !row.available || this.isRemote) {
+      this.usageEl.hidden = true;
+      return;
+    }
+    const wins = [row.primary, row.secondary].filter(Boolean) as UsageWindow[];
+    if (!wins.length) {
+      this.usageEl.hidden = true;
+      return;
+    }
+    for (const w of wins) this.usageEl.append(usageRing(w));
+    this.usageEl.hidden = false;
+  }
+
+  /** Which model this session resolved to; hidden until the driver says. */
+  setModel(model: string) {
+    if (!model) return;
+    this.info.model = model;
+    this.modelEl.textContent = shortModel(model);
+    this.modelEl.title = model;
+    this.modelEl.hidden = false;
   }
   isFlagged(): boolean {
     return this.el.classList.contains("flagged");

@@ -21,6 +21,10 @@ export interface PaneInfo {
   color?: string;
   name?: string; // user-chosen display name; ""/absent = show the cwd basename
   createdAt: number;
+  /** Grid position, numbered across BOTH pane kinds (server/pane-registry.js). */
+  order?: number;
+  /** Which model an agent pane resolved to; null until its driver reports one. */
+  model?: string | null;
   /** Claude Agent SDK permission mode (agent panes only — see agent-chat.ts's mode selector). */
   mode?: "default" | "acceptEdits" | "auto" | "plan" | "bypassPermissions";
   /** Set only for an agent pane whose claude/codex runs over ssh on another host (see agent-chat.ts). */
@@ -53,6 +57,10 @@ export interface PaneView {
   setColor(color: string): void;
   setName(name: string): void;
   setAppearance(theme: object, fontSize: number): void;
+  /** Account usage for this pane's account (null = unknown/not applicable). */
+  setUsage(row: UsageRow | null): void;
+  /** Which model this pane resolved to. */
+  setModel(model: string): void;
   setLastInput(text: string): void;
   refit(): void;
   focusTerm(): void;
@@ -60,12 +68,31 @@ export interface PaneView {
   dispose(): void;
 }
 
+/** One rate-limit window as server/usage.js reports it. */
+export type UsageWindow = { label: string; percent: number; resetsAt: number | null };
+
+/** One account's usage, keyed by `id` — which equals an agent pane's `cmd`. */
+export type UsageRow = {
+  id: string;
+  label: string;
+  plan: string | null;
+  available: boolean;
+  primary: UsageWindow | null;
+  secondary: UsageWindow | null;
+  error: string | null;
+};
+
 export interface TermHost {
   onOpen(t: PaneView): void; // user clicked the box → zoom it
   onBack(t: PaneView): void; // ‹ (mobile, zoomed only) → unzoom, unambiguously
   onClose(t: PaneView): void; // × → kill it
   onMinimize(t: PaneView): void; // – → send to tray
   onToggleFollowUp(t: PaneView): void; // 🚩 → toggle the follow-up flag
+  // 💬 / ▤ → switch THIS box between chat view and terminal view. Not a
+  // re-render: the pane is destroyed and re-created in the other kind, resuming
+  // the same conversation by session id (server/pane-registry.js `flip`), so it
+  // can be refused (mid-turn, plain shell, no conversation captured yet).
+  onFlipView(t: PaneView): void;
   onSetColor(t: PaneView, color: string): void; // ● → tint the border ("" = clear)
   onRename(t: PaneView, name: string): void; // title text edited ("" = revert to folder)
   // 🔒 → push a value into this pane's env for a bounded time. Never becomes
@@ -134,6 +161,7 @@ export class Term implements PaneView {
       `<span class="path"></span>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
+      `<button class="ctl view" title="Switch this box to chat view">💬</button>` +
       `<button class="ctl attach" title="Add file(s) to prompt">📎</button>` +
       `<button class="ctl secret" title="Give this terminal a secret (never saved to chat memory)">🔒</button>` +
       `<button class="ctl color" title="Color-code this terminal"></button>` +
@@ -240,6 +268,10 @@ export class Term implements PaneView {
     this.titleBar.querySelector(".flag")!.addEventListener("click", (e) => {
       e.stopPropagation();
       host.onToggleFollowUp(this);
+    });
+    this.titleBar.querySelector(".view")!.addEventListener("click", (e) => {
+      e.stopPropagation();
+      host.onFlipView(this);
     });
     this.buildColorPopover(host);
     this.buildSecretPopover(host);
@@ -650,6 +682,9 @@ export class Term implements PaneView {
   setBusy(on: boolean) {
     setBusyClass(this.el, on);
   }
+  /** No-op: usage rings and the model badge live in the chat pane's tools row. */
+  setUsage(_row: UsageRow | null) {}
+  setModel(_model: string) {}
 
   isFlagged() {
     return this.el.classList.contains("flagged");

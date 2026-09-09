@@ -3,6 +3,14 @@
   --panel: #161b22;
   --line: #30363d;
   --accent: #58a6ff;
+  /* Usage status ramp. Deliberately NOT themed per light/dark and deliberately
+     NOT reusing --waiting (which means "needs you" — one hue must not carry two
+     meanings). Validated for CVD separation and for contrast against --panel in
+     both modes; on the light surface the amber step is sub-3:1 by design, which
+     is why every ring and bar always shows its percentage as text. */
+  --use-ok: #0ca30c;
+  --use-warn: #fab219;
+  --use-crit: #d03b3b;
   --waiting: #f0a35e; /* needs you */
   --done: #f5d142; /* finished a turn */
   --aborted: #f85149; /* cut off mid-turn — interrupt/restart/rate limit/API error, not a clean finish */
@@ -337,24 +345,25 @@ body {
   display: block;
   height: 100%;
   border-radius: 3px;
-  background: var(--accent);
+  background: var(--use-ok);
   transition: width 0.3s ease;
 }
-/* Colour by headroom so a bucket about to bite reads as urgent at a glance. */
+/* Colour by headroom so a bucket about to bite reads as urgent at a glance.
+   Same thresholds as the chat panes' rings — see usageLevel() in main.ts. */
 .use-bar.warn i,
 .use-pct.warn {
-  color: var(--waiting);
-  background: var(--waiting);
+  color: var(--use-warn);
+  background: var(--use-warn);
 }
 .use-bar.crit i,
 .use-pct.crit {
-  color: #f85149;
-  background: #f85149;
+  color: var(--use-crit);
+  background: var(--use-crit);
 }
 .use-pct {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  color: var(--accent);
+  color: var(--use-ok);
   background: none !important; /* .warn/.crit above set both; text wants colour only */
 }
 .use-meta {
@@ -1079,6 +1088,10 @@ body.big .task .tedit {
 }
 
 /* Ephemeral-secret popover (🔒) */
+/* Anchored under the title bar for terminal panes. Chat panes moved the 🔒 to
+   the tools row at the BOTTOM of the box, so .spop.up flips it to open upward
+   from there — otherwise the popover renders at the top of the pane, nowhere
+   near the button that opened it. */
 .term .spop {
   position: absolute;
   top: 23px;
@@ -1094,6 +1107,15 @@ body.big .task .tedit {
   border-radius: 9px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   font-size: 11px;
+}
+.term .spop.up {
+  top: auto;
+  bottom: 96px;
+  /* .term is overflow:hidden, so a popover taller than the space above the
+     tools row would be silently clipped at the top — in an unzoomed grid box
+     that is most of it. Shrink and scroll instead of disappearing. */
+  max-height: calc(100% - 104px);
+  overflow-y: auto;
 }
 .term .spop input,
 .term .spop select {
@@ -1203,7 +1225,7 @@ body.big .task .tedit {
 /* Permission-mode selector (agent-chat.ts only — see AgentChat's constructor
    and setModeUI()). Dressed like a small chip rather than #bar's full-size
    selects — the title bar is already tight, especially on mobile. */
-.term .title .mode-sel {
+.term .mode-sel {
   flex: none;
   background: var(--btn);
   color: var(--text-dim);
@@ -1215,14 +1237,14 @@ body.big .task .tedit {
   cursor: pointer;
   max-width: 88px;
 }
-.term .title .mode-sel:hover {
+.term .mode-sel:hover {
   border-color: var(--accent);
   color: var(--text);
 }
 /* bypassPermissions skips every approval prompt, unlike the other three
    modes — flagged distinctly so it's never mistaken for one of the "still
    asks before anything destructive" modes at a glance. */
-.term .title .mode-sel.bypass {
+.term .mode-sel.bypass {
   border-color: var(--waiting);
   color: var(--waiting);
 }
@@ -2243,9 +2265,164 @@ body.light .term .viz-tip {
 .term .chat-send:hover {
   filter: brightness(1.08);
 }
+
+/* ---- Chat tools row -----------------------------------------------------
+   Sits between the log and the composer and holds every pane-level control:
+   actions left (attach / view flip / secret / permission mode), live state
+   right (model, jump-to-latest, stop, usage rings). Same flex:0 0 auto contract
+   as .status-line and .chat-input so it never steals height from .chat-log. */
+.term .chat-tools {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  min-height: 40px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+.term .chat-tools .spacer {
+  flex: 1;
+}
+/* The interrupt. Tinted so it reads as the one destructive control here, but
+   it only exists while a turn is actually running (setBusy in agent-chat.ts). */
+.term .ctl.stop {
+  color: var(--use-crit);
+}
+.term .ctl.stop:hover {
+  background: var(--use-crit);
+  color: #fff;
+}
+/* Desktop: the tools row is always open, so the hamburger has no job. */
+.term .chat-menu {
+  display: none;
+}
+.term .model-badge {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+/* ---- Usage rings --------------------------------------------------------
+   A single ratio against a limit, so: a meter, not a pie. The percentage is
+   always drawn as text in normal ink — colour is the glanceable secondary cue,
+   never the only one (the amber step is intentionally low-contrast on light). */
+.term .use-rings {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.term .ring {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+.term .ring-face {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.term .ring-face svg {
+  display: block;
+}
+.term .ring-num {
+  position: absolute;
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--text);
+}
+.term .ring-tag {
+  font-size: 8px;
+  font-style: normal;
+  line-height: 1;
+  color: var(--text-dim);
+}
+.term .ring-track {
+  stroke: var(--btn);
+}
+.term .ring.ok .ring-fill {
+  stroke: var(--use-ok);
+}
+.term .ring.warn .ring-fill {
+  stroke: var(--use-warn);
+}
+.term .ring.crit .ring-fill {
+  stroke: var(--use-crit);
+}
 @media (max-width: 640px) {
   .term .chat-input textarea {
     font-size: 16px; /* keeps iOS Safari from zooming the page in on focus */
+  }
+  /* ---- Tools row collapses behind ☰ -----------------------------------
+     Nine controls plus two usage rings do not fit beside a composer on a
+     390px screen, and .term .ctl is 44x40 here (touch targets), so the row
+     would be taller than the input it sits above. Hidden by default, opened
+     as a WRAPPED row above the input — not a floating popover, which .term's
+     overflow:hidden would clip. */
+  .term .chat-menu {
+    display: grid;
+    place-items: center;
+    flex: none;
+    min-height: 36px;
+    min-width: 40px;
+    padding: 0;
+    background: var(--btn);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  .term .chat-tools {
+    display: none;
+  }
+  .term.tools-open .chat-tools {
+    display: flex;
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  /* The one exception: while a turn is running, the interrupt stays reachable
+     in one tap. A control you need URGENTLY must not be behind a menu. */
+  .term.busy:not(.tools-open) .chat-tools {
+    display: flex;
+    justify-content: flex-end;
+    min-height: 0;
+    padding: 2px 8px;
+  }
+  .term.busy:not(.tools-open) .chat-tools > *:not(.stop) {
+    display: none;
+  }
+  /* The spacer would otherwise eat a whole row once the controls wrap. */
+  .term.tools-open .chat-tools .spacer {
+    display: none;
+  }
+  /* Real touch targets in the opened menu.
+     NOTE: there is already a `.term .ctl { width:44px; height:40px }` intended
+     for mobile up at ~line 950, but it is DEAD — it sits before the base
+     `.term .ctl` rule (~line 1252) at identical specificity, and a media query
+     adds none, so source order silently overrides it and every icon button on
+     mobile renders 20x18. Only `.ctl.attach` survives, by accident of carrying
+     a second class in that selector. These selectors are specific enough to
+     win; fixing the general case is a separate call, since it changes the
+     height of every title bar on mobile. */
+  .term.tools-open .chat-tools .ctl,
+  .term.busy .chat-tools .ctl.stop {
+    width: 44px;
+    height: 40px;
+  }
+  .term.tools-open .chat-tools .mode-sel {
+    font-size: 13px;
+    padding: 5px 9px;
+    min-height: 36px;
+    max-width: 130px;
   }
   /* A phone pane is barely taller than the desktop cap, so 320px of output
      would fill the whole box and hide the conversation around it. */
