@@ -82,7 +82,7 @@ function winShort(label: string): string {
 const RING_NS = "http://www.w3.org/2000/svg";
 
 function usageRing(win: UsageWindow): HTMLElement {
-  const size = 26;
+  const size = 22; // + the tag below lands the group within ~2px of the 28px controls
   const stroke = 3;
   const r = (size - stroke) / 2;
   const circ = 2 * Math.PI * r;

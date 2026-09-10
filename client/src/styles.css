@@ -2284,6 +2284,39 @@ body.light .term .viz-tip {
 .term .chat-tools .spacer {
   flex: 1;
 }
+/* ---- One sizing scale for everything in this row ----------------------
+   Left to itself the row is a jumble: .ctl is 20x18, the mode chip ~28,
+   the ring group ~35, and the emoji glyphs (📎 🔒) render heavier than a
+   geometric one (▤). Every control here is therefore pinned to the same
+   28px box, the same 6px radius and the same optical glyph size, and the
+   rings are trimmed to sit within a couple of px of that. */
+.term .chat-tools .ctl {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+/* Geometric glyphs read smaller than emoji at the same font-size, so they
+   get a nudge to match optically rather than numerically. */
+.term .chat-tools .ctl.view,
+.term .chat-tools .ctl.stop,
+.term .chat-tools .ctl.jump {
+  font-size: 15px;
+}
+.term .chat-tools .mode-sel {
+  height: 28px;
+  border-radius: 6px;
+  padding: 0 6px;
+  font-size: 11px;
+  max-width: 104px;
+}
+.term .chat-tools .model-badge {
+  display: grid;
+  place-items: center;
+  height: 28px;
+  border-radius: 6px;
+  padding: 0 8px;
+}
 /* The interrupt. Tinted so it reads as the one destructive control here, but
    it only exists while a turn is actually running (setBusy in agent-chat.ts). */
 .term .ctl.stop {
@@ -2345,8 +2378,10 @@ body.light .term .viz-tip {
   line-height: 1;
   color: var(--text-dim);
 }
+/* --btn on --panel is nearly invisible, which made a low-usage ring look
+   broken rather than empty. --line is the app's "there is a thing here" tone. */
 .term .ring-track {
-  stroke: var(--btn);
+  stroke: var(--line);
 }
 .term .ring.ok .ring-fill {
   stroke: var(--use-ok);
