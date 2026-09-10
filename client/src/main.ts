@@ -5,6 +5,7 @@ import { setTabAttention, setAppLabel } from "./tab";
 import { initTasks, applyRemoteTasks, closeTasksIfOpen } from "./tasks";
 import { getSettings, patchSettings, loadSettings, putPrefs, xtermTheme, xtermFontSize, FX_ORDER, Settings } from "./settings";
 import { initPush, enablePush, disablePush, pushActive, setBadge } from "./push";
+import { iconSvg } from "./icons";
 
 const grid = document.getElementById("grid")!;
 const brandEl = document.querySelector<HTMLElement>(".brand")!;
@@ -1026,7 +1027,7 @@ function renderList() {
   for (const e of items) {
     const row = document.createElement("div");
     row.className = "prow";
-    row.innerHTML = `<span class="ico">▸</span><span class="nm"></span>`;
+    row.innerHTML = `<span class="ico">${iconSvg("folder")}</span><span class="nm"></span>`;
     (row.querySelector(".nm") as HTMLElement).textContent = e.name;
     if (mode !== "name") {
       const meta = document.createElement("span");

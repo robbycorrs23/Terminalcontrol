@@ -6,6 +6,7 @@ import { installFileLinks } from "./links";
 import "@xterm/xterm/css/xterm.css";
 import { xtermTheme, xtermFontSize } from "./settings";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
+import { iconSvg } from "./icons";
 import { attachSecretPopover } from "./secret-popover";
 
 export interface PaneInfo {
@@ -161,11 +162,11 @@ export class Term implements PaneView {
       `<span class="path"></span>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
-      `<button class="ctl view" title="Switch this box to chat view">❝</button>` +
-      `<button class="ctl attach" title="Add file(s) to prompt">⊕</button>` +
-      `<button class="ctl secret" title="Give this terminal a secret (never saved to chat memory)">⚿</button>` +
+      `<button class="ctl view" title="Switch this box to chat view">${iconSvg("chat")}</button>` +
+      `<button class="ctl attach" title="Add file(s) to prompt">${iconSvg("attach")}</button>` +
+      `<button class="ctl secret" title="Give this terminal a secret (never saved to chat memory)">${iconSvg("secret")}</button>` +
       `<button class="ctl color" title="Color-code this terminal"></button>` +
-      `<button class="ctl flag" title="Mark for follow-up">⚑</button>` +
+      `<button class="ctl flag" title="Mark for follow-up">${iconSvg("flag")}</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
     (this.titleBar.querySelector(".path") as HTMLElement).textContent =

@@ -4,6 +4,7 @@ import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown } from "./markdown";
 import { enhanceRich } from "./rich";
 import { attachSecretPopover } from "./secret-popover";
+import { iconSvg, setIcon } from "./icons";
 
 function el(tag: string, cls: string): HTMLElement {
   const n = document.createElement(tag);
@@ -212,7 +213,7 @@ export class AgentChat implements PaneView {
       // setWaiting() clears .badge-slot on every attention change, which would
       // wipe them permanently the first time the pane said "needs you".
       `<span class="acct-slot"></span>` +
-      `<button class="ctl flag" title="Mark for follow-up">⚑</button>` +
+      `<button class="ctl flag" title="Mark for follow-up">${iconSvg("flag")}</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
     (this.titleBar.querySelector(".path") as HTMLElement).textContent = displayName(info);
@@ -310,26 +311,26 @@ export class AgentChat implements PaneView {
     this.toolsEl = el("div", "chat-tools");
 
     const attachBtn = el("button", "ctl attach") as HTMLButtonElement;
-    attachBtn.textContent = "⊕";
+    setIcon(attachBtn, "attach");
     attachBtn.title = "Add file(s)";
     const viewBtn = el("button", "ctl view") as HTMLButtonElement;
-    viewBtn.textContent = "▤";
+    setIcon(viewBtn, "terminal");
     viewBtn.title = "Switch this box to terminal view";
     const secretBtn = el("button", "ctl secret") as HTMLButtonElement;
-    secretBtn.textContent = "⚿";
+    setIcon(secretBtn, "secret");
     secretBtn.title = "Give this chat a secret (never saved to chat memory)";
 
     this.modelEl = el("span", "model-badge");
     this.modelEl.hidden = true;
     this.jumpBtn = el("button", "ctl jump") as HTMLButtonElement;
-    this.jumpBtn.textContent = "↓";
+    setIcon(this.jumpBtn, "down");
     this.jumpBtn.title = "Jump to latest";
     this.jumpBtn.hidden = true;
     // Interrupt. Until this existed a chat pane could not cancel a running turn
     // at all: no softkeys, no PTY, so no Esc to send. The server and both
     // drivers already understood {t:"interrupt"} — nothing was sending it.
     this.stopBtn = el("button", "ctl stop") as HTMLButtonElement;
-    this.stopBtn.textContent = "■";
+    setIcon(this.stopBtn, "stop");
     this.stopBtn.title = "Stop this turn";
     this.stopBtn.hidden = true;
     this.usageEl = el("span", "use-rings");
@@ -358,7 +359,7 @@ export class AgentChat implements PaneView {
     // row above the input. Lives in the input bar so it sits where the old
     // attach button did — thumb-reachable, next to what it acts on.
     const menuBtn = el("button", "chat-menu") as HTMLButtonElement;
-    menuBtn.textContent = "☰";
+    setIcon(menuBtn, "menu");
     menuBtn.title = "Tools";
     menuBtn.setAttribute("aria-label", "Tools");
     inputBar.append(menuBtn, this.inputEl, sendBtn);

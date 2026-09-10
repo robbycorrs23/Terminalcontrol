@@ -1259,6 +1259,30 @@ body.big .task .tedit {
   border-color: var(--waiting);
   color: var(--waiting);
 }
+/* Inline SVG control icons (client/src/icons.ts). Stroked and sized from the
+   button's own colour, so hover/disabled/theme states need no icon-specific
+   rules. vector-effect keeps the 2px stroke honest at any box size. */
+.ico-svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ico-svg.fill {
+  fill: currentColor;
+  stroke: none;
+}
+.chatview .ico-svg,
+.plist .ico .ico-svg {
+  width: 14px;
+  height: 14px;
+}
+
 /* Window controls */
 .term .ctl {
   flex: none;

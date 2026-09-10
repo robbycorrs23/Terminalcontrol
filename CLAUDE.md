@@ -292,12 +292,16 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   `badgeSlot.innerHTML = ""` on every attention change, so anything persistent
   parked there is destroyed the first time the pane says "needs you" and never
   returns. `.badge-slot` is for the transient attention badge only.
-- **No emoji in chrome.** Every control glyph is a monochrome text-presentation
-  character (⊕ attach, ⚿ secret, ⚑ flag, ❝ chat, ▤ terminal, ⚙ tool, ■ stop),
-  never a colour emoji — those render at a different weight and advance width
-  (~22px vs ~12px) and can't be sized to match. Candidates were checked by
-  rendering to a canvas and measuring ink + saturation; keep new ones at 0%
-  colour and non-tofu.
+- **No emoji in chrome — control icons are inline SVG** (`client/src/icons.ts`,
+  paths adapted from Feather, MIT). Two failed approaches are worth not
+  repeating: colour emoji can't match a monochrome set (different weight, ~22px
+  advance vs ~12px), and the Unicode replacements that followed (⊕ attach, ⚿
+  secret) passed the test they were picked against — monochrome, not tofu — and
+  failed the one that mattered: nobody could tell what they were. Unicode has no
+  legible padlock or paperclip at 15px. SVG inherits `currentColor`, so hover /
+  disabled / theme states need no icon-specific CSS. `‹ – ✕` stay as text:
+  standard window controls, universally read. Adding a new icon means adding a
+  path, not hunting for a character.
 - **Usage rings** are a *meter* (one ratio against a limit), not a pie. The
   percentage is ALWAYS drawn as text in normal ink: status colour is the
   glanceable second cue, never the only one — which matters because the amber
