@@ -22,6 +22,7 @@
  * re-normalization pass, either of which is a bigger change than this
  * façade's job today.
  */
+import { trustFolder } from "./claude-trust.js";
 /**
  * The agent profiles a pane can be flipped between views as. A pane's `cmd` is
  * the picker option it was opened with, except that a PTY pane flipped over
@@ -171,6 +172,14 @@ export function createRegistry(ptys, agents) {
       // panes own the mode; terminal panes just hold onto it (and start
       // `claude` at it) until the pane comes back.
       const mode = toChat ? ptys.agentModeOf(id) : info.mode || "default";
+
+      // Chat panes never trigger Claude Code's workspace-trust dialog (the SDK
+      // doesn't ask), so a folder used only through chat is unknown to the
+      // interactive CLI and the flipped-to terminal would stop on "do you trust
+      // this folder?" — which looks like the switch malfunctioning. Record the
+      // trust the running pane already implied. Best-effort: if it doesn't
+      // take, the user just sees the dialog they'd have seen anyway.
+      if (!toChat) trustFolder(profile, info.cwd);
 
       // Past this point the old pane is gone, so nothing below may throw a
       // recoverable error — all the refusals are above.

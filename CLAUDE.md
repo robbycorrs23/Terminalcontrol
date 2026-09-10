@@ -205,6 +205,18 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
     rather than passed through — an invalid value makes `claude` exit at
     startup and the box just sits there empty.
 
+  **Chat panes never trigger Claude Code's workspace-trust dialog** (the SDK
+  doesn't ask), so a folder used only through chat is unknown to the
+  interactive CLI and a flip to terminal lands on "do you trust the files in
+  this folder?" — which reads as the switch malfunctioning. `claude-trust.js`
+  records that trust on flip, in `<configDir>/.claude.json`'s `projects` map
+  (untrusted folders are ABSENT from it, not `false`). It deliberately does NOT
+  touch `enabledMcpjsonServers`: a project `.mcp.json` gets its own prompt, and
+  auto-approving someone else's MCP server is the user's call, not a view
+  toggle's. Claude Code owns that file and rewrites it constantly, so the write
+  only happens when the flag is actually missing, and goes through a temp file
+  + rename.
+
   Consequences worth keeping: a terminal pane whose agent hasn't fired a hook
   yet has no id and is REFUSED rather than flipped into a blank conversation; a
   mid-turn pane is refused rather than interrupted; plain shells, raw ssh boxes
