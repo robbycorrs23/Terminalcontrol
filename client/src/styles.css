@@ -1222,6 +1222,17 @@ body.big .task .tedit {
 .term .title .badge-slot {
   display: flex;
 }
+/* Work-account / remote-host badges. Deliberately NOT .badge-slot — that one
+   is emptied by setWaiting() on every attention change. */
+.term .title .acct-slot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.term .title .acct-slot:empty {
+  display: none;
+}
 /* Permission-mode selector (agent-chat.ts only — see AgentChat's constructor
    and setModeUI()). Dressed like a small chip rather than #bar's full-size
    selects — the title bar is already tight, especially on mobile. */

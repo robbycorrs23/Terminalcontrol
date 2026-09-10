@@ -287,6 +287,11 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 - **Stop (■)** sends `{t:"interrupt"}`, which the server and both drivers always
   understood — nothing had ever sent it, so a chat pane could not cancel a
   running turn at all. Visible only while the pane is working (`setBusy`).
+- **Account badges use `.acct-slot`, not `.badge-slot`.** They sit in the
+  right-hand cluster beside ⚑. This is not cosmetic: `setWaiting()` does
+  `badgeSlot.innerHTML = ""` on every attention change, so anything persistent
+  parked there is destroyed the first time the pane says "needs you" and never
+  returns. `.badge-slot` is for the transient attention badge only.
 - **No emoji in chrome.** Every control glyph is a monochrome text-presentation
   character (⊕ attach, ⚿ secret, ⚑ flag, ❝ chat, ▤ terminal, ⚙ tool, ■ stop),
   never a colour emoji — those render at a different weight and advance width

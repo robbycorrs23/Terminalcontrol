@@ -152,6 +152,7 @@ export class AgentChat implements PaneView {
   private statusEl: HTMLElement;
   private pinnedEl: HTMLElement;
   private badgeSlot: HTMLElement;
+  private acctSlot!: HTMLElement;
   private modeSel: HTMLSelectElement;
   private isCodex: boolean;
   private isRemote: boolean;
@@ -207,12 +208,17 @@ export class AgentChat implements PaneView {
       `</select>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
+      // Account/host badges live in their OWN slot, not in .badge-slot:
+      // setWaiting() clears .badge-slot on every attention change, which would
+      // wipe them permanently the first time the pane said "needs you".
+      `<span class="acct-slot"></span>` +
       `<button class="ctl flag" title="Mark for follow-up">⚑</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
     (this.titleBar.querySelector(".path") as HTMLElement).textContent = displayName(info);
     (this.titleBar.querySelector(".path") as HTMLElement).title = info.cwd;
     this.badgeSlot = this.titleBar.querySelector(".badge-slot") as HTMLElement;
+    this.acctSlot = this.titleBar.querySelector(".acct-slot") as HTMLElement;
 
     // Permission-mode selector: which mode this session runs under, and the
     // only way to change it — there's no separate terminal TUI here to show
@@ -270,7 +276,7 @@ export class AgentChat implements PaneView {
       badge.src = "/didit-logo-white.png";
       badge.alt = "Work account";
       badge.title = "Work account";
-      this.badgeSlot.append(badge);
+      this.acctSlot.append(badge);
     }
     // Remote (ssh) panes: claude/codex is running on another host, not here
     // (see server/ssh-remote-agent.js) — a small text badge, same slot/sizing
@@ -281,7 +287,7 @@ export class AgentChat implements PaneView {
       const badge = el("span", "remote-badge");
       badge.textContent = "⇢ " + info.remote.target;
       badge.title = "Running on " + info.remote.target;
-      this.badgeSlot.append(badge);
+      this.acctSlot.append(badge);
     }
 
     const cwdline = el("div", "cwdline");
