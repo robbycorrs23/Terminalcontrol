@@ -2350,11 +2350,18 @@ body.light .term .viz-tip {
   align-items: center;
   gap: 6px;
 }
+/* Each window is its own bordered pill — same 28px box, 6px radius and
+   --line border as the model badge, so the row reads as one set of chips
+   rather than two floating graphics. The label sits BESIDE the ring, which
+   is also what keeps identity off colour alone with two windows showing. */
 .term .ring {
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
 }
 .term .ring-face {
   position: relative;
@@ -2366,14 +2373,14 @@ body.light .term .viz-tip {
 }
 .term .ring-num {
   position: absolute;
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   color: var(--text);
 }
 .term .ring-tag {
-  font-size: 8px;
+  font-size: 10px;
   font-style: normal;
   line-height: 1;
   color: var(--text-dim);

@@ -87,15 +87,15 @@ export interface TermHost {
   onBack(t: PaneView): void; // ‹ (mobile, zoomed only) → unzoom, unambiguously
   onClose(t: PaneView): void; // × → kill it
   onMinimize(t: PaneView): void; // – → send to tray
-  onToggleFollowUp(t: PaneView): void; // 🚩 → toggle the follow-up flag
-  // 💬 / ▤ → switch THIS box between chat view and terminal view. Not a
+  onToggleFollowUp(t: PaneView): void; // ⚑ → toggle the follow-up flag
+  // ❝ / ▤ → switch THIS box between chat view and terminal view. Not a
   // re-render: the pane is destroyed and re-created in the other kind, resuming
   // the same conversation by session id (server/pane-registry.js `flip`), so it
   // can be refused (mid-turn, plain shell, no conversation captured yet).
   onFlipView(t: PaneView): void;
   onSetColor(t: PaneView, color: string): void; // ● → tint the border ("" = clear)
   onRename(t: PaneView, name: string): void; // title text edited ("" = revert to folder)
-  // 🔒 → push a value into this pane's env for a bounded time. Never becomes
+  // ⚿ → push a value into this pane's env for a bounded time. Never becomes
   // chat text (see server/secret-vault.js); the promise resolves once the
   // server has actually injected it (or rejects with a reason to show).
   onInjectSecret(
@@ -161,11 +161,11 @@ export class Term implements PaneView {
       `<span class="path"></span>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
-      `<button class="ctl view" title="Switch this box to chat view">💬</button>` +
-      `<button class="ctl attach" title="Add file(s) to prompt">📎</button>` +
-      `<button class="ctl secret" title="Give this terminal a secret (never saved to chat memory)">🔒</button>` +
+      `<button class="ctl view" title="Switch this box to chat view">❝</button>` +
+      `<button class="ctl attach" title="Add file(s) to prompt">⊕</button>` +
+      `<button class="ctl secret" title="Give this terminal a secret (never saved to chat memory)">⚿</button>` +
       `<button class="ctl color" title="Color-code this terminal"></button>` +
-      `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
+      `<button class="ctl flag" title="Mark for follow-up">⚑</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
     (this.titleBar.querySelector(".path") as HTMLElement).textContent =
@@ -275,7 +275,7 @@ export class Term implements PaneView {
     });
     this.buildColorPopover(host);
     this.buildSecretPopover(host);
-    // 📎 opens a file picker — the same path-injection flow as drag-and-drop.
+    // ⊕ opens a file picker — the same path-injection flow as drag-and-drop.
     wireFilePicker(this.titleBar.querySelector(".attach")!, this.el, (files) => void this.dropFiles(files));
 
     // Click the box (outside the controls) opens/zooms it.
@@ -408,7 +408,7 @@ export class Term implements PaneView {
     });
   }
 
-  // The 🔒 control: paste a value, give it a name Claude can reference, pick
+  // The ⚿ control: paste a value, give it a name Claude can reference, pick
   // how long it lives, then it's gone — see server/secret-vault.js for what
   // actually happens to it (never chat text, never on disk as plaintext).
   // Shared with AgentChat (chat panes get the identical popover), see
@@ -532,7 +532,7 @@ export class Term implements PaneView {
   }
 
   /**
-   * Let users drop (or 📎-pick) files onto the box: upload each via
+   * Let users drop (or ⊕-pick) files onto the box: upload each via
    * attach.ts's `uploadFiles` and type the returned absolute path into the
    * prompt — the same thing dragging a file into a native terminal does,
    * which is how Claude picks up images and documents.

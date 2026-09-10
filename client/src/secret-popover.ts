@@ -1,7 +1,7 @@
 import type { PaneView, TermHost } from "./terminal";
 
 /**
- * The 🔒 control's popover — shared by Term (terminal panes) and AgentChat
+ * The ⚿ control's popover — shared by Term (terminal panes) and AgentChat
  * (chat panes), since server/secret-vault.js already presents an identical
  * REST shape for both (it dispatches internally on tmux-env injection vs.
  * temp-file-plus-chat-message — see that file). Paste a value, give it a

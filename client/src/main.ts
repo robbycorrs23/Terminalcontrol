@@ -44,7 +44,7 @@ const SESSION = (() => {
 const currentEl = document.getElementById("current")!;
 
 // ---- Ephemeral secrets: optional WebAuthn step-up ----------------------
-// The 🔒 popover (terminal.ts) wants a fresh passkey confirmation right
+// The ⚿ popover (terminal.ts) wants a fresh passkey confirmation right
 // before releasing a secret, on top of whatever the passkey gate
 // (server/gate.js) already does with session cookies. That's only possible
 // when THIS page is actually being served through the gate — gate.js mounts
@@ -270,7 +270,7 @@ function reflow() {
 
 
 // ---- Per-pane view flip (terminal ⇄ chat) -------------------------------
-// The 💬 / ▤ button in each box's title bar. The picker's "💬 Chat view"
+// The ❝ / ▤ button in each box's title bar. The picker's "❝ Chat view"
 // checkbox only decides what a NEW box becomes; this switches a box already on
 // the grid, which is a genuinely different operation: a chat pane is an
 // in-process SDK driver with no terminal behind it, and a terminal pane is a
@@ -1026,7 +1026,7 @@ function renderList() {
   for (const e of items) {
     const row = document.createElement("div");
     row.className = "prow";
-    row.innerHTML = `<span class="ico">📁</span><span class="nm"></span>`;
+    row.innerHTML = `<span class="ico">▸</span><span class="nm"></span>`;
     (row.querySelector(".nm") as HTMLElement).textContent = e.name;
     if (mode !== "name") {
       const meta = document.createElement("span");

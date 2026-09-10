@@ -82,7 +82,7 @@ function winShort(label: string): string {
 const RING_NS = "http://www.w3.org/2000/svg";
 
 function usageRing(win: UsageWindow): HTMLElement {
-  const size = 22; // + the tag below lands the group within ~2px of the 28px controls
+  const size = 20; // sits inside the 28px pill alongside its label
   const stroke = 3;
   const r = (size - stroke) / 2;
   const circ = 2 * Math.PI * r;
@@ -207,7 +207,7 @@ export class AgentChat implements PaneView {
       `</select>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
-      `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
+      `<button class="ctl flag" title="Mark for follow-up">⚑</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
     (this.titleBar.querySelector(".path") as HTMLElement).textContent = displayName(info);
@@ -304,13 +304,13 @@ export class AgentChat implements PaneView {
     this.toolsEl = el("div", "chat-tools");
 
     const attachBtn = el("button", "ctl attach") as HTMLButtonElement;
-    attachBtn.textContent = "📎";
+    attachBtn.textContent = "⊕";
     attachBtn.title = "Add file(s)";
     const viewBtn = el("button", "ctl view") as HTMLButtonElement;
     viewBtn.textContent = "▤";
     viewBtn.title = "Switch this box to terminal view";
     const secretBtn = el("button", "ctl secret") as HTMLButtonElement;
-    secretBtn.textContent = "🔒";
+    secretBtn.textContent = "⚿";
     secretBtn.title = "Give this chat a secret (never saved to chat memory)";
 
     this.modelEl = el("span", "model-badge");
@@ -701,7 +701,7 @@ export class AgentChat implements PaneView {
     details.open = false;
     const summary = document.createElement("summary");
     const detail = toolDetail(input);
-    summary.textContent = detail ? `🔧 ${name} · ${detail}` : `🔧 ${name}`;
+    summary.textContent = detail ? `⚙ ${name} · ${detail}` : `⚙ ${name}`;
     summary.title = summary.textContent; // the CSS ellipsis hides long commands
     const body = document.createElement("pre");
     body.className = "tool-input";
@@ -734,7 +734,7 @@ export class AgentChat implements PaneView {
     const n = this.toolGroupNames.length;
     const preview = this.toolGroupNames.slice(0, 4).join(", ") + (n > 4 ? `, +${n - 4} more` : "");
     (this.toolGroupEl.querySelector("summary") as HTMLElement).textContent =
-      `🔧 ${n} tool call${n === 1 ? "" : "s"}: ${preview}`;
+      `⚙ ${n} tool call${n === 1 ? "" : "s"}: ${preview}`;
   }
 
   private endToolGroup() {

@@ -287,6 +287,12 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 - **Stop (■)** sends `{t:"interrupt"}`, which the server and both drivers always
   understood — nothing had ever sent it, so a chat pane could not cancel a
   running turn at all. Visible only while the pane is working (`setBusy`).
+- **No emoji in chrome.** Every control glyph is a monochrome text-presentation
+  character (⊕ attach, ⚿ secret, ⚑ flag, ❝ chat, ▤ terminal, ⚙ tool, ■ stop),
+  never a colour emoji — those render at a different weight and advance width
+  (~22px vs ~12px) and can't be sized to match. Candidates were checked by
+  rendering to a canvas and measuring ink + saturation; keep new ones at 0%
+  colour and non-tofu.
 - **Usage rings** are a *meter* (one ratio against a limit), not a pie. The
   percentage is ALWAYS drawn as text in normal ink: status colour is the
   glanceable second cue, never the only one — which matters because the amber
@@ -296,7 +302,10 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   deliberately NOT `--waiting` — that already means "needs you", and one hue
   must not carry two meanings. A pane finds its row by `usageRow.id ===
   pane.cmd`; remote panes show none, since their agent bills another machine's
-  account.
+  account. Each window is its own bordered pill (same 28px box, 6px radius and
+  `--line` border as the model badge) with its label BESIDE the ring, so the row
+  reads as one set of chips and the two windows stay distinguishable without
+  relying on colour.
 - **The model badge** needs the only new server plumbing here: the SDK names the
   model *only* in its `init` frame, so `claude-driver.js` forwards it via
   `onModel`, `agent-manager.js` persists it and broadcasts `{t:"model"}`. Codex
