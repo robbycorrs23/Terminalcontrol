@@ -225,34 +225,41 @@
         </div>
         <div class="plist" id="plist"></div>
         <div class="precent" id="precent"></div>
+        <!-- Two rows on purpose. As one flex row the controls were phrased as
+             running sentences ("run [select] on open", "and run [select]
+             there") and there was never enough width, so the connecting words
+             wrapped mid-phrase — "on / open", "Chat / view" — next to the
+             buttons. Fields now carry a short label of their own and never
+             wrap; the actions get their own right-aligned row. -->
         <div class="pfoot">
-          <label class="runclaude">
-            run
-            <select id="agentSelect">
-              <option value="claude-work" selected>claude (work)</option>
-              <option value="codex-work">codex (work)</option>
-              <option value="">plain shell</option>
-              <optgroup label="SSH" id="sshOptGroup"></optgroup>
-            </select>
-            on open
-          </label>
-          <label class="runclaude" id="sshRunRow" hidden>
-            and run
-            <select id="sshAgentSelect">
-              <option value="" selected>plain shell</option>
-              <option value="claude-work">claude (work)</option>
-              <option value="codex-work">codex (work)</option>
-            </select>
-            there
-          </label>
-          <label class="chatview" title="Chat UI instead of a terminal — no xterm, native scrolling, tap-to-approve.">
-            <input type="checkbox" id="chatView" checked />
-            <svg class="ico-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            Chat view
-          </label>
-          <span class="spacer"></span>
-          <button id="pcancel">Cancel</button>
-          <button id="popen" class="primary">Open here</button>
+          <div class="popts">
+            <label class="runclaude">
+              <span class="popt-lbl">Run on open</span>
+              <select id="agentSelect">
+                <option value="claude-work" selected>claude (work)</option>
+                <option value="codex-work">codex (work)</option>
+                <option value="">plain shell</option>
+                <optgroup label="SSH" id="sshOptGroup"></optgroup>
+              </select>
+            </label>
+            <label class="runclaude" id="sshRunRow" hidden>
+              <span class="popt-lbl">Then run there</span>
+              <select id="sshAgentSelect">
+                <option value="" selected>plain shell</option>
+                <option value="claude-work">claude (work)</option>
+                <option value="codex-work">codex (work)</option>
+              </select>
+            </label>
+            <label class="chatview" title="Chat UI instead of a terminal — no xterm, native scrolling, tap-to-approve.">
+              <input type="checkbox" id="chatView" checked />
+              <svg class="ico-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <span>Chat view</span>
+            </label>
+          </div>
+          <div class="pacts">
+            <button id="pcancel">Cancel</button>
+            <button id="popen" class="primary">Open here</button>
+          </div>
         </div>
       </div>
     </div>

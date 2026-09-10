@@ -195,7 +195,9 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   - *Session id* — chat panes learn theirs from the SDK driver, terminal panes
     from the hook JSON that `setup-hooks.js` now forwards (`session_id`),
     stored as `pane.sdkSessionId` in BOTH managers.
-  - *Permission mode* — carried BOTH ways or a chat→terminal→chat round trip
+  - *Permission mode* — new chat panes start in **auto** (`AgentManager.create`),
+    not the CLI's ask-for-everything default; an explicit mode always wins, so a
+    flip still carries whatever the pane was actually running. Carried BOTH ways or a chat→terminal→chat round trip
     silently resets an Auto pane to Ask. Chat panes own `mode`; terminal panes
     stash it in `pane.agentMode` and start `claude` at it via
     `--permission-mode`. The chat "default" (Ask) has NO flag spelling (it is

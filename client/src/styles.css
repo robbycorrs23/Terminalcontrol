@@ -3175,15 +3175,57 @@ body.fx-full .term.idle:hover .chat {
 }
 .pfoot {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
   padding: 12px 14px;
   border-top: 1px solid var(--line);
+}
+/* Options wrap as whole fields; the actions keep their own row so a narrow
+   panel can never squeeze "Open here" against a half-wrapped label. */
+.popts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+}
+.pacts {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.popt-lbl {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+/* Same dressing as the picker's own toolbar selects (.ptools) — this one was
+   left native, so it rendered as a white slab on the dark panel. */
+.pfoot select {
+  min-height: 30px;
+  max-width: 260px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.pfoot select:hover {
+  border-color: var(--accent);
+}
+.pfoot select:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 .runclaude {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  white-space: nowrap; /* the mid-phrase wrapping was the whole problem */
   color: var(--text-dim);
   cursor: pointer;
 }
@@ -3191,6 +3233,7 @@ body.fx-full .term.idle:hover .chat {
   color: var(--accent);
 }
 .chatview {
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 4px;

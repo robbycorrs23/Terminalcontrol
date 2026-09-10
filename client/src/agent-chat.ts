@@ -247,7 +247,9 @@ export class AgentChat implements PaneView {
     // tools row below, next to the other pane-level controls. Detach it here so
     // the title bar is left with just name + flag/min/close.
     this.modeSel.remove();
-    this.setModeUI(info.mode || (this.isCodex ? "auto" : "default"));
+    // Matches AgentManager.create's default so the chip never briefly shows a
+    // mode the pane isn't actually running in.
+    this.setModeUI(info.mode || "auto");
     // Not `.ctl` (which enableDrag() in main.ts already excludes from the
     // drag handle) — that class also carries Term's 20x18 icon-button
     // sizing, which would squash this chip-styled <select>. Stopping

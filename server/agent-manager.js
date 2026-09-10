@@ -276,6 +276,7 @@ export class AgentManager {
       // than open a blank one; _ensureDriver picks it up via
       // _resumableSessionId, which also validates it against this account's
       // transcripts and quietly drops it if it isn't there.
+      //
       sdkSessionId: sdkSessionId || null,
       driver: null,
       events: [],
@@ -287,12 +288,14 @@ export class AgentManager {
       name: "",
       createdAt: Date.now(),
       status: "idle",
-      // Normally "default". A value here means this pane was flipped over from
-      // a terminal pane and is restoring the permission mode it was last run
-      // at — losing that on a view switch silently downgrades an Auto pane back
-      // to Ask, which is exactly the kind of quiet regression a "view" toggle
-      // must not cause.
-      mode: mode || "default",
+      // NEW PANES START IN AUTO, not the CLI's "ask for everything" default —
+      // that is what this fleet always switches to by hand, and the selector is
+      // right there to change it per pane. An explicit `mode` (a view flip
+      // carrying the mode across) always wins: losing it on a switch silently
+      // downgrades a pane, which is exactly the quiet regression a "view"
+      // toggle must not cause. Codex has its own vocabulary but happens to
+      // spell this the same way.
+      mode: mode || "auto",
     };
     this.panes.set(id, pane);
     this._persist();
