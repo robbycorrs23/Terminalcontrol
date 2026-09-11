@@ -203,12 +203,13 @@ export class Term implements PaneView {
     // terminal, so they're visually distinct from personal-account boxes
     // without getting in the way of reading the actual output. No manual
     // step — `cmd` persists across respawns, so the tag survives them too.
-    if (info.cmd === "claude-work" || info.cmd === "codex-work") {
+    if (info.cmd.endsWith("-work")) {
       this.el.classList.add("work");
-      const logo = el("img", "work-logo") as HTMLImageElement;
-      logo.src = "/didit-logo-white.png";
-      logo.alt = "";
-      this.xtEl.append(logo);
+      // The image is a MACHINE setting (~/.fleetview/machine.json), not a
+      // bundled asset — it comes in via the --work-logo custom property, so a
+      // machine with no badge configured shows none and one that changes it
+      // updates every pane at once. See applyMachineBadge() in main.ts.
+      this.xtEl.append(el("span", "work-logo"));
     }
 
     this.term = new Xterm({

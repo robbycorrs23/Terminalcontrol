@@ -23,6 +23,7 @@
  * façade's job today.
  */
 import { trustFolder } from "./claude-trust.js";
+import { ALL_PROFILES } from "./machine-config.js";
 /**
  * The agent profiles a pane can be flipped between views as. A pane's `cmd` is
  * the picker option it was opened with, except that a PTY pane flipped over
@@ -30,11 +31,13 @@ import { trustFolder } from "./claude-trust.js";
  * the first-token match rather than a plain lookup. Anything else (a plain
  * shell, an `ssh ...` string) has no chat equivalent and is left alone.
  */
-const AGENT_PROFILES = new Set(["claude-work", "codex-work"]);
-
 function baseProfile(cmd) {
   const first = String(cmd || "").trim().split(/\s+/)[0];
-  return AGENT_PROFILES.has(first) ? first : "";
+  // Against the catalogue, not this machine's offered subset: a pane already
+  // running an account is flippable even if that account was later removed from
+  // the picker, which is the difference between "don't offer this" and "break
+  // what is already open".
+  return ALL_PROFILES.some((p) => p.id === first) ? first : "";
 }
 
 /**

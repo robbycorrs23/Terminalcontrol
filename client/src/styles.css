@@ -503,6 +503,60 @@ body {
   max-width: 160px;
   accent-color: var(--accent);
 }
+.set-text {
+  flex: 1;
+  min-width: 0;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+.set-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mc-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mc-missing {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.8;
+}
+.mc-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mc-logo-preview {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background-image: var(--work-logo, none);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+.mc-btn {
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mc-btn:hover {
+  border-color: var(--accent);
+}
 .set-note {
   font-size: 12px;
   line-height: 1.35;
@@ -983,6 +1037,20 @@ body.big .task .tedit {
    `.tinted` is declared after this, so a manual color-code still wins if set. */
 .term.work .title {
   background: color-mix(in srgb, #00adec 55%, var(--panel));
+}
+/* The badge image is a per-machine setting, injected as --work-logo. With no
+   image configured there is nothing to show, so both badge elements collapse —
+   a machine that never asked for branding gets none. */
+body:not(.has-logo) .work-logo,
+body:not(.has-logo) .work-badge {
+  display: none !important;
+}
+.term.work .work-logo,
+.term.work .work-badge {
+  background-image: var(--work-logo, none);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
 }
 .term.work .work-logo {
   position: absolute;

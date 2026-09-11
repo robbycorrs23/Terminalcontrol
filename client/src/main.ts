@@ -270,6 +270,185 @@ function reflow() {
 }
 
 
+
+// ---- Per-machine settings (server/machine-config.js) ---------------------
+// Accounts, badge image and machine identity. Applied through a CSS custom
+// property rather than per-pane plumbing, so changing the badge updates every
+// box at once — including ones created before the fetch resolved.
+const mcLabel = document.getElementById("mcLabel") as HTMLInputElement;
+const mcColor = document.getElementById("mcColor") as HTMLSelectElement;
+const mcAccounts = document.getElementById("mcAccounts")!;
+const mcLogoPick = document.getElementById("mcLogoPick") as HTMLButtonElement;
+const mcLogoClear = document.getElementById("mcLogoClear") as HTMLButtonElement;
+const mcLogoFile = document.getElementById("mcLogoFile") as HTMLInputElement;
+const mcLogoPreview = document.getElementById("mcLogoPreview")!;
+const mcNote = document.getElementById("mcNote")!;
+
+/** Rebuild both picker selects from this machine's accounts. */
+function renderAgentOptions() {
+  const keepMain = agentSelect.value;
+  const keepSsh = sshAgentSelect.value;
+
+  // Remove only the direct <option> children — the SSH <optgroup> is a live
+  // node that renderSshOptions() fills, so it has to survive.
+  for (const o of [...agentSelect.children]) if (o.tagName === "OPTION") o.remove();
+  const frag = document.createDocumentFragment();
+  for (const id of machine.accounts) {
+    const o = document.createElement("option");
+    o.value = id;
+    o.textContent = profileLabel(id);
+    frag.append(o);
+  }
+  const shell = document.createElement("option");
+  shell.value = "";
+  shell.textContent = "plain shell";
+  frag.append(shell);
+  agentSelect.prepend(frag); // accounts, plain shell, then the SSH optgroup
+
+  sshAgentSelect.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "plain shell";
+  sshAgentSelect.append(none);
+  for (const id of machine.accounts) {
+    const o = document.createElement("option");
+    o.value = id;
+    o.textContent = profileLabel(id);
+    sshAgentSelect.append(o);
+  }
+
+  agentSelect.value = keepMain;
+  if (!agentSelect.value) agentSelect.value = machine.accounts[0] || "";
+  sshAgentSelect.value = keepSsh;
+  updateChatViewAvailability();
+}
+
+/** The badge image, as a custom property so every pane picks it up at once. */
+function applyMachineBadge() {
+  const url = machine.logoUrl;
+  document.documentElement.style.setProperty("--work-logo", url ? `url("${url}")` : "none");
+  document.body.classList.toggle("has-logo", !!url);
+  mcLogoPreview.hidden = !url;
+  mcLogoClear.hidden = !url;
+}
+
+function renderMachineSettings() {
+  mcLabel.value = machine.label || "";
+  mcLabel.placeholder = brandEl.textContent?.replace(/^▦\s*/, "") || "hostname";
+
+  mcColor.innerHTML = "";
+  const auto = document.createElement("option");
+  auto.value = "";
+  auto.textContent = "automatic";
+  mcColor.append(auto);
+  for (const c of machine.iconColors) {
+    const o = document.createElement("option");
+    o.value = c;
+    o.textContent = c;
+    mcColor.append(o);
+  }
+  mcColor.value = machine.iconColor || "";
+
+  mcAccounts.innerHTML = "";
+  for (const p of machine.profiles) {
+    const lbl = document.createElement("label");
+    lbl.className = "set-check";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = p.id;
+    cb.checked = machine.accounts.includes(p.id);
+    lbl.append(cb, document.createTextNode(" " + p.label));
+    if (!machine.installed.includes(p.id)) {
+      const warn = document.createElement("span");
+      warn.className = "mc-missing";
+      warn.textContent = "not signed in here";
+      lbl.append(warn);
+    }
+    cb.addEventListener("change", () => {
+      const picked = [...mcAccounts.querySelectorAll("input:checked")].map(
+        (i) => (i as HTMLInputElement).value
+      );
+      void saveMachine({ accounts: picked });
+    });
+    mcAccounts.append(lbl);
+  }
+
+  mcNote.textContent = machine.seeded
+    ? "Seeded from the logins found here — change it and it stays changed."
+    : "";
+  applyMachineBadge();
+}
+
+async function saveMachine(patch: Record<string, unknown>) {
+  try {
+    const res = await fetch("/api/machine", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const cfg = await res.json();
+    machine = { ...machine, ...cfg, seeded: false };
+    renderAgentOptions();
+    renderMachineSettings();
+  } catch {
+    mcNote.textContent = "Couldn't save — is the server still up?";
+  }
+}
+
+async function loadMachine() {
+  try {
+    const res = await fetch("/api/machine");
+    if (!res.ok) throw new Error(String(res.status));
+    machine = await res.json();
+  } catch {
+    // Older server (no /api/machine yet), or it's down. Fall back to whatever
+    // the static markup offers so the picker keeps working instead of
+    // collapsing to "plain shell" — this is the stale-bundle-vs-old-server
+    // case that bites constantly in this project.
+    machine = {
+      ...machine,
+      accounts: [...agentSelect.querySelectorAll("option")]
+        .map((o) => (o as HTMLOptionElement).value)
+        .filter(Boolean),
+      profiles: [],
+    };
+    return;
+  }
+  renderAgentOptions();
+  renderMachineSettings();
+}
+
+mcLabel.addEventListener("change", () => void saveMachine({ label: mcLabel.value.trim() || null }));
+mcColor.addEventListener("change", () => void saveMachine({ iconColor: mcColor.value || null }));
+mcLogoPick.addEventListener("click", () => mcLogoFile.click());
+mcLogoFile.addEventListener("change", () => {
+  const f = mcLogoFile.files?.[0];
+  mcLogoFile.value = "";
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const res = await fetch("/api/machine/logo", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dataUrl: reader.result }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      mcNote.textContent = body.error || "Couldn't use that image.";
+      return;
+    }
+    mcNote.textContent = "";
+    machine.logoUrl = body.logoUrl;
+    applyMachineBadge();
+  };
+  reader.readAsDataURL(f);
+});
+mcLogoClear.addEventListener("click", async () => {
+  await fetch("/api/machine/logo", { method: "DELETE" });
+  machine.logoUrl = null;
+  applyMachineBadge();
+});
+
 // ---- Per-pane view flip (terminal ⇄ chat) -------------------------------
 // The ❝ / ▤ button in each box's title bar. The picker's "❝ Chat view"
 // checkbox only decides what a NEW box becomes; this switches a box already on
@@ -901,11 +1080,32 @@ async function loadPrefs() {
 // desktop as well as mobile; opting back into the classic terminal is a
 // per-open, explicit uncheck. Existing boxes are unaffected — this only
 // decides what a NEWLY created box becomes.
-// This machine runs the WORK accounts only. The personal claude/codex logins
-// live on a different box, so neither the picker nor this whitelist knows
-// about them — see the note above remoteAgentCmd().
+// Which accounts THIS machine offers — a property of the machine, not of the
+// product, so it comes from the server (~/.fleetview/machine.json) rather than
+// being baked in here. Hardcoding it is what put a work-only picker and a work
+// badge on a personal machine when the branch was pulled.
+type MachineProfile = { id: string; provider: string; account: string; label: string };
+type MachineInfo = {
+  label: string | null;
+  iconColor: string | null;
+  accounts: string[];
+  badgeLogo: string | null;
+  seeded: boolean;
+  profiles: MachineProfile[];
+  installed: string[];
+  iconColors: string[];
+  logoUrl: string | null;
+};
+let machine: MachineInfo = {
+  label: null, iconColor: null, accounts: [], badgeLogo: null, seeded: false,
+  profiles: [], installed: [], iconColors: [], logoUrl: null,
+};
+
 function isAgentProfile(v: string): boolean {
-  return v === "claude-work" || v === "codex-work";
+  return machine.accounts.includes(v);
+}
+function profileLabel(id: string): string {
+  return machine.profiles.find((p) => p.id === id)?.label || id;
 }
 function chatViewAvailable(cmd: string, remoteAgentCmd: string = ""): boolean {
   return isAgentProfile(cmd) || (isSshValue(cmd) && isAgentProfile(remoteAgentCmd));
@@ -1190,11 +1390,15 @@ function buildSshCommand(p: SshProfile, agentCmd: string): string {
 // assumption the local "-work" picker options already make about this
 // machine.
 function remoteAgentCmd(agentCmd: string): string {
-  const runners: Record<string, string> = {
-    "claude-work": 'CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude',
-    "codex-work": 'CODEX_HOME="$HOME/.codex-work" codex',
-  };
-  const run = runners[agentCmd] || agentCmd;
+  const p = machine.profiles.find((x) => x.id === agentCmd);
+  // A personal account runs the bare CLI; a work account can't rely on a local
+  // `*-work` wrapper existing on the remote box, so it sets the same env var
+  // that wrapper sets, inline.
+  const run = !p
+    ? agentCmd
+    : p.account === "work"
+      ? `${p.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"}="$HOME/.${p.provider}-work" ${p.provider}`
+      : p.provider;
   return `${run}; exec $SHELL -l`;
 }
 // POSIX single-quote escaping, so a value with spaces/special chars still
@@ -1594,7 +1798,7 @@ function renderSshOptions() {
   // Re-selecting the same value after rebuilding options only "sticks" if it
   // still exists (e.g. a profile that was just deleted falls back to claude).
   agentSelect.value = keep;
-  if (agentSelect.value !== keep) agentSelect.value = "claude-work";
+  if (agentSelect.value !== keep) agentSelect.value = machine.accounts[0] || "";
   updateChatViewAvailability();
   updateSshRunRow();
 }
@@ -2032,6 +2236,9 @@ pushDoneEl.addEventListener("change", () => {
 // ---- Boot -------------------------------------------------------------
 applySettings(); // instant, from the localStorage mirror; loadPrefs() reconciles with the server
 connectControl();
+// Before anything reads machine.accounts: the picker's options, the agent
+// whitelist and the badge image all come from it.
+void loadMachine();
 loadLayouts();
 loadSshProfiles();
 loadSshHosts();

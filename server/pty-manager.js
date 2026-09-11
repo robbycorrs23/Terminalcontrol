@@ -2,6 +2,7 @@ import * as pty from "node-pty";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
+import { defaultAgentCmd } from "./machine-config.js";
 import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
@@ -426,10 +427,11 @@ export class PtyManager extends EventEmitter {
     const id = randomUUID().slice(0, 8);
     const home = os.homedir();
     const dir = cwd && String(cwd).trim() ? String(cwd).replace(/^~/, home) : home;
-    // undefined = caller expressed no preference, so use this machine's agent
-    // (the work account; `claude-work` is a PATH wrapper that sets
-    // CLAUDE_CONFIG_DIR). An explicit "" still means a plain shell.
-    const startup = cmd === undefined ? "claude-work" : cmd;
+    // undefined = caller expressed no preference, so use whichever agent this
+    // MACHINE offers first (~/.fleetview/machine.json). An explicit "" still
+    // means a plain shell. Note a terminal pane types this into a shell, so an
+    // account like `claude-work` needs a matching PATH wrapper.
+    const startup = cmd === undefined ? defaultAgentCmd() : cmd;
 
     const pane = {
       id,

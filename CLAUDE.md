@@ -174,16 +174,29 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   every agent pane's live driver — including, if you're working from inside a
   FleetView agent pane, your own session. Terminal panes are tmux-backed and
   don't care.
-- **Work accounts only on this install.** The personal `claude`/`codex` logins
-  live on another machine, so the two personal picker options are gone and
-  `isAgentProfile()` (`client/src/main.ts`), `knownAccounts()` (`server/usage.js`)
-  and `AGENT_PROFILES` (`server/pane-registry.js`) each list ONLY
-  `claude-work`/`codex-work`. Defaults follow (`pty-manager.js`'s startup
-  fallback, `index.js`'s layout-restore fallback, the picker's `selected`
-  option). The server still keys the account purely off the `-work` SUFFIX
-  (`accountConfigDirFor`), so re-adding a personal account means re-adding
-  those list entries, not rewriting the mechanism. `~/.claude`/`~/.codex` are
-  untouched — nothing here deletes a login, it just stops offering it.
+- **Per-machine settings live OUTSIDE the repo** (`server/machine-config.js` →
+  `~/.fleetview/machine.json`, 0600). Which accounts an install offers, its
+  badge image, its name and icon colour are facts about THE MACHINE, not about
+  the product — the same checkout runs on several. Hardcoding the account list
+  in source is exactly what put a work-only picker and a work badge on a
+  personal machine the moment the branch was pulled. Rule of thumb: if two
+  machines running this code would want different answers, it belongs in that
+  file. (`layouts.json` prefs are the neighbouring idea — those are YOUR
+  preferences, incl. theme; these are the machine's facts.) `FLEET_LABEL` /
+  `FLEET_ICON_COLOR` still win over the stored values so headless installs keep
+  working. The accounts list is EXPLICIT — seeded once from the logins actually
+  present, then never inferred again, so pulling a branch can't change it. The
+  badge reaches panes as the `--work-logo` CSS custom property, so a machine
+  with no image shows none (`body.has-logo`) and changing it updates every pane
+  at once.
+- **Work accounts only on THIS machine** — set in `~/.fleetview/machine.json`,
+  not in code. `isAgentProfile()` (`client/src/main.ts`) reads the server's
+  list, `knownAccounts()` (`server/usage.js`) maps it, and `baseProfile()`
+  (`server/pane-registry.js`) matches the full catalogue on purpose: a pane
+  already running an account stays flippable even after that account is removed
+  from the picker — the difference between "don't offer this" and "break what's
+  already open". The account is still keyed purely off the `-work` SUFFIX
+  (`accountConfigDirFor`). Nothing here ever deletes a login.
 - **Per-pane view flip (terminal ⇄ chat).** The `💬`/`▤` button in each box's
   TITLE BAR hits `POST /api/panes/:id/flip`. Deliberately per-pane, not a
   whole-window sweep. This CANNOT be a re-render: a chat pane is an in-process

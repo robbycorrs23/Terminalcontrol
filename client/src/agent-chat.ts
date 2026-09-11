@@ -272,12 +272,11 @@ export class AgentChat implements PaneView {
     // Term's `.work-logo`. Sits directly left of the mode selector (which is
     // itself already positioned right before the flag button above), so the
     // right-hand cluster reads badge → mode → flag → min → close.
-    if (info.cmd === "claude-work" || info.cmd === "codex-work") {
+    if (info.cmd.endsWith("-work")) {
       this.el.classList.add("work");
-      const badge = document.createElement("img");
-      badge.className = "work-badge";
-      badge.src = "/didit-logo-white.png";
-      badge.alt = "Work account";
+      // Image comes from the machine's own settings via --work-logo; see
+      // terminal.ts for the same treatment and main.ts for where it's set.
+      const badge = el("span", "work-badge");
       badge.title = "Work account";
       this.acctSlot.append(badge);
     }

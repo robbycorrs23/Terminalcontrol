@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { hostname } from "node:os";
+import * as machineConfig from "./machine-config.js";
 
 /**
  * Which machine is this?
@@ -39,19 +40,23 @@ export function createIdentity(publicDir) {
   // Lowercased because macOS reports a capitalised hostname ("DID2200") while
   // the tailnet name everyone actually reads is lowercase. An explicit
   // FLEET_LABEL is left exactly as typed.
+  // Precedence: env (so a headless/scripted install still works and can't be
+  // overridden from the UI) > the machine's own saved settings > the hostname.
+  const saved = machineConfig.read();
   const label = (
     process.env.FLEET_LABEL ||
+    saved.label ||
     hostname().split(".")[0].toLowerCase() ||
     "FleetView"
   ).slice(0, 40);
 
-  const requested = process.env.FLEET_ICON_COLOR;
+  const requested = process.env.FLEET_ICON_COLOR || saved.iconColor;
   let color = colorFromLabel(label);
   if (requested) {
     if (ICON_COLORS.includes(requested)) color = requested;
     else {
       console.warn(
-        `[fleetview] FLEET_ICON_COLOR="${requested}" is not one of ${ICON_COLORS.join(", ")} — using "${color}".`
+        `[fleetview] icon colour "${requested}" is not one of ${ICON_COLORS.join(", ")} — using "${color}".`
       );
     }
   }

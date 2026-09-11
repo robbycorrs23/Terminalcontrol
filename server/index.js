@@ -8,6 +8,7 @@ import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
 import { AgentManager } from "./agent-manager.js";
 import { createRegistry } from "./pane-registry.js";
+import * as machine from "./machine-config.js";
 import { SecretVault } from "./secret-vault.js";
 import { gateConfigured, verifyStepUpToken } from "./step-up-token.js";
 import { collectSnapshot, saveSnapshot, SNAPSHOT_DIR } from "./snapshot.js";
@@ -19,7 +20,7 @@ import { PushStore } from "./push-store.js";
 import { VapidKeys } from "./push-vapid.js";
 import { createSender } from "./push-send.js";
 import { createPushNotifier } from "./push-notifier.js";
-import { createIdentity } from "./identity.js";
+import { createIdentity, ICON_COLORS } from "./identity.js";
 import { SshProfileStore } from "./ssh-profiles.js";
 import { listSshConfigHosts } from "./ssh-hosts.js";
 import { UsageMonitor } from "./usage-monitor.js";
@@ -391,6 +392,57 @@ app.post("/api/mkdir", async (req, res) => {
   }
 });
 
+// --- Per-machine settings (server/machine-config.js) ----------------------
+// Which accounts THIS machine offers, what its work badge looks like, what it
+// calls itself. Deliberately not in the repo: the same checkout runs on several
+// machines and they want different answers, which is exactly what went wrong
+// when the account list was hardcoded.
+app.get("/api/machine", (_req, res) => {
+  const cfg = machine.ensureSeeded();
+  res.json({
+    ...cfg,
+    profiles: machine.ALL_PROFILES, // the catalogue, for the settings checkboxes
+    installed: machine.installedProfiles(), // which are actually logged in here
+    iconColors: ICON_COLORS,
+    logoUrl: machine.badgeLogoPath() ? "/api/machine/logo?v=" + Date.now() : null,
+  });
+});
+
+app.put("/api/machine", (req, res) => {
+  const cfg = machine.update(req.body || {});
+  res.json(cfg);
+});
+
+// Same base64 data-URL shape as the pane file drop, so the client needs no new
+// upload plumbing. Extension-allowlisted and size-capped: this is written to
+// disk and then served back, so it must never be an arbitrary file.
+const LOGO_TYPES = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/svg+xml": ".svg" };
+app.post("/api/machine/logo", (req, res) => {
+  const m = /^data:([^;]*);base64,(.+)$/s.exec(req.body?.dataUrl || "");
+  if (!m) return res.status(400).json({ error: "expected a base64 data URL" });
+  const ext = LOGO_TYPES[m[1]];
+  if (!ext) return res.status(400).json({ error: "use a PNG, JPEG, WebP or SVG image" });
+  const buf = Buffer.from(m[2], "base64");
+  if (buf.length > 512 * 1024) return res.status(400).json({ error: "image must be under 512 KB" });
+  machine.saveBadgeLogo(buf, ext);
+  res.json({ ok: true, logoUrl: "/api/machine/logo?v=" + Date.now() });
+});
+
+app.delete("/api/machine/logo", (_req, res) => {
+  machine.clearBadgeLogo();
+  res.status(204).end();
+});
+
+app.get("/api/machine/logo", (_req, res) => {
+  const file = machine.badgeLogoPath();
+  if (!file) return res.status(404).end();
+  // Same lockdown as /api/file: this is user-supplied bytes being served back,
+  // and an SVG is a script host unless it is sandboxed.
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.sendFile(file);
+});
+
 // Machine identity for the running UI (top bar + tab title). Separate from
 // /api/prefs on purpose: prefs are YOUR settings and sync across devices,
 // this is a property of the machine you happen to be connected to.
@@ -753,7 +805,7 @@ app.post("/api/layouts/:name/open", (req, res) => {
 
   const created = [];
   for (const slot of layout.slots || []) {
-    const cmd = slot.cmd ?? layout.cmd ?? "claude-work";
+    const cmd = slot.cmd ?? layout.cmd ?? machine.defaultAgentCmd();
     const kind = slot.kind ?? "pty";
     const pane = registry.create({ cwd: slot.cwd, cmd, session, kind });
     const info = registry.info(pane.id);

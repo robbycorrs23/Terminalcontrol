@@ -161,6 +161,32 @@
           </div>
         </section>
 
+        <!-- Properties of THIS machine, not of you: the same checkout runs on
+             several machines and they want different answers. Stored in
+             ~/.fleetview/machine.json, outside the repo (server/machine-config.js).
+             Your own preferences (theme, sound, picker defaults) stay above. -->
+        <section class="set-sec">
+          <h3 class="set-h">This machine</h3>
+          <div class="set-row">
+            <span class="set-label">Name</span>
+            <input type="text" id="mcLabel" class="set-text" maxlength="40" placeholder="hostname" />
+          </div>
+          <div class="set-row">
+            <span class="set-label">Icon colour</span>
+            <select id="mcColor"></select>
+          </div>
+          <div class="set-sub">Accounts this machine offers</div>
+          <div id="mcAccounts" class="mc-accounts"></div>
+          <div class="set-sub">Pane badge</div>
+          <div class="mc-logo">
+            <span id="mcLogoPreview" class="mc-logo-preview" hidden></span>
+            <button id="mcLogoPick" class="mc-btn">Choose image…</button>
+            <button id="mcLogoClear" class="mc-btn" hidden>Remove</button>
+            <input type="file" id="mcLogoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden />
+          </div>
+          <div id="mcNote" class="set-note"></div>
+        </section>
+
         <section class="set-sec">
           <h3 class="set-h">Safety</h3>
           <label class="set-check">

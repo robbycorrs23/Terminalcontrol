@@ -17,6 +17,7 @@
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { offeredProfiles, configDirOf } from "./machine-config.js";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -24,21 +25,20 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 const TIMEOUT_MS = 20000;
 
 /**
- * The accounts this machine could have. Mirrors accountConfigDirFor() in
- * agent-manager.js — the same `-work` suffix convention, resolved the same
- * way.
+ * The accounts this machine OFFERS, from ~/.fleetview/machine.json — not a
+ * hardcoded list. Which accounts an install has is a property of the machine,
+ * not of the product; baking it in here is what put a work-only picker on a
+ * personal machine when the branch was pulled. See server/machine-config.js.
  *
- * WORK ONLY on this install: the personal claude/codex logins live on another
- * machine, so their rows are deliberately absent here as well as from the
- * picker. A `configDir: null` row (= that provider's default ~/.claude or
- * ~/.codex) is what a personal account would look like if one came back.
+ * `configDir` null means that provider's default dir (a personal account);
+ * work accounts get their own, which is the whole `-work` suffix convention
+ * that accountConfigDirFor() in agent-manager.js also resolves.
  */
 export function knownAccounts() {
-  const home = homedir();
-  return [
-    { id: "claude-work", provider: "claude", account: "work", label: "claude (work)", configDir: join(home, ".claude-work") },
-    { id: "codex-work", provider: "codex", account: "work", label: "codex (work)", configDir: join(home, ".codex-work") },
-  ];
+  return offeredProfiles().map((p) => ({
+    ...p,
+    configDir: p.account === "work" ? configDirOf(p.id) : null,
+  }));
 }
 
 /**
