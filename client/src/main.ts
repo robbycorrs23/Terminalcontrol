@@ -1,3 +1,4 @@
+import { openNewSession } from "./new-session";
 import { Term, PaneInfo, PaneView, TermHost, UsageRow, UsageWindow, displayName, profileOf } from "./terminal";
 import { AgentChat } from "./agent-chat";
 import { play } from "./sound";
@@ -1665,7 +1666,47 @@ function prettyPath(p: string): string {
   return p;
 }
 
-document.getElementById("addBtn")!.addEventListener("click", openPicker);
+/** The picker's local agent choices, labelled for a phone-width segmented control. */
+function newSessionAgents() {
+  const opts = [...agentSelect.options].filter((o) => o.parentElement === agentSelect && !o.hidden && !o.disabled);
+  // A work-only machine: "(work)" on every button says nothing and costs width.
+  const allWork = opts.every((o) => !o.value || o.value.endsWith("-work"));
+  return opts.map((o) => {
+    let label = o.value ? o.textContent || o.value : "Shell";
+    if (allWork) label = label.replace(/\s*\(work\)/i, "");
+    return { value: o.value, label: label.charAt(0).toUpperCase() + label.slice(1), chat: chatViewAvailable(o.value) };
+  });
+}
+
+// On a phone "+" opens the new-session sheet (recent folder, agent, view,
+// first message — new-session.ts); "Browse…" in it falls back to the full
+// picker. Desktop keeps the picker.
+document.getElementById("addBtn")!.addEventListener("click", () => {
+  if (!mobileQuery.matches) return void openPicker();
+  void openNewSession({
+    recents: () => fetch("/api/recents").then((r) => r.json()),
+    agents: newSessionAgents(),
+    browse: () => void openPicker(),
+    create: async ({ cwd, agent, kind, prompt }) => {
+      try {
+        const res = await fetch("/api/panes", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ cwd, cmd: resolveCmd(agent), session: SESSION, kind, prompt }),
+        });
+        if (!res.ok) return false;
+        const info = (await res.json()) as PaneInfo;
+        // The `created` broadcast adds the box; open it the moment it exists.
+        for (let i = 0; i < 40 && !panes.get(info.id); i++) await new Promise((r) => setTimeout(r, 50));
+        const t = panes.get(info.id);
+        if (t) zoom(t);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
+});
 document.getElementById("pcancel")!.addEventListener("click", closePicker);
 
 // ---- Settings dropdown ------------------------------------------------
@@ -2352,6 +2393,7 @@ const volRow = document.getElementById("volRow")!;
 const notifyEl = document.getElementById("setNotify") as HTMLInputElement;
 const notifyNote = document.getElementById("notifyNote")!;
 const confirmCloseEl = document.getElementById("setConfirmClose") as HTMLInputElement;
+const autoTitleEl = document.getElementById("setAutoTitle") as HTMLInputElement;
 const pushDeviceEl = document.getElementById("setPushDevice") as HTMLInputElement;
 const pushNote = document.getElementById("pushNote")!;
 const pushCats = document.getElementById("pushCats")!;
@@ -2398,6 +2440,7 @@ function applySettings() {
   volRow.classList.toggle("off", !s.sound);
   notifyEl.checked = s.notify;
   confirmCloseEl.checked = s.confirmClose;
+  autoTitleEl.checked = s.autoTitle;
   pushQuestionEl.checked = s.pushQuestion;
   pushDoneEl.checked = s.pushDone;
   // The device switch is NOT a pref — it reflects whether this device actually
@@ -2457,6 +2500,7 @@ notifyEl.addEventListener("change", async () => {
   patchSettings({ notify: on });
   applySettings();
 });
+autoTitleEl.addEventListener("change", () => patchSettings({ autoTitle: autoTitleEl.checked }));
 confirmCloseEl.addEventListener("change", () => {
   patchSettings({ confirmClose: confirmCloseEl.checked });
   applySettings();
