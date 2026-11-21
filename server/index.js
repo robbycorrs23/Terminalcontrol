@@ -29,6 +29,7 @@ import { ensureHooks } from "./setup-hooks.js";
 import { ensureCodexHooks } from "./setup-codex-hooks.js";
 import { listDirs, makeDir } from "./fs-browse.js";
 import { generateTitle } from "./auto-title.js";
+import { sessionChanges } from "./changes.js";
 import { preflight } from "../scripts/preflight.js";
 
 // Check for tmux / curl / claude / codex FIRST, so any missing-dependency warning is the
@@ -695,6 +696,23 @@ app.post("/api/panes/:id/name", (req, res) => {
 // sees the var name it's told to reference. Agent (chat) panes have no tmux
 // session, so instead: a private temp file + one chat message telling Claude
 // the file's path (never the value).
+// What this session has changed: the files it edited (from its transcript) as
+// they are on disk now vs HEAD, plus other uncommitted changes in the repo,
+// kept apart. Read-only; see changes.js.
+app.get("/api/panes/:id/changes", async (req, res) => {
+  const id = req.params.id;
+  const info = registry.info(id);
+  if (!info) return res.status(404).json({ error: "no such pane" });
+  const sdkSessionId = info.kind === "agent" ? agents.sdkSessionIdOf(id) : ptys.sdkSessionIdOf(id);
+  const profile = String(info.cmd || "").trim().split(/\s+/)[0];
+  const configDir = profile.endsWith("-work") ? workConfigDir : join(homedir(), ".claude");
+  try {
+    res.json(await sessionChanges({ cwd: info.cwd, configDir, sdkSessionId, remote: !!info.remote }));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/api/panes/:id/secret-status", (req, res) => {
   const id = req.params.id;
   const isChat = !!agents.info(id);

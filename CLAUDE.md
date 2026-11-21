@@ -79,6 +79,7 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/rich.ts` | post-render pass: charts, table→chart toggle, copy buttons, clipping |
 | `client/src/chat-steps.ts` / `chat-dock.ts` / `chat-commands.ts` / `lightbox.ts` / `highlight.ts` | chat view: step rendering / approval dock / "/" menu / image viewer / code highlighting |
 | `client/src/new-session.ts` / `server/auto-title.js` | phone new-session sheet / auto session titles |
+| `client/src/changes-panel.ts` / `server/changes.js` | per-session Changes panel (transcript-attributed files × git diff) |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
 | `client/src/push.ts` / `client/public/sw.js` | Web Push subscribe/badge / the service worker that shows notifications |
 | `server/gate.js` | optional passkey-auth reverse proxy (`fleetview-gate` service) that `tailscale serve` fronts instead of the app directly — a SEPARATE process from `server/index.js`, own port (`FLEET_GATE_PORT`, default 4290), own launchd/systemd unit (`com.fleetview.gate`). See Gotchas. |
@@ -400,6 +401,19 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   `persistSession: false` (no junk session in Claude Code's history), work
   account via CLAUDE_CONFIG_DIR, FLEET_PANE_ID stripped; falls back to a
   text heuristic. Off switch: the `autoTitle` pref (Settings → Workspace).
+- **Changes panel** (`client/src/changes-panel.ts`, `server/changes.js`,
+  `GET /api/panes/:id/changes`): files the session edited (Edit / MultiEdit /
+  Write / NotebookEdit in its FULL transcript) shown as they are on disk now —
+  `git diff HEAD` per file, untracked files as all-added, "no changes now" if
+  committed/reverted — plus the repo's other uncommitted changes kept apart.
+  Edits made through Bash can't be attributed from a transcript, so they land
+  under Other (the panel says so). Paths are compared via realpath (macOS
+  `/tmp` → `/private/tmp`, or any symlinked folder, otherwise misclassifies
+  every file as outside the repo). Non-git folders fall back to the session's
+  own edit inputs, diffed client-side with `inputDiff()`. git runs via
+  execFile (argv, no shell, timeout, output cap); read-only. Opened from the
+  + menu or the "N files changed" link under a turn (`turnFiles`, saved and
+  restored around history pages like the other turn state).
 - **Settings outside-click uses `settingsBtn.contains(target)`** — the button
   holds an SVG, so `target === settingsBtn` closed the panel as it opened.
 - **Account badges use `.acct-slot`, not `.badge-slot`.** They sit in the

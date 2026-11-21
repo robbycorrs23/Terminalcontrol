@@ -5625,3 +5625,226 @@ body.light .ns-seg button.on {
   outline: none;
   border-color: var(--accent);
 }
+
+/* ---- Changes panel (changes-panel.ts) — over the chat, like a pushed screen ---- */
+.term .chg-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  background: var(--term-bg);
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  outline: none;
+  animation: chg-in 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes chg-in {
+  from {
+    transform: translateX(12%);
+    opacity: 0.5;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term .chg-panel {
+    animation: none;
+  }
+}
+.term .chg-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 8px 4px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.term .chg-back,
+.term .chg-refresh {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  color: var(--accent);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+.term .chg-refresh {
+  font-size: 18px;
+  color: var(--text-dim);
+}
+.term .chg-refresh:hover,
+.term .chg-back:hover {
+  background: var(--btn);
+}
+.term .chg-titles {
+  flex: 1;
+  min-width: 0;
+}
+.term .chg-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+.term .chg-sub {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.term .chg-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 12px 20px;
+}
+.term .chg-section {
+  margin: 14px 4px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.term summary.chg-section {
+  cursor: pointer;
+  list-style: none;
+}
+.term summary.chg-section::-webkit-details-marker {
+  display: none;
+}
+.term summary.chg-section::before {
+  content: "▸ ";
+}
+.term .chg-other[open] > summary.chg-section::before {
+  content: "▾ ";
+}
+.term .chg-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.term .chg-file + .chg-file {
+  border-top: 1px solid var(--line);
+}
+.term .chg-file > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 12px;
+  list-style: none;
+  cursor: pointer;
+}
+.term .chg-file > summary::-webkit-details-marker {
+  display: none;
+}
+.term .chg-file > summary:hover {
+  background: var(--btn);
+}
+.term .chg-badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  font: 700 11px ui-monospace, Menlo, monospace;
+  color: #fff;
+  background: var(--text-dim);
+}
+.term .chg-badge.s-M { background: #d29922; }
+.term .chg-badge.s-A { background: #2ea043; }
+.term .chg-badge.s-D { background: #da3633; }
+.term .chg-badge.s-R { background: #8957e5; }
+.term .chg-badge.s-clean { background: transparent; color: var(--text-dim); border: 1px solid var(--line); }
+.term .chg-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term .chg-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.term .chg-dir {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: ltr;
+}
+.term .chg-file.clean .chg-name {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.term .chg-stat {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  font: 12px ui-monospace, Menlo, monospace;
+  color: var(--text-dim);
+}
+.term .chg-stat .add { color: #3fb950; }
+.term .chg-stat .del { color: #f85149; }
+.term .chg-body {
+  padding: 0 10px 10px;
+}
+.term .chg-body .diff-block pre.tool-diff,
+.term .chg-body pre.tool-diff {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre;
+  font: 11.5px/1.5 ui-monospace, Menlo, monospace;
+  background: var(--term-bg);
+}
+.term .chg-body .tool-diff::before {
+  content: none;
+}
+.term .chg-note,
+.term .chg-empty,
+.term .chg-foot {
+  padding: 8px 4px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+.term .chg-foot {
+  margin-top: 12px;
+}
+.term .chg-banner {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+/* "3 files changed" under a turn */
+.term .turn-files {
+  padding: 2px 8px;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.term .turn-files:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
