@@ -17,6 +17,7 @@ import {
 import { ApprovalDock, DockAnswer, PermissionEvent } from "./chat-dock";
 import { CommandMenu } from "./chat-commands";
 import { wireLightbox } from "./lightbox";
+import { openChanges } from "./changes-panel";
 import { mediaSrc } from "./markdown";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown } from "./markdown";
@@ -249,6 +250,7 @@ export class AgentChat implements PaneView {
   private thinkingEls = new Map<string, HTMLElement>(); // thinking id -> row being streamed
   private turnStart: number | null = null; // ts of the user message that opened the current turn
   private turnEls: HTMLElement[] = []; // assistant text blocks of the current turn (for Copy)
+  private turnFiles = new Set<string>(); // files edited this turn → "N files changed" under it
   private attachRow!: HTMLElement;
   private attachments: { path: string; name: string; uploading?: boolean }[] = [];
   private lastTs: number | undefined;
@@ -419,6 +421,8 @@ export class AgentChat implements PaneView {
     // offer an image (iOS shows no Paste in a text box for an image-only
     // clipboard). Uses the async Clipboard API, which asks once.
     const pasteBtn = menuItem("paste-img", "image", "Paste image");
+    // What this session has changed, as it is on disk now (changes-panel.ts).
+    const changesBtn = menuItem("changes", "branch", "Changes");
     const secretBtn = menuItem("secret", "secret", "Give it a secret");
     secretBtn.title = "Give this chat a secret (never saved to chat memory)";
     // `.view` is what main.ts's flipView() looks up to disable during a flip.
@@ -427,7 +431,11 @@ export class AgentChat implements PaneView {
     this.plusMenu.hidden = true;
     this.infoEl = el("div", "menu-info");
     this.infoEl.hidden = true;
-    this.plusMenu.append(this.infoEl, attachBtn, pasteBtn, secretBtn, viewBtn);
+    this.plusMenu.append(this.infoEl, changesBtn, attachBtn, pasteBtn, secretBtn, viewBtn);
+    changesBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.showChanges();
+    });
     pasteBtn.hidden = !navigator.clipboard?.read;
     pasteBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -554,6 +562,7 @@ export class AgentChat implements PaneView {
     // remote host instead, not done here). Hide, don't wire — a visible but
     // silently-broken button would be worse than no button.
     if (this.isRemote) {
+      changesBtn.hidden = true; // its files are on another machine
       pasteBtn.hidden = true;
       secretBtn.hidden = true;
       attachBtn.hidden = true;
@@ -966,6 +975,7 @@ export class AgentChat implements PaneView {
         this.appendBubble("user", ev.text);
         this.turnStart = ev.ts ?? Date.now();
         this.turnEls = [];
+        this.turnFiles = new Set();
         if (!this.prepending) this.setSuggestion("");
         break;
       case "assistant_done": {
@@ -1200,6 +1210,7 @@ export class AgentChat implements PaneView {
     details.dataset.tool = name;
     const fileArg = input && typeof input === "object" ? (input as Record<string, unknown>).file_path : undefined;
     if (typeof fileArg === "string") details.dataset.file = fileArg;
+    if (!parent && typeof fileArg === "string" && /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(name)) this.turnFiles.add(fileArg);
     const summary = document.createElement("summary");
     const { verb, target } = toolLabel(name, input);
     const dot = el("span", "tool-dot");
@@ -1626,6 +1637,12 @@ export class AgentChat implements PaneView {
     foot.textContent = "✓ " + Object.values(answers).join(" · ");
   }
 
+  /** The Changes panel over this pane's chat (changes-panel.ts). */
+  private showChanges() {
+    const chat = this.el.querySelector(".chat") as HTMLElement | null;
+    if (chat) openChanges(chat, this.id);
+  }
+
   // ---- Connection, retries, compaction, context, background tasks ---------------
 
   /**
@@ -1777,6 +1794,7 @@ export class AgentChat implements PaneView {
         gb: this.toolGroupBody,
         ts: this.turnStart,
         te: this.turnEls,
+        tf: this.turnFiles,
         last: this.lastTs,
       };
       const page = el("div", "chat-log");
@@ -1784,6 +1802,7 @@ export class AgentChat implements PaneView {
       this.endToolGroup();
       this.turnStart = null;
       this.turnEls = [];
+      this.turnFiles = new Set();
       this.lastTs = undefined;
       this.prepending = true;
       try {
@@ -1795,6 +1814,7 @@ export class AgentChat implements PaneView {
         this.toolGroupBody = saved.gb;
         this.turnStart = saved.ts;
         this.turnEls = saved.te;
+        this.turnFiles = saved.tf;
         this.lastTs = saved.last;
       }
       const before = this.logEl.scrollHeight;
@@ -1913,9 +1933,11 @@ export class AgentChat implements PaneView {
    */
   private appendTurnMeta(durationMs?: number) {
     const texts = this.turnEls.slice();
+    const files = this.turnFiles.size;
     this.turnStart = null;
     this.turnEls = [];
-    if (!texts.length) return;
+    this.turnFiles = new Set();
+    if (!texts.length && !files) return;
     this.endToolGroup();
     const meta = el("div", "turn-meta");
     const copy = el("button", "turn-copy") as HTMLButtonElement;
@@ -1931,7 +1953,17 @@ export class AgentChat implements PaneView {
         setTimeout(() => setIcon(copy, "copy"), 1200);
       } catch {}
     });
-    meta.append(copy);
+    if (texts.length) meta.append(copy);
+    if (files && !this.isRemote) {
+      // Like the app's "Edited 3 files" — opens the Changes panel.
+      const ch = el("button", "turn-files") as HTMLButtonElement;
+      ch.textContent = `${files} file${files === 1 ? "" : "s"} changed`;
+      ch.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.showChanges();
+      });
+      meta.append(ch);
+    }
     if (durationMs && durationMs >= 1000) {
       const d = el("span", "turn-time");
       d.textContent = `Worked for ${fmtDuration(durationMs)}`;

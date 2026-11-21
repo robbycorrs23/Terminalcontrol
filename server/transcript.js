@@ -196,3 +196,8 @@ function parsedAll(file) {
   cache = { file, size: st.size, mtime: st.mtimeMs, events };
   return events;
 }
+
+/** Every event in a transcript (no tail limit), from the same cache history paging uses. */
+export function allTranscriptEvents(file) {
+  return parsedAll(file);
+}
