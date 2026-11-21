@@ -17,7 +17,7 @@
  * plus an index), and guessing at it is a bigger job than it's worth here — a
  * codex pane simply comes back with an empty log, exactly as before.
  */
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** Mirrors claude-driver.js's stringifyBlockContent — tool output as flat text. */
@@ -124,4 +124,68 @@ export function eventsFromTranscript(file, limit = 250) {
 export function restoreEvents(configDir, sdkSessionId, limit) {
   const file = findTranscript(configDir, sdkSessionId);
   return file ? eventsFromTranscript(file, limit) : [];
+}
+
+/**
+ * A stable identity for an event across the live stream and the transcript,
+ * so the client can say "I have everything from HERE on". Tool ids are the
+ * SDK's own (`toolu_…`) and identical in both; text events fall back to
+ * their text. Events the transcript never holds (status, mode, permission…)
+ * have no key. MIRRORED in client/src/agent-chat.ts's `eventKey`.
+ */
+export function eventKey(e) {
+  if (e.t === "tool_call" || e.t === "tool_result") return `${e.t}:${e.id}`;
+  if (e.t === "user") return `user:${e.text}`;
+  if (e.t === "assistant_done") return `a:${e.text}`;
+  if (e.t === "thinking") return `th:${e.text}`;
+  return null;
+}
+
+/**
+ * The page of history just before what the client already shows (scrolling
+ * up past the replay ring's start). `anchors` = keys of the client's oldest
+ * events, oldest first. A unique tool key locates the spot exactly (minus how
+ * many anchors precede it); text keys are only a fallback, since "yes" can
+ * appear many times. Returns `{ events, more }`.
+ */
+export function olderEvents(configDir, sdkSessionId, anchors, limit = 150) {
+  const none = { events: [], more: false };
+  const file = findTranscript(configDir, sdkSessionId);
+  if (!file || !Array.isArray(anchors) || !anchors.length) return none;
+  const all = parsedAll(file);
+  const first = new Map();
+  all.forEach((e, i) => {
+    const k = eventKey(e);
+    if (k && !first.has(k)) first.set(k, i);
+  });
+  let end = -1;
+  const toolAt = anchors.findIndex((k) => typeof k === "string" && k.startsWith("tool_") && first.has(k));
+  if (toolAt !== -1) end = first.get(anchors[toolAt]) - toolAt;
+  else {
+    const textAt = anchors.findIndex((k) => first.has(k));
+    if (textAt !== -1) end = first.get(anchors[textAt]) - textAt;
+  }
+  if (end <= 0) return none;
+  let start = Math.max(0, end - limit);
+  // Don't open the page on a result whose call is just outside it — widen
+  // back to the call instead of dropping the result (dropping it lost it for
+  // good: the NEXT page ends before it).
+  while (start > 0 && all[start].t === "tool_result") start--;
+  return { events: all.slice(start, end), more: start > 0 };
+}
+
+// Paging re-reads the whole transcript (tens of MB for a long session) once
+// per page, so keep the last parse until the file changes.
+let cache = null;
+function parsedAll(file) {
+  let st;
+  try {
+    st = statSync(file);
+  } catch {
+    return [];
+  }
+  if (cache && cache.file === file && cache.size === st.size && cache.mtime === st.mtimeMs) return cache.events;
+  const events = eventsFromTranscript(file, Infinity).filter((e) => e.t !== "status");
+  cache = { file, size: st.size, mtime: st.mtimeMs, events };
+  return events;
 }

@@ -4447,3 +4447,102 @@ body.fx-full .term.idle:hover .chat {
     padding-bottom: 8px;
   }
 }
+
+/* ---- Phone: an open pane gets the whole screen ---------------------------
+   main.ts sets body.pane-open while a pane is open; on phones the app bar
+   steps aside (its chips' job is done by the title's "3/12 ⌄ 2" switcher).
+   The bar used to own the notch/Dynamic Island inset, so the pane's title
+   takes it over — its colour runs up under the status bar like a native app. */
+@media (max-width: 640px) {
+  body.pane-open #bar {
+    display: none;
+  }
+  body.pane-open .term.zoomed > .title {
+    padding-top: calc(2px + env(safe-area-inset-top));
+  }
+}
+
+/* ---- "Load earlier messages" marker at the top of the log ---- */
+.term .history-top {
+  align-self: center;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.term .history-top:hover {
+  background: var(--btn);
+  color: var(--text);
+}
+.term .history-top.loading {
+  cursor: default;
+  background: none;
+}
+.term .history-top[hidden] {
+  display: none;
+}
+
+/* ---- Messages queued while a turn runs ---- */
+.term .chat-queue {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 8px 4px;
+  max-height: 30%;
+  overflow-y: auto;
+}
+.term .chat-queue[hidden],
+.term .chat.has-dock .chat-queue {
+  display: none;
+}
+.term .queued {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
+  background: var(--panel);
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+}
+.term .queued-label {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.term .queued-text {
+  flex: 1;
+  min-width: 0;
+  max-height: 60px;
+  overflow: hidden;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+}
+.term .queued-text .msg-img {
+  max-height: 40px;
+  max-width: 60px;
+}
+.term .queued-now,
+.term .queued-x {
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.term .queued-x {
+  width: 28px;
+  padding: 0;
+}

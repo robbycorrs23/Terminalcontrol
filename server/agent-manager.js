@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { startClaudeSession } from "./agents/claude-driver.js";
 import { startCodexSession } from "./agents/codex-driver.js";
-import { restoreEvents } from "./transcript.js";
+import { restoreEvents, olderEvents } from "./transcript.js";
 
 const RING_BUFFER_SIZE = 300; // replayed to a client that attaches/reconnects
 // Never ringed. Deltas would evict real history (see _handleEvent); progress
@@ -399,6 +399,18 @@ export class AgentManager {
         this.setMode(id, m.mode);
       } else if (m.t === "setModel" && typeof m.model === "string" && m.model) {
         this.setModel(id, m.model);
+      } else if (m.t === "history" && Array.isArray(m.anchors)) {
+        // Older messages than the replay ring holds, read from the transcript.
+        let page = { events: [], more: false };
+        if (pane.provider !== "codex" && !pane.remote && pane.sdkSessionId) {
+          try {
+            const configDir = pane.accountConfigDir || join(homedir(), ".claude");
+            page = olderEvents(configDir, pane.sdkSessionId, m.anchors.slice(0, 60).map(String));
+          } catch {}
+        }
+        try {
+          ws.send(JSON.stringify({ t: "history", events: page.events, more: page.more }));
+        } catch {}
       }
     });
     ws.on("close", () => pane.clients.delete(ws));

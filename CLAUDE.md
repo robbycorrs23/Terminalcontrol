@@ -333,6 +333,21 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   home list is restyled as an inbox (CSS only). The open pane's top edge is
   `max(visual-viewport top, #bar bottom)` — NOT `vy + barH`, which left a gap
   when the iOS keyboard scrolled #bar away.
+- **Earlier history pages in from the transcript.** The replay ring only holds
+  ~300 events; scrolling near the top sends `{t:"history", anchors}` (keys of
+  the oldest events shown — `eventKey()`, MIRRORED in `transcript.js` and
+  `agent-chat.ts`) and `olderEvents()` returns the 150 before that point. A
+  unique tool id locates the spot; text keys are only a fallback. A page never
+  opens on a tool result (it widens back to the call — dropping it lost the
+  result for good). The parsed transcript is cached until the file changes.
+  The client renders a page off-screen with `prepending` set (no live side
+  effects) and keeps your scroll position. Codex/remote panes get none.
+- **Messages typed mid-turn are queued CLIENT-side**, visibly, with edit /
+  Send now / ✕, and go out as one message on the next LIVE `idle` (never a
+  replayed one); an interrupted turn puts them back in the composer.
+- **On a phone an open pane hides `#bar`** (`body.pane-open`); its title bar
+  takes over the safe-area inset. `setPaneOpen()` must run before measuring
+  in both `zoom()` and `unzoom()`.
 - **Account badges use `.acct-slot`, not `.badge-slot`.** They sit in the
   right-hand cluster beside ⚑. This is not cosmetic: `setWaiting()` does
   `badgeSlot.innerHTML = ""` on every attention change, so anything persistent

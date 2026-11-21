@@ -605,6 +605,10 @@ function zoom(t: PaneView): void {
 
   const el = t.el;
   const start = t.cell.getBoundingClientRect();
+  // Phone: the open pane gets the whole screen, as in the Claude app — the
+  // app bar (title, ⚙, + Terminal, chips) hides; the pane's own title bar
+  // carries ‹ back and the session switcher with its needs-you count.
+  setPaneOpen(true);
 
   el.style.transition = "none";
   el.classList.add("zoomed");
@@ -628,6 +632,7 @@ function unzoom() {
   if (!t) return;
   zoomed = null;
   closePaneSheet();
+  setPaneOpen(false); // before measuring: the bar coming back moves the list
   const el = t.el;
   setRect(el, t.cell.getBoundingClientRect());
   scrim.hidden = true;
@@ -784,6 +789,12 @@ window.visualViewport?.addEventListener("scroll", onVisualViewportChange);
 // Swipe order is the GRID order, deliberately not the list's attention order:
 // opening a pane clears its attention, which would re-sort the list under
 // your thumb mid-swipe.
+
+/** body.pane-open hides #bar on phones (CSS); keep --bar-h and friends in step. */
+function setPaneOpen(on: boolean) {
+  document.body.classList.toggle("pane-open", on);
+  syncBarHeightVar();
+}
 
 /** Panes you can swipe between: everything on the grid (not minimized), in grid order. */
 function swipeOrder(): PaneView[] {

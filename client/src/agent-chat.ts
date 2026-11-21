@@ -61,6 +61,28 @@ function renamePasted(f: File, i: number): File {
   return new File([f], `pasted-${stamp}${i ? "-" + i : ""}.${ext}`, { type: f.type });
 }
 
+/**
+ * Identity of an event shared by the live stream and the on-disk transcript —
+ * how "load earlier" tells the server where this log begins. MIRRORS
+ * server/transcript.js's `eventKey`.
+ */
+function eventKey(e: AgentEvent): string | null {
+  if (e.t === "tool_call" || e.t === "tool_result") return `${e.t}:${e.id}`;
+  if (e.t === "user") return `user:${e.text}`;
+  if (e.t === "assistant_done") return `a:${e.text}`;
+  if (e.t === "thinking") return `th:${e.text}`;
+  return null;
+}
+function headKeysOf(events: AgentEvent[], n = 40): string[] {
+  const out: string[] = [];
+  for (const e of events) {
+    const k = eventKey(e);
+    if (k) out.push(k);
+    if (out.length >= n) break;
+  }
+  return out;
+}
+
 /** Steps a tool run shows before older ones fold behind "N earlier steps" (mirrored in styles.css). */
 const TOOL_RUN_VISIBLE = 3;
 
@@ -197,7 +219,18 @@ export class AgentChat implements PaneView {
   private turnEls: HTMLElement[] = []; // assistant text blocks of the current turn (for Copy)
   private attachRow!: HTMLElement;
   private attachments: { path: string; name: string; uploading?: boolean }[] = [];
-  private lastTs: number | undefined; // ts of the previous event (thinking's start when replayed whole)
+  private lastTs: number | undefined;
+  // "Load earlier": keys of the oldest events shown, whether the server may
+  // have more, a request in flight, and the marker at the top of the log.
+  private headKeys: string[] = [];
+  private historyMore = true;
+  private historyLoading = false;
+  private historyTop!: HTMLElement;
+  private prepending = false; // rendering an older page off-screen: no live side effects
+  // Messages typed while a turn runs wait here (visible, editable,
+  // cancellable) and go out together when the turn ends.
+  private queued: string[] = [];
+  private queueEl!: HTMLElement; // ts of the previous event (thinking's start when replayed whole)
   private ws?: WebSocket;
   private reconnectTimer?: number;
   private disposed = false;
@@ -418,6 +451,8 @@ export class AgentChat implements PaneView {
     });
     this.suggestEl = el("div", "chat-suggest");
     this.suggestEl.hidden = true;
+    this.queueEl = el("div", "chat-queue");
+    this.queueEl.hidden = true;
     this.dock = new ApprovalDock(
       this.isCodex,
       (ev, a) => this.answerPermission(ev, a),
@@ -434,7 +469,7 @@ export class AgentChat implements PaneView {
     const logWrap = el("div", "log-wrap");
     logWrap.append(this.logEl, this.jumpBtn);
     wireLightbox(chat);
-    chat.append(logWrap, this.statusEl, this.plusMenu, this.cmdMenu.el, this.suggestEl, this.dock.el, inputBar, workingOverlay());
+    chat.append(logWrap, this.statusEl, this.plusMenu, this.cmdMenu.el, this.suggestEl, this.queueEl, this.dock.el, inputBar, workingOverlay());
     this.syncSend();
 
     this.el.append(this.titleBar, cwdline, this.pinnedEl, chat);
@@ -508,6 +543,7 @@ export class AgentChat implements PaneView {
       const room = this.logEl.scrollHeight - this.logEl.scrollTop - this.logEl.clientHeight;
       this.jumpBtn.hidden = room < 24;
       this.stick = room < 48;
+      if (this.logEl.scrollTop < 400) this.requestHistory();
     });
 
     this.inputEl.addEventListener("keydown", (e) => {
@@ -633,7 +669,7 @@ export class AgentChat implements PaneView {
     const ws = new WebSocket(`${proto}://${location.host}/agent?pane=${this.id}`);
     this.ws = ws;
     ws.onmessage = (e) => {
-      let m: { t: string; events?: AgentEvent[]; ev?: AgentEvent };
+      let m: { t: string; events?: AgentEvent[]; ev?: AgentEvent; more?: boolean };
       try {
         m = JSON.parse(e.data);
       } catch {
@@ -642,9 +678,16 @@ export class AgentChat implements PaneView {
       if (m.t === "replay" && m.events) {
         this.resetLog();
         for (const ev of m.events) this.applyEvent(ev);
+        this.headKeys = headKeysOf(m.events);
+        this.historyMore = this.headKeys.length > 0;
+        this.historyLoading = false;
+        this.renderHistoryTop();
         this.scrollToBottom(true);
+      } else if (m.t === "history" && m.events) {
+        this.prependHistory(m.events, !!m.more);
       } else if (m.t === "ev" && m.ev) {
         this.applyEvent(m.ev);
+        if (m.ev.t === "status") this.onLiveStatus(m.ev.state);
         this.scrollToBottom();
       }
     };
@@ -707,6 +750,14 @@ export class AgentChat implements PaneView {
     this.attachments = [];
     this.renderAttachments();
     this.inputEl.value = "";
+    if (this.busy) {
+      // Claude is mid-turn: hold it (visibly) and send when the turn ends.
+      this.queued.push(text);
+      this.renderQueue();
+      this.autoGrow();
+      this.syncSend();
+      return;
+    }
     this.autoGrow();
     this.cmdMenu.close();
     this.stick = true; // sending is "take me to the bottom"
@@ -803,6 +854,12 @@ export class AgentChat implements PaneView {
 
   private resetLog() {
     this.logEl.innerHTML = "";
+    this.historyTop = el("div", "history-top");
+    this.historyTop.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.requestHistory();
+    });
+    this.logEl.append(this.historyTop);
     this.toolEls.clear();
     this.permEls.clear();
     this.questionEls.clear();
@@ -824,10 +881,13 @@ export class AgentChat implements PaneView {
     switch (ev.t) {
       case "user":
         this.closeThinking();
+        // Older pages carry no per-turn status events; close each turn
+        // (Copy + time) when the next prompt starts instead.
+        if (this.prepending && this.turnEls.length) this.appendTurnMeta(this.turnStart && ev.ts ? ev.ts - this.turnStart : undefined);
         this.appendBubble("user", ev.text);
         this.turnStart = ev.ts ?? Date.now();
         this.turnEls = [];
-        this.setSuggestion("");
+        if (!this.prepending) this.setSuggestion("");
         break;
       case "assistant_done": {
         // A streamed block (claude via includePartialMessages, codex natively)
@@ -1028,6 +1088,7 @@ export class AgentChat implements PaneView {
 
   /** Something else started, so any thinking still streaming is over. */
   private closeThinking() {
+    if (this.prepending) return; // an older page must not touch a live thinking row
     for (const row of this.thinkingEls.values()) this.finishThinking(row, Date.now());
   }
 
@@ -1472,6 +1533,132 @@ export class AgentChat implements PaneView {
       card.append(foot);
     }
     foot.textContent = "✓ " + Object.values(answers).join(" · ");
+  }
+
+  // ---- Earlier history ---------------------------------------------------------
+  // The replay ring holds the last ~300 events; anything older is fetched from
+  // the transcript a page at a time as you scroll toward the top.
+
+  private requestHistory() {
+    if (this.historyLoading || !this.historyMore || !this.headKeys.length) return;
+    this.historyLoading = true;
+    this.renderHistoryTop();
+    this.wsSend({ t: "history", anchors: this.headKeys });
+  }
+
+  private renderHistoryTop() {
+    if (!this.historyTop) return;
+    const t = this.historyTop;
+    t.classList.toggle("loading", this.historyLoading);
+    t.textContent = this.historyLoading ? "Loading earlier messages…" : this.historyMore ? "Load earlier messages" : "";
+    t.hidden = !this.historyLoading && !this.historyMore;
+  }
+
+  /** Render an older page off-screen with this view's own renderer, then slide it in above, keeping your place. */
+  private prependHistory(events: AgentEvent[], more: boolean) {
+    this.historyLoading = false;
+    this.historyMore = more && events.length > 0;
+    if (events.length) {
+      const saved = {
+        log: this.logEl,
+        g: this.toolGroupEl,
+        gb: this.toolGroupBody,
+        ts: this.turnStart,
+        te: this.turnEls,
+        last: this.lastTs,
+      };
+      const page = el("div", "chat-log");
+      this.logEl = page;
+      this.endToolGroup();
+      this.turnStart = null;
+      this.turnEls = [];
+      this.lastTs = undefined;
+      this.prepending = true;
+      try {
+        for (const ev of events) this.applyEvent(ev);
+      } finally {
+        this.prepending = false;
+        this.logEl = saved.log;
+        this.toolGroupEl = saved.g;
+        this.toolGroupBody = saved.gb;
+        this.turnStart = saved.ts;
+        this.turnEls = saved.te;
+        this.lastTs = saved.last;
+      }
+      const before = this.logEl.scrollHeight;
+      const top = this.logEl.scrollTop;
+      this.historyTop.after(...page.childNodes);
+      this.logEl.scrollTop = top + (this.logEl.scrollHeight - before);
+      this.headKeys = [...headKeysOf(events), ...this.headKeys].slice(0, 40);
+    }
+    this.renderHistoryTop();
+  }
+
+  // ---- Queued messages ----------------------------------------------------------
+
+  private renderQueue() {
+    this.queueEl.textContent = "";
+    this.queueEl.hidden = !this.queued.length;
+    this.queued.forEach((text, i) => {
+      const row = el("div", "queued");
+      const label = el("span", "queued-label");
+      label.textContent = "Queued";
+      const body = el("div", "queued-text");
+      this.renderUserText(body, text);
+      body.title = "Edit";
+      body.addEventListener("click", (e) => {
+        // Tap to edit: back into the composer.
+        e.stopPropagation();
+        this.queued.splice(i, 1);
+        this.inputEl.value = this.inputEl.value ? `${text}\n${this.inputEl.value}` : text;
+        this.renderQueue();
+        this.autoGrow();
+        this.syncSend();
+        this.inputEl.focus();
+      });
+      const now = el("button", "queued-now") as HTMLButtonElement;
+      now.textContent = "Send now";
+      now.title = "Send it now — Claude picks it up mid-turn";
+      now.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.queued.splice(i, 1);
+        this.renderQueue();
+        this.wsSend({ t: "send", text });
+      });
+      const x = el("button", "queued-x") as HTMLButtonElement;
+      x.textContent = "✕";
+      x.title = "Remove";
+      x.setAttribute("aria-label", "Remove queued message");
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.queued.splice(i, 1);
+        this.renderQueue();
+      });
+      row.append(label, body, now, x);
+      this.queueEl.append(row);
+    });
+  }
+
+  /**
+   * A LIVE status change (never a replayed one — a reload must not fire a
+   * stale queue). Turn ended cleanly → send what's queued, as one message.
+   * Interrupted → put it back in the composer to rethink, as Claude Code does.
+   */
+  private onLiveStatus(state: string) {
+    if (!this.queued.length) return;
+    if (state === "idle") {
+      const text = this.queued.join("\n\n");
+      this.queued = [];
+      this.renderQueue();
+      this.stick = true;
+      this.wsSend({ t: "send", text });
+    } else if (state === "aborted") {
+      this.inputEl.value = [...this.queued, this.inputEl.value].filter(Boolean).join("\n\n");
+      this.queued = [];
+      this.renderQueue();
+      this.autoGrow();
+      this.syncSend();
+    }
   }
 
   private setStatus(state: string, detail?: string, durationMs?: number, ts?: number) {
