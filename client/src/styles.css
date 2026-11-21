@@ -1178,7 +1178,9 @@ body:not(.has-logo) .work-badge {
 }
 .term .spop.up {
   top: auto;
-  bottom: 96px;
+  bottom: 84px;
+  left: 8px;
+  right: auto;
   /* .term is overflow:hidden, so a popover taller than the space above the
      tools row would be silently clipped at the top — in an unzoomed grid box
      that is most of it. Shrink and scroll instead of disappearing. */
@@ -1463,19 +1465,22 @@ body.big .term .pinned {
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* Neutral rounded bubble, as in the Claude app's remote-control view — the
+   bubble itself (vs. the chromeless assistant side) is what tells the
+   speakers apart, so it doesn't need to shout in accent blue. */
 .term .msg.user {
   align-self: flex-end;
-  background: var(--accent);
-  color: #ffffff;
-  border-bottom-right-radius: 3px;
+  background: color-mix(in srgb, var(--text) 11%, var(--panel));
+  color: var(--text);
+  border-radius: 16px;
+  padding: 8px 13px;
 }
 /* The assistant side is deliberately NOT a bubble. One reply arrives as
    several `assistant_done` events (one per text block), so bubbling each
    chopped a single answer into a stack of near-identical cards; as plain
    text on the pane background they read as consecutive paragraphs of one
    message instead. The user's bubble is what distinguishes the speakers
-   now — so it keeps its accent fill, and this side carries no chrome at
-   all. */
+   now, and this side carries no chrome at all. */
 .term .msg.assistant {
   align-self: stretch;
   max-width: 100%;
@@ -2061,40 +2066,143 @@ body.light .term .viz-tip {
   font-size: 11px;
   color: var(--aborted);
 }
-.term .tool-card {
-  align-self: flex-start;
-  max-width: 92%;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+/* ---- Tool steps (Claude-app remote-control style) -----------------------
+   Each call is a borderless row — "● Verb target  +N −M" — on a thin
+   timeline rail, not a bordered pill. The dot pulses while the call is in
+   flight (.pending), settles to a dim dot when it returns, and goes red on
+   error. Clicking a row opens its input/output underneath. */
+.term .tool-group {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
   font-size: 12.5px;
-  overflow: hidden;
+}
+.term .tool-group-body {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding-left: 2px;
+}
+/* The rail: one line behind every dot in the run. */
+.term .tool-group-body::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 12px;
+  bottom: 12px;
+  width: 1px;
+  background: var(--line);
+}
+.term .tool-group-body:has(> :only-child)::before {
+  display: none;
+}
+/* Fold all but the last TOOL_RUN_VISIBLE (3) rows until expanded — kept in
+   sync with agent-chat.ts. Errors stay visible regardless. */
+.term .tool-group:not(.expanded) .tool-group-body > .tool-card:nth-last-child(n + 4):not(.error):not(.todos) {
+  display: none;
+}
+.term .tool-more {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 2px 0 4px 18px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.term .tool-more:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.term .tool-card {
+  min-width: 0;
 }
 .term .tool-card summary {
-  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px 3px 0;
   cursor: pointer;
-  color: var(--text-dim);
   list-style: none;
+  color: var(--text-dim);
+  white-space: nowrap;
+  border-radius: 6px;
 }
 .term .tool-card summary::-webkit-details-marker {
   display: none;
 }
-.term .tool-card.error summary {
+.term .tool-card summary:hover {
+  color: var(--text);
+}
+.term .tool-dot {
+  position: relative; /* above the rail */
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-left: 0;
+  border-radius: 50%;
+  background: var(--text-dim);
+  box-shadow: 0 0 0 3px var(--term-bg); /* punches a gap in the rail */
+  opacity: 0.7;
+}
+.term .tool-card.pending .tool-dot {
+  background: var(--accent);
+  opacity: 1;
+  animation: tool-pulse 1.1s ease-in-out infinite;
+}
+.term .tool-card.error .tool-dot {
+  background: #f85149;
+  opacity: 1;
+}
+@keyframes tool-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.term .tool-verb {
+  flex: none;
+  font-weight: 600;
+  color: var(--text);
+}
+.term .tool-card.error .tool-verb {
   color: #f85149;
 }
-.term .tool-card summary {
-  white-space: nowrap;
+.term .tool-target {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11.5px;
+}
+.term .tool-stat {
+  flex: none;
+  display: flex;
+  gap: 5px;
+  margin-left: auto;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11px;
+}
+.term .tool-stat .add {
+  color: #3fb950;
+}
+.term .tool-stat .del {
+  color: #f85149;
 }
 .term .tool-card pre {
-  margin: 0;
+  margin: 2px 0 6px 18px;
   padding: 8px 10px;
-  border-top: 1px solid var(--line);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11.5px;
+}
+.term .tool-card pre + pre {
+  margin-top: -2px;
 }
 /* An opened card stacks the call's input and its output as two bare <pre>s,
    which read as one run-on blob — label them so the actual command output is
@@ -2126,88 +2234,316 @@ body.light .term .viz-tip {
   overflow-y: auto;
   overscroll-behavior: contain; /* don't chain into the chat log's scroll */
 }
-/* A run of consecutive tool calls (see agent-chat.ts's toolGroup()) collapses
-   into one summary row instead of stacking a full-width card per call —
-   otherwise a turn with several Read/Bash calls buries the actual
-   conversation under a wall of near-identical pills. Individual .tool-card
-   entries still nest inside, each independently expandable once the group
-   itself is opened. */
-.term .tool-group {
-  align-self: flex-start;
-  max-width: 92%;
+/* TodoWrite renders as a real checklist (open by default). */
+.term .todo-list {
+  list-style: none;
+  margin: 2px 0 6px 18px;
+  padding: 8px 10px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.term .todo {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--text);
+  white-space: normal;
+}
+.term .todo-box {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--text-dim);
+  border-radius: 3px;
+  transform: translateY(1px);
+}
+.term .todo.in_progress .todo-box {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.term .todo.in_progress .todo-text {
+  font-weight: 600;
+}
+.term .todo.completed .todo-box {
+  border-color: var(--text-dim);
+  background: var(--text-dim);
+}
+.term .todo.completed .todo-text {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+/* ---- Step bodies ----------------------------------------------------- */
+.term .tool-body > * {
+  margin: 2px 0 6px 18px;
+}
+.term .tool-body:empty {
+  display: none;
+}
+.term .tool-time {
+  flex: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.term .tool-time:empty {
+  display: none;
+}
+/* Bash: a little terminal — `$ command`, then the output, one block. */
+.term .term-block,
+.term .tool-card pre.term-block {
+  padding: 8px 10px;
+  background: var(--term-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11.5px;
+  max-height: 320px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.term .term-block::before {
+  content: none !important;
+}
+.term .term-prompt {
+  color: var(--text-dim);
+  user-select: none;
+}
+.term .term-desc {
+  color: var(--text-dim);
+}
+.term .term-out {
+  color: var(--text-dim);
+}
+.term .term-out.err {
+  color: #f85149;
+}
+/* Edits: file header + coloured lines with a tinted background, as in a PR. */
+.term .diff-block {
+  border: 1px solid var(--line);
+  border-radius: 8px;
   overflow: hidden;
 }
-.term .tool-group summary {
-  padding: 6px 10px;
-  cursor: pointer;
+.term .diff-file {
+  padding: 4px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11px;
   color: var(--text-dim);
-  list-style: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.term .tool-group summary::-webkit-details-marker {
-  display: none;
+.term .tool-card .diff-block pre.tool-diff {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 4px 0;
+  background: var(--term-bg);
+  white-space: pre;
 }
-.term .tool-group.error summary {
-  color: #f85149;
+.term .diff-block pre.tool-diff::before {
+  content: none;
 }
-.term .tool-group-body {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  border-top: 1px solid var(--line);
-  padding: 6px;
-  background: var(--bg);
-}
-.term .tool-group-body .tool-card {
-  max-width: 100%;
+.term .tool-diff span {
+  display: inline-block;
+  min-width: 100%;
+  padding: 0 10px;
 }
 .term .tool-diff .add {
   color: #3fb950;
+  background: rgba(46, 160, 67, 0.15);
 }
 .term .tool-diff .del {
   color: #f85149;
+  background: rgba(248, 81, 73, 0.15);
 }
-.term .permission-card {
-  align-self: stretch;
-  background: color-mix(in srgb, var(--waiting) 12%, var(--panel));
-  border: 1px solid var(--waiting);
-  border-radius: 10px;
-  padding: 10px;
+.term .tool-diff .ctx {
+  color: var(--text-dim);
 }
-.term .permission-card.resolved {
-  opacity: 0.6;
+body.light .term .tool-diff .add {
+  color: #1a7f37;
 }
-.term .perm-text {
-  font-size: 13.5px;
-  margin-bottom: 8px;
+body.light .term .tool-diff .del {
+  color: #cf222e;
 }
-.term .perm-btns {
+.term .agent-prompt {
+  padding: 8px 10px;
+  border-left: 2px solid var(--line);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
+/* A suggestion is for an EMPTY box; once you're typing it's just noise. */
+.term .chat:has(.chat-input textarea:not(:placeholder-shown)) .chat-suggest {
+  display: none;
+}
+.term .tool-input.kv::before {
+  content: none;
+}
+/* Subagent: its own steps nest under it, then its report as prose. */
+.term .tool-children {
   display: flex;
-  gap: 6px;
+  flex-direction: column;
+  padding-left: 4px;
+  border-left: 1px solid var(--line);
 }
-.term .perm-btns .perm-btn {
-  flex: 1;
-  min-height: 40px; /* real touch target, same reasoning as the mobile .ctl sizing */
-  width: auto;
-  height: auto;
+.term .tool-children:empty {
+  display: none;
+}
+.term .tool-children .tool-dot {
+  width: 7px;
+  height: 7px;
+}
+.term .agent-result,
+.term .plan-body {
+  max-width: none;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+/* The plan reads as a document, not a collapsed step. */
+.term .tool-card.plan > summary .tool-verb::after {
+  content: " · proposed plan";
+  font-weight: 400;
+  color: var(--text-dim);
+}
+/* A step blocked on your answer (the prompt is in the dock). */
+.term .tool-card.awaiting .tool-dot {
+  background: var(--waiting);
+  opacity: 1;
+}
+/* Thinking: same row shape as a step, quieter. */
+.term .tool-card.thinking .tool-verb {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--text-dim);
+}
+.term .tool-card.thinking.pending .tool-verb {
+  background: linear-gradient(90deg, var(--text-dim) 0%, var(--text) 50%, var(--text-dim) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.6s linear infinite;
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+.term .tool-card.thinking .tool-dot {
+  background: transparent;
+  border: 1.5px solid var(--text-dim);
+  width: 8px;
+  height: 8px;
+}
+.term .thinking-body {
+  margin: 2px 0 6px 18px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+.term .thinking-body p {
+  margin: 0 0 6px;
+}
+/* Live reply: a blinking caret at the end while it streams. */
+.term .msg.assistant.streaming > :last-child::after,
+.term .msg.assistant.streaming:empty::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: currentColor;
+  animation: caret 1s steps(1) infinite;
+}
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+/* The log's record of an approval prompt (the prompt itself is in the dock). */
+.term .perm-note {
+  align-self: flex-start;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  padding: 1px 0 1px 18px;
+  position: relative;
+  white-space: normal;
+}
+.term .perm-note::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.term .perm-note.pending {
+  color: var(--waiting);
+}
+.term .perm-note.pending::before {
+  background: var(--waiting);
+  animation: tool-pulse 1.1s ease-in-out infinite;
+}
+.term .perm-note.allowed::before {
+  background: #3fb950;
+}
+.term .perm-note.denied::before {
+  background: #f85149;
+}
+/* Under a finished turn: Copy + "Worked for 1m 12s". */
+.term .turn-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: -2px;
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0.65;
+  transition: opacity 0.15s;
+}
+.term .turn-meta:hover,
+.term .chat-log > .turn-meta:last-child {
+  opacity: 1;
+}
+.term .turn-copy {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: 0;
   border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
 }
-.term .perm-btns .perm-btn.allow,
-.term .perm-btns .perm-btn.always {
-  background: var(--accent);
-  color: #ffffff;
-}
-.term .perm-btns .perm-btn.deny {
+.term .turn-copy:hover {
   background: var(--btn);
   color: var(--text);
+}
+.term .turn-copy .ico-svg {
+  width: 13px;
+  height: 13px;
 }
 /* AskUserQuestion prompt — the interactive sibling of the permission card.
    Same waiting-tinted frame, but options are full-width stacked buttons
@@ -2314,133 +2650,429 @@ body.light .term .viz-tip {
 }
 .term .status-line {
   flex: 0 0 auto;
-  padding: 4px 12px;
-  font-size: 11px;
-  color: var(--text-dim);
-}
-.term .chat-input {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
-  padding: 8px;
-  background: var(--panel);
-  border-top: 1px solid var(--line);
-}
-.term .chat-input textarea {
-  flex: 1;
-  min-height: 36px;
-  max-height: 160px;
-  resize: none;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.3;
-}
-.term .chat-input textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-.term .chat-attach,
-.term .chat-send {
-  flex: 0 0 auto;
-  min-height: 36px;
-  background: var(--btn);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0 12px;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-.term .chat-send {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #ffffff;
-  font-weight: 600;
-}
-.term .chat-attach:hover,
-.term .chat-send:hover {
-  filter: brightness(1.08);
-}
-
-/* ---- Chat tools row -----------------------------------------------------
-   Sits between the log and the composer and holds every pane-level control:
-   actions left (attach / view flip / secret / permission mode), live state
-   right (model, jump-to-latest, stop, usage rings). Same flex:0 0 auto contract
-   as .status-line and .chat-input so it never steals height from .chat-log. */
-.term .chat-tools {
-  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
-  min-height: 40px;
-  background: var(--panel);
-  border-top: 1px solid var(--line);
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
 }
-.term .chat-tools .spacer {
+.term .status-line .spark {
+  display: inline-block;
+  color: #d97757; /* Claude Code's spinner orange; fixed, like --use-* */
+  font-size: 14px;
+  animation: spark-spin 2.4s linear infinite;
+}
+.term .status-hint {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.term .status-line.waiting .spark {
+  color: var(--waiting);
+  animation: tool-pulse 1.1s ease-in-out infinite;
+}
+@keyframes spark-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term .status-line .spark,
+  .term .tool-card.pending .tool-dot,
+  .term .tool-card.thinking.pending .tool-verb,
+  .term .perm-note.pending::before,
+  .term .msg.assistant.streaming > :last-child::after {
+    animation: none;
+  }
+}
+/* ---- Composer ------------------------------------------------------------
+   One rounded box, as in the Claude app: text on top, controls underneath
+   (attach · mode · … · model · send/stop). */
+.term .chat-input {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 8px 8px;
+  padding: 6px 6px 6px 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  transition: border-color 0.15s;
+}
+.term .chat-input:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+.term .chat-input textarea {
+  width: 100%;
+  min-height: 28px;
+  max-height: 160px;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  padding: 4px 4px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.term .chat-input textarea:focus {
+  outline: none;
+}
+.term .chat-input textarea::placeholder {
+  color: var(--text-dim);
+}
+.term .composer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.term .composer-row .spacer {
   flex: 1;
 }
-/* ---- One sizing scale for everything in this row ----------------------
-   Left to itself the row is a jumble: .ctl is 20x18, the mode chip ~28,
-   the ring group ~35, and the emoji glyphs (📎 🔒) render heavier than a
-   geometric one (▤). Every control here is therefore pinned to the same
-   28px box, the same 6px radius and the same optical glyph size, and the
-   rings are trimmed to sit within a couple of px of that. */
-.term .chat-tools .ctl {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  font-size: 13px;
-}
-/* Geometric glyphs read smaller than emoji at the same font-size, so they
-   get a nudge to match optically rather than numerically. */
-.term .chat-tools .ctl.view,
-.term .chat-tools .ctl.stop,
-.term .chat-tools .ctl.jump {
-  font-size: 15px;
-}
-.term .chat-tools .mode-sel {
-  height: 28px;
-  border-radius: 6px;
-  padding: 0 6px;
-  font-size: 11px;
-  max-width: 104px;
-}
-.term .chat-tools .model-badge {
+.term .chat-plus {
+  flex: none;
   display: grid;
   place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.term .chat-attach:hover,
+.term .chat-plus:hover,
+.term .chat-plus.open {
+  background: var(--btn);
+  color: var(--text);
+}
+/* Mode + model: quiet text chips, the way the app shows them. */
+.term .composer-row .mode-sel,
+.term .composer-row .model-sel {
+  flex: 0 1 auto;
+  min-width: 0;
   height: 28px;
-  border-radius: 6px;
+  max-width: 130px;
   padding: 0 8px;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  text-overflow: ellipsis;
 }
-/* The interrupt. Tinted so it reads as the one destructive control here, but
-   it only exists while a turn is actually running (setBusy in agent-chat.ts). */
-.term .ctl.stop {
+.term .composer-row .mode-sel:hover,
+.term .composer-row .model-sel:not(:disabled):hover {
+  background: var(--btn);
+  color: var(--text);
+}
+.term .composer-row .model-sel:disabled {
+  cursor: default;
+  opacity: 1;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.term .composer-row .mode-sel.plan {
+  color: #2f9e8f;
+  border-color: color-mix(in srgb, #2f9e8f 50%, transparent);
+}
+.term .composer-row .mode-sel.bypass {
   color: var(--use-crit);
+  border-color: color-mix(in srgb, var(--use-crit) 50%, transparent);
 }
-.term .ctl.stop:hover {
-  background: var(--use-crit);
-  color: #fff;
+/* Send ⇄ Stop: one round button. */
+.term .chat-send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
 }
-/* Desktop: the tools row is always open, so the hamburger has no job. */
-.term .chat-menu {
+.term .chat-send:hover {
+  filter: brightness(1.08);
+}
+.term .chat-send .ico-svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 2.5;
+}
+.term .chat-send.empty {
+  opacity: 0.35;
+  cursor: default;
+}
+.term .chat-send.stop {
+  background: var(--text);
+  color: var(--term-bg);
+}
+.term .chat-send.stop .ico-svg {
+  width: 13px;
+  height: 13px;
+}
+/* While a prompt is waiting on you, it takes the composer's place. */
+.term .chat.has-dock .chat-input,
+.term .chat.has-dock .chat-suggest,
+.term .chat.has-dock .status-line {
   display: none;
 }
-.term .model-badge {
+
+/* ---- Approval dock (chat-dock.ts) ---------------------------------------- */
+.term .chat-dock {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: 70%;
+  overflow-y: auto;
+  margin: 4px 8px 8px;
+  padding: 10px 12px 12px;
+  background: var(--panel);
+  border: 1px solid var(--waiting);
+  border-radius: 16px;
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  outline: none;
+}
+.term .chat-dock.plan {
+  max-height: 85%;
+}
+.term .chat-dock.sending {
+  opacity: 0.6;
+}
+.term .dock-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.term .dock-verb {
   flex: none;
-  font-size: 10px;
-  color: var(--text-dim);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 1px 6px;
+  font-weight: 700;
+}
+.term .dock-target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.term .dock-count {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.term .dock-question {
+  color: var(--text);
+}
+.term .dock-preview {
+  min-height: 0;
+  max-height: 240px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.term .chat-dock.plan .dock-preview {
+  max-height: none;
+}
+.term .dock-preview > * {
+  margin: 0;
+}
+.term .dock-preview pre {
+  margin: 0;
+  max-height: none;
+}
+.term .dock-preview .tool-input,
+.term .dock-preview .term-block {
+  padding: 8px 10px;
+  background: var(--term-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11.5px;
+}
+.term .dock-preview .tool-input::before {
+  content: none;
+}
+.term .dock-preview .tool-diff {
+  max-height: none;
+  overflow-x: auto;
+  white-space: pre;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11.5px;
+  margin: 0;
+  padding: 4px 0;
+  background: var(--term-bg);
+}
+.term .dock-note {
+  font-size: 11.5px;
+  color: var(--waiting);
+}
+.term .dock-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.term .dock-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px; /* real touch target */
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.term .dock-opt:hover,
+.term .dock-opt.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+.term .dock-opt:first-child {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+.term .dock-key {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font: 600 11px ui-monospace, Menlo, Monaco, monospace;
+  color: var(--text-dim);
+}
+.term .dock-feedback {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.term .dock-feedback textarea {
+  flex: 1;
+  min-height: 40px;
+  resize: vertical;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
+}
+.term .dock-feedback textarea:focus {
+  outline: none;
+}
+.term .dock-send {
+  flex: none;
+  height: 40px;
+  padding: 0 14px;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ---- "/" command menu (chat-commands.ts) ---------------------------------- */
+.term .cmd-menu {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 40%;
+  overflow-y: auto;
+  margin: 0 8px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.18);
+}
+.term .cmd-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  min-width: 0;
+}
+.term .cmd-row.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.term .cmd-name {
+  flex: none;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.term .cmd-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 35%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.term .cmd-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+/* ---- Suggested follow-up ------------------------------------------------- */
+.term .chat-suggest {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 0 10px;
+  overflow-x: auto;
+}
+.term .suggest-chip {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 5px 12px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.term .suggest-chip:hover {
+  border-color: var(--accent);
 }
 
 /* ---- Usage rings --------------------------------------------------------
@@ -2505,69 +3137,6 @@ body.light .term .viz-tip {
 @media (max-width: 640px) {
   .term .chat-input textarea {
     font-size: 16px; /* keeps iOS Safari from zooming the page in on focus */
-  }
-  /* ---- Tools row collapses behind ☰ -----------------------------------
-     Nine controls plus two usage rings do not fit beside a composer on a
-     390px screen, and .term .ctl is 44x40 here (touch targets), so the row
-     would be taller than the input it sits above. Hidden by default, opened
-     as a WRAPPED row above the input — not a floating popover, which .term's
-     overflow:hidden would clip. */
-  .term .chat-menu {
-    display: grid;
-    place-items: center;
-    flex: none;
-    min-height: 36px;
-    min-width: 40px;
-    padding: 0;
-    background: var(--btn);
-    color: var(--text);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    font-size: 16px;
-    cursor: pointer;
-  }
-  .term .chat-tools {
-    display: none;
-  }
-  .term.tools-open .chat-tools {
-    display: flex;
-    flex-wrap: wrap;
-    row-gap: 4px;
-  }
-  /* The one exception: while a turn is running, the interrupt stays reachable
-     in one tap. A control you need URGENTLY must not be behind a menu. */
-  .term.busy:not(.tools-open) .chat-tools {
-    display: flex;
-    justify-content: flex-end;
-    min-height: 0;
-    padding: 2px 8px;
-  }
-  .term.busy:not(.tools-open) .chat-tools > *:not(.stop) {
-    display: none;
-  }
-  /* The spacer would otherwise eat a whole row once the controls wrap. */
-  .term.tools-open .chat-tools .spacer {
-    display: none;
-  }
-  /* Real touch targets in the opened menu.
-     NOTE: there is already a `.term .ctl { width:44px; height:40px }` intended
-     for mobile up at ~line 950, but it is DEAD — it sits before the base
-     `.term .ctl` rule (~line 1252) at identical specificity, and a media query
-     adds none, so source order silently overrides it and every icon button on
-     mobile renders 20x18. Only `.ctl.attach` survives, by accident of carrying
-     a second class in that selector. These selectors are specific enough to
-     win; fixing the general case is a separate call, since it changes the
-     height of every title bar on mobile. */
-  .term.tools-open .chat-tools .ctl,
-  .term.busy .chat-tools .ctl.stop {
-    width: 44px;
-    height: 40px;
-  }
-  .term.tools-open .chat-tools .mode-sel {
-    font-size: 13px;
-    padding: 5px 9px;
-    min-height: 36px;
-    max-width: 130px;
   }
   /* A phone pane is barely taller than the desktop cap, so 320px of output
      would fill the whole box and hide the conversation around it. */
@@ -3350,5 +3919,531 @@ body.fx-full .term.idle:hover .chat {
   #agentSelect {
     font-size: 16px;
     padding: 8px 10px;
+  }
+}
+
+/* ---- Chat pane: app-like typography & layout ----------------------------
+   The chat view reads as a conversation, not a terminal: prose in the system
+   UI font (code, paths, commands stay monospace via their own rules). */
+.term.agent .chat {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", sans-serif;
+}
+.term.agent .chat .msg {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.term.agent .chat .msg.user {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.term.agent .chat .msg code,
+.term.agent .chat .msg pre,
+.term.agent .chat .msg kbd {
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+}
+.term.agent .chat .tool-card,
+.term.agent .chat .perm-note,
+.term.agent .chat .turn-meta {
+  font-size: 13px;
+}
+.term .log-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term .log-wrap > .chat-log {
+  flex: 1;
+}
+.term .jump-pill {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  z-index: 2;
+}
+.term .jump-pill:hover {
+  border-color: var(--accent);
+}
+.term .jump-pill[hidden] {
+  display: none;
+}
+/* The composer's "+" menu: opens upward, left-aligned over the composer. */
+.term .plus-menu {
+  position: absolute;
+  left: 10px;
+  bottom: 74px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+}
+.term .plus-menu[hidden] {
+  display: none;
+}
+.term .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  background: none;
+  color: var(--text);
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.term .menu-item:hover {
+  background: var(--btn);
+}
+.term .menu-item:disabled {
+  opacity: 0.5;
+}
+.term .menu-item .ico-svg {
+  color: var(--text-dim);
+}
+.term .menu-item[hidden] {
+  display: none;
+}
+/* Usage rings sit in the composer row, quieter than the old tools row. */
+.term .composer-row .use-rings {
+  gap: 4px;
+}
+.term .composer-row .use-rings[hidden] {
+  display: none;
+}
+/* Approval state shown on the step itself. */
+.term .step-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+}
+.term .step-note.pending {
+  color: var(--waiting);
+}
+.term .step-note.denied {
+  color: #f85149;
+}
+.term .step-note.allowed {
+  color: var(--text-dim);
+}
+@media (max-width: 640px) {
+  .term .composer-row .ring-tag {
+    display: none; /* rings alone at phone width; the % stays */
+  }
+}
+
+/* ---- Inline images -------------------------------------------------------
+   Attachments wait in the composer as thumbnails; your message shows them as
+   images (not temp paths); a screenshot Claude reads shows in its step. Any
+   of them opens full-screen in the lightbox (lightbox.ts). */
+.term .attach-row {
+  display: flex;
+  gap: 6px;
+  padding: 2px 0 4px;
+  overflow-x: auto;
+}
+.term .attach-row[hidden] {
+  display: none;
+}
+.term .attach-chip {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 56px;
+  min-width: 56px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.term .attach-chip.uploading {
+  opacity: 0.6;
+}
+.term .attach-thumb img {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  cursor: zoom-in;
+}
+.term .attach-name {
+  max-width: 140px;
+  padding: 0 26px 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.term .attach-x {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  border: 0;
+  border-radius: 50%;
+  font-size: 10px;
+  cursor: pointer;
+}
+.term .msg.user.has-images {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.term .msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.term .msg-img {
+  display: block;
+  max-width: min(260px, 100%);
+  max-height: 260px;
+  border-radius: 10px;
+  object-fit: cover;
+  cursor: zoom-in;
+  background: var(--panel);
+}
+.term .msg-images .msg-img:only-child {
+  max-width: min(320px, 100%);
+  max-height: 360px;
+}
+.term .msg-img.missing {
+  min-width: 120px;
+  min-height: 60px;
+  border: 1px dashed var(--line);
+}
+.term .step-img {
+  display: block;
+  max-width: min(320px, 100%);
+  max-height: 260px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: zoom-in;
+}
+.term .md-img {
+  cursor: zoom-in;
+}
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  background: rgba(0, 0, 0, 0.92);
+  cursor: zoom-out;
+}
+.lightbox[hidden] {
+  display: none;
+}
+.lightbox img {
+  max-width: 100%;
+  max-height: calc(100% - 40px);
+  object-fit: contain;
+  border-radius: 6px;
+}
+.lightbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.lightbox-actions [hidden] {
+  display: none;
+}
+.lightbox-copy {
+  padding: 8px 16px;
+  background: #ffffff;
+  color: #000;
+  border: 0;
+  border-radius: 999px;
+  font: 600 13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  cursor: pointer;
+}
+.term .chat-flash {
+  align-self: center;
+  margin: 0 8px 4px;
+  padding: 6px 12px;
+  background: var(--btn);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text);
+}
+.lightbox-open {
+  color: #c9d1d9;
+  font: 13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  text-decoration: underline;
+}
+
+/* ---- Phone: pane switcher + swipe (main.ts "Phone: move between panes") ---- */
+.term .pane-switch {
+  display: none;
+}
+@media (max-width: 640px) {
+  .term.zoomed .title .pane-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: auto;
+    height: 28px;
+    padding: 0 8px;
+    margin-left: 6px;
+    flex: none;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    border-radius: 14px;
+    font: 600 12px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  .term.zoomed .title .pane-switch .ico-svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+.pane-switch-waiting {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--waiting);
+  color: #000;
+  font-size: 11px;
+}
+.term.zoomed.slide-l {
+  animation: pane-in-l 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.term.zoomed.slide-r {
+  animation: pane-in-r 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes pane-in-l {
+  from {
+    transform: translateX(40%);
+    opacity: 0.3;
+  }
+}
+@keyframes pane-in-r {
+  from {
+    transform: translateX(-40%);
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term.zoomed.slide-l,
+  .term.zoomed.slide-r {
+    animation: none;
+  }
+}
+#paneSheet {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(0, 0, 0, 0.5);
+}
+#paneSheet[hidden] {
+  display: none;
+}
+#paneSheet .sheet-panel {
+  width: 100%;
+  max-height: 75%;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 8px max(10px, env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  border-radius: 16px 16px 0 0;
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  animation: sheet-up 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(40%);
+  }
+}
+#paneSheet .sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 10px;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+}
+#paneSheet .sheet-all {
+  padding: 6px 12px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+#paneSheet .sheet-rows {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+#paneSheet .sheet-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 10px;
+  background: none;
+  color: var(--text);
+  border: 0;
+  border-radius: 12px;
+  font: inherit;
+  text-align: left;
+}
+#paneSheet .sheet-row.current {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+#paneSheet .sheet-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0.5;
+}
+#paneSheet .sheet-row.question .sheet-dot {
+  background: var(--waiting);
+  opacity: 1;
+}
+#paneSheet .sheet-row.done .sheet-dot {
+  background: var(--done);
+  opacity: 1;
+}
+#paneSheet .sheet-row.aborted .sheet-dot {
+  background: var(--aborted);
+  opacity: 1;
+}
+#paneSheet .sheet-row.busy .sheet-dot {
+  background: var(--busy);
+  opacity: 1;
+}
+#paneSheet .sheet-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+#paneSheet .sheet-name {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#paneSheet .sheet-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#paneSheet .sheet-row.question .sheet-sub {
+  color: var(--waiting);
+}
+#paneSheet .sheet-kind {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ---- Phone home: an inbox, not a stack of terminal title bars -----------
+   Each unopened pane is one row — name, what you last asked, its state — in
+   the UI font, like the Claude app's session list. The attention glow and
+   badges still carry needs-you / done; the coloured title strip, the full
+   path line and the monospace are what made it read as a terminal dump.
+   `body` prefix: out-ranks the work/tint title colours declared earlier. */
+@media (max-width: 640px) {
+  #grid {
+    gap: 6px;
+  }
+  body .term:not(.zoomed) {
+    background: var(--panel);
+    border-color: transparent;
+    border-radius: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+  body .term:not(.zoomed) .title {
+    background: transparent;
+    padding: 8px 4px 2px 12px;
+    color: var(--text);
+  }
+  body .term:not(.zoomed) .title .path {
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  body .term:not(.zoomed) .title .dot {
+    font-size: 10px;
+  }
+  body .term:not(.zoomed) .title .ctl.flag:not(.active),
+  body .term:not(.zoomed) .title .ctl.close {
+    opacity: 0.45;
+  }
+  body .term:not(.zoomed) .cwdline {
+    display: none;
+  }
+  body .term:not(.zoomed) .pinned {
+    background: transparent;
+    border-top: 0;
+    padding: 0 12px 10px 30px;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  body .term:not(.zoomed) .pinned::before {
+    content: none;
+  }
+  /* No last prompt yet: give the row the same bottom breathing room. */
+  body .term:not(.zoomed) .title:last-child,
+  body .term:not(.zoomed) .pinned[hidden] {
+    margin-bottom: 0;
+  }
+  body .term:not(.zoomed):not(:has(.pinned:not([hidden]))) .title {
+    padding-bottom: 8px;
   }
 }

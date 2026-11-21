@@ -14,7 +14,7 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 - **`claude`** (Claude Code CLI) and/or **`codex`** (Codex CLI, `npm install -g
   @openai/codex`) — for the per-box agents. The picker's "run on open" select
   chooses **claude (work) / codex (work) / plain shell**, plus an SSH optgroup;
-  a "💬 Chat view" checkbox decides whether the box becomes a chat pane or a
+  a "💬 Chat view" checkbox (unchecked by default) decides whether the box becomes a chat pane or a
   terminal pane. **This machine is work-accounts-only** — see the invariant
   below.
 - **`~/.local/bin/claude-work` and `~/.local/bin/codex-work`** — one-line
@@ -77,6 +77,7 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/tab.ts` | browser-tab title + favicon attention indicator |
 | `client/src/markdown.ts` | Markdown → safe HTML for chat bubbles (tables, media, task lists) |
 | `client/src/rich.ts` | post-render pass: charts, table→chart toggle, copy buttons, clipping |
+| `client/src/chat-steps.ts` / `chat-dock.ts` / `chat-commands.ts` / `lightbox.ts` | chat view: step rendering / approval dock / "/" menu / image viewer |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
 | `client/src/push.ts` / `client/public/sw.js` | Web Push subscribe/badge / the service worker that shows notifications |
 | `server/gate.js` | optional passkey-auth reverse proxy (`fleetview-gate` service) that `tailscale serve` fronts instead of the app directly — a SEPARATE process from `server/index.js`, own port (`FLEET_GATE_PORT`, default 4290), own launchd/systemd unit (`com.fleetview.gate`). See Gotchas. |
@@ -288,32 +289,50 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 
 ## Rich chat view (agent panes)
 
-- **The tools row** (`.chat-tools`, between `.chat-log` and `.chat-input`) is the
-  one home for pane-level controls: attach / view-flip / secret / permission
-  mode on the left, model badge + jump-to-latest + stop + usage rings on the
-  right. Four of those MOVED here from the title bar or the input bar, so:
-  `.mode-sel`'s CSS had to be re-scoped off `.term .title`; the work/remote
-  badges re-anchored to `.badge-slot` (they used to hang off `.mode-sel`);
-  `main.ts`'s `flipView()` looks up `.view` on `t.el`, not `t.titleBar`
-  (terminal panes still keep theirs in the title bar); the secret popover gets
-  `.spop.up` because its anchor is now at the BOTTOM of the box, with a
-  `max-height` guard since `.term` is `overflow:hidden` and would otherwise clip
-  it in an unzoomed grid box; and `.chat-tools` had to join the click-to-zoom
-  exclusion list alongside `.ctl`/`.chat-input`.
-- **On mobile the row collapses behind `☰`** in the composer (`.chat-menu`,
-  phone-only), opening as a WRAPPED row above the input rather than a floating
-  popover — `.term` is `overflow:hidden` and would clip one. One exception:
-  while the pane is busy the ■ stays visible outside the menu
-  (`.term.busy:not(.tools-open)`), because a control you need urgently must not
-  be two taps away. ⚠️ The `.term .ctl { width:44px; height:40px }` mobile
-  touch-target rule at ~line 950 is DEAD — it precedes the base `.term .ctl`
-  rule (~1252) at equal specificity, and a media query adds none, so source
-  order overrides it and icon buttons render 20×18 on phones. Only
-  `.ctl.attach` escapes, via the extra class. The tools row re-states the
-  sizing at a winning specificity; the general case is still broken.
-- **Stop (■)** sends `{t:"interrupt"}`, which the server and both drivers always
-  understood — nothing had ever sent it, so a chat pane could not cancel a
-  running turn at all. Visible only while the pane is working (`setBusy`).
+- **The chat view mirrors the Claude app's remote-control view** (see
+  `chat-steps.ts`, `chat-dock.ts`, `chat-commands.ts`). Tool calls are one-line
+  steps ("● Edit greet.js +2 −2") on a timeline, folding all but the last 3 of
+  a run; edits show a diff built from the call's INPUT (the driver sends none);
+  TodoWrite is a checklist; ExitPlanMode is a plan card; subagent steps nest
+  under their Agent step via `parent`. Thinking is a collapsible step.
+- **The composer is one box**: text, then `+` (files / secret / terminal
+  view — `.view` still lives here for `flipView()`), mode, usage rings, model
+  picker, and one button that is Send with text and Stop (■, or Esc) while a
+  turn runs. Typing mid-turn queues. "/" opens the SDK's slash commands; Tab
+  takes the prompt suggestion. The old `.chat-tools` row and the mobile ☰ are
+  gone.
+- **Approvals dock where the composer is** (`chat-dock.ts`), CLI-style:
+  Yes / Yes-don't-ask-again (only when the SDK offers a rule: `canAlways`) /
+  No-and-tell-Claude (the typed reason goes back as the deny `message`). Keys
+  1-3. The gated step is marked in place; no separate permission card.
+- **Driver plumbing behind it** (`claude-driver.js`): `includePartialMessages`
+  for live text/thinking (stream ids paired FIFO with the finished blocks, so
+  `assistant_done` reuses the streamed id), `thinking.display: "summarized"`,
+  `promptSuggestions`, `commands`/`models` from init + `supportedCommands()`/
+  `supportedModels()`, `setModel`, `tool_progress`, and `durationMs` on the
+  final status. Deltas, progress, commands, models and suggestions are
+  LIVE_ONLY in `agent-manager.js` (never ringed; the session-level ones are
+  re-sent after the replay on attach). Every event gets a `ts`.
+- **Usage rings** now sit in the composer row (labels hidden on phones).
+- **Inline images.** Attachments wait in the composer as thumbnails (also
+  paste), and on send their paths are appended to the message text, one per
+  line: the driver protocol is unchanged and Claude Reads them. The user
+  bubble renders any absolute image path in its text as the image (and drops
+  the path); an image Read step shows the picture; every image opens in
+  `lightbox.ts`. All via `/api/file` (`mediaSrc()`), now also serving HEIC.
+  Paste reads `clipboardData.items` as well as `.files` (Safari often fills
+  only `items`); "+ → Paste image" uses `navigator.clipboard.read()` because
+  iOS offers no Paste in a text box for an image-only clipboard. The
+  lightbox's Copy writes PNG via a ClipboardItem holding a PROMISE built
+  inside the click — Safari drops the gesture after an await.
+- **Phone navigation** (main.ts, "Phone: move between panes"): swipe left/right
+  on an open pane = next/previous in GRID order (not the list's attention
+  order, which re-sorts as you open things); the "3/12 ⌄" `.pane-switch`
+  button added to every title bar opens a sessions sheet (needs-you first);
+  `zoom()` on a phone while a pane is open becomes `switchTo()`. The phone
+  home list is restyled as an inbox (CSS only). The open pane's top edge is
+  `max(visual-viewport top, #bar bottom)` — NOT `vy + barH`, which left a gap
+  when the iOS keyboard scrolled #bar away.
 - **Account badges use `.acct-slot`, not `.badge-slot`.** They sit in the
   right-hand cluster beside ⚑. This is not cosmetic: `setWaiting()` does
   `badgeSlot.innerHTML = ""` on every attention change, so anything persistent

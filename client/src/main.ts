@@ -1,4 +1,4 @@
-import { Term, PaneInfo, PaneView, TermHost, UsageRow, displayName } from "./terminal";
+import { Term, PaneInfo, PaneView, TermHost, UsageRow, displayName, profileOf } from "./terminal";
 import { AgentChat } from "./agent-chat";
 import { play } from "./sound";
 import { setTabAttention, setAppLabel } from "./tab";
@@ -214,6 +214,7 @@ function addTerm(info: PaneInfo, at?: number): PaneView {
     grid.append(t.cell);
   }
   enableDrag(t);
+  addSwitcherButton(t);
   t.setUsage(usageFor(t)); // a box created after the last usage broadcast
   reflow();
   if (info.attention?.waiting) enqueue(info.id, info.attention.kind || "question");
@@ -252,9 +253,10 @@ async function closeTerm(id: string) {
 // switch to one full-height terminal per "page" (scroll for the next) instead
 // — see the (max-width: 640px) rules in styles.css for the row sizing.
 const mobileQuery = matchMedia("(max-width: 640px)");
-/** A pane's account row is keyed by its `cmd` ("claude-work" / "codex-work"). */
+/** A pane's account row is keyed by its profile ("claude-work" / "codex-work"). */
 function usageFor(t: PaneView): UsageRow | null {
-  return usageRows.find((r) => r.id === t.info.cmd) ?? null;
+  const id = profileOf(t.info.cmd);
+  return usageRows.find((r) => r.id === id) ?? null;
 }
 
 function pushUsageToPanes() {
@@ -591,9 +593,12 @@ function renderTray() {
 }
 
 // ---- Zoom to center (animated) ----------------------------------------
-function zoom(t: PaneView) {
+function zoom(t: PaneView): void {
   if (minimized.has(t.id)) restore(t.id);
   if (zoomed === t) return;
+  // Phone, already inside a pane (an attention chip, the switcher sheet):
+  // go straight there instead of animating back to the list and out again.
+  if (zoomed && mobileQuery.matches) return switchTo(t, 0);
   if (zoomed) unzoom();
   zoomed = t;
   clearAttention(t.id);
@@ -615,12 +620,14 @@ function zoom(t: PaneView) {
     t.refit();
     t.focusTerm();
   });
+  updateSwitchers();
 }
 
 function unzoom() {
   const t = zoomed;
   if (!t) return;
   zoomed = null;
+  closePaneSheet();
   const el = t.el;
   setRect(el, t.cell.getBoundingClientRect());
   scrim.hidden = true;
@@ -685,8 +692,18 @@ function centerRect(): DOMRect {
     // literally y:0 — #bar is a normal in-flow element (not fixed) with a
     // higher z-index than a zoomed terminal, so a rect starting at y:0 would
     // render the terminal's own title bar hidden underneath it.
-    const barH = document.getElementById("bar")?.offsetHeight ?? 0;
-    return new DOMRect(vx, vy + barH, vw, vh - barH);
+    //
+    // But NOT "visible top + bar height": when the iOS keyboard opens, Safari
+    // scrolls the page to keep the input in view, #bar (in-flow) scrolls off
+    // the top, and vy+barH then left a bar-sized-or-larger gap above the box
+    // through which the grid showed — the box looked like it was floating in
+    // the bottom half of the screen. Anchor to whichever is lower: #bar's
+    // actual bottom edge, or the top of what's visible. getBoundingClientRect
+    // and position:fixed share the layout-viewport coordinate space, and so
+    // does vv.offsetTop, so the comparison is apples to apples.
+    const barBottom = document.getElementById("bar")?.getBoundingClientRect().bottom ?? 0;
+    const top = Math.max(vy, barBottom);
+    return new DOMRect(vx, top, vw, Math.max(120, vy + vh - top));
   }
   // No fixed max width: on a normal laptop 92% is already under any sane cap,
   // but a hardcoded px cap (there used to be one at 1200) means a zoomed
@@ -756,6 +773,208 @@ function onVisualViewportChange() {
 // (can fire without a resize) — both need the zoomed rect recomputed.
 window.visualViewport?.addEventListener("resize", onVisualViewportChange);
 window.visualViewport?.addEventListener("scroll", onVisualViewportChange);
+
+// ---- Phone: move between panes without going back -----------------------
+// On a phone an open pane fills the screen, and getting to the next one used
+// to mean ‹ back to the list, find it, tap. Two ways round that, both only
+// while a pane is open on a phone:
+//   · swipe left/right on the pane → next/previous pane;
+//   · the "3/12 ⌄" button in its title → a sheet of every session, the ones
+//     that need you first, one tap to switch.
+// Swipe order is the GRID order, deliberately not the list's attention order:
+// opening a pane clears its attention, which would re-sort the list under
+// your thumb mid-swipe.
+
+/** Panes you can swipe between: everything on the grid (not minimized), in grid order. */
+function swipeOrder(): PaneView[] {
+  return [...grid.children]
+    .map((c) => panes.get((c as HTMLElement).dataset.id || ""))
+    .filter((t): t is PaneView => !!t && !minimized.has(t.id));
+}
+
+/** Swap the open pane for another, with a short slide in the swipe's direction. */
+function switchTo(t: PaneView, dir: 1 | -1 | 0): void {
+  const old = zoomed;
+  if (!old) return zoom(t);
+  if (old === t) return;
+  closePaneSheet();
+  if (minimized.has(t.id)) restore(t.id);
+  old.el.style.transition = "none";
+  old.el.classList.remove("zoomed", "slide-l", "slide-r");
+  old.el.removeAttribute("style");
+  old.refit();
+  zoomed = t;
+  clearAttention(t.id);
+  const el = t.el;
+  el.style.transition = "none";
+  el.classList.add("zoomed");
+  setRect(el, centerRect());
+  el.classList.remove("slide-l", "slide-r");
+  if (dir) {
+    void el.offsetWidth; // restart the animation
+    el.classList.add(dir > 0 ? "slide-l" : "slide-r");
+  }
+  t.refit();
+  updateSwitchers();
+}
+
+function stepPane(dir: 1 | -1) {
+  if (!zoomed) return;
+  const list = swipeOrder();
+  const i = list.indexOf(zoomed);
+  const next = list[i + dir];
+  if (next) switchTo(next, dir);
+  else zoomed.el.animate([{ transform: "translateX(0)" }, { transform: `translateX(${-dir * 18}px)` }, { transform: "translateX(0)" }], { duration: 220 });
+}
+
+/** True if the touch began inside something that scrolls sideways (code, tables, chips). */
+function inHorizontalScroller(node: Element | null, stop: Element): boolean {
+  for (let n = node; n && n !== stop; n = n.parentElement) {
+    if (n.scrollWidth > n.clientWidth + 2) {
+      const ox = getComputedStyle(n).overflowX;
+      if (ox === "auto" || ox === "scroll") return true;
+    }
+  }
+  return false;
+}
+
+let swipe: { x: number; y: number; t: number } | null = null;
+document.addEventListener(
+  "touchstart",
+  (e) => {
+    swipe = null;
+    if (!zoomed || !mobileQuery.matches || e.touches.length !== 1) return;
+    const target = e.target as Element;
+    if (!zoomed.el.contains(target)) return;
+    if (target.closest("textarea, input, select, .chat-dock, .cmd-menu, .plus-menu, .spop, .lightbox")) return;
+    // A terminal box's body is xterm/tmux's own touch surface; there the
+    // swipe only works on the title strip above it.
+    if (target.closest(".xt") || inHorizontalScroller(target, zoomed.el)) return;
+    swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
+  },
+  { passive: true }
+);
+document.addEventListener(
+  "touchend",
+  (e) => {
+    const s = swipe;
+    swipe = null;
+    if (!s || !zoomed || !e.changedTouches.length) return;
+    const dx = e.changedTouches[0].clientX - s.x;
+    const dy = e.changedTouches[0].clientY - s.y;
+    if (Date.now() - s.t > 700 || Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
+    if (window.getSelection()?.toString()) return; // they were selecting text
+    stepPane(dx < 0 ? 1 : -1);
+  },
+  { passive: true }
+);
+
+/** The "3/12 ⌄" control, added to every box's title bar; CSS shows it only on an open pane on a phone. */
+function addSwitcherButton(t: PaneView) {
+  const b = document.createElement("button");
+  b.className = "ctl pane-switch";
+  b.title = "Switch session";
+  b.setAttribute("aria-label", "Switch session");
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openPaneSheet();
+  });
+  b.addEventListener("pointerdown", (e) => e.stopPropagation());
+  const anchor = t.titleBar.querySelector(".spacer");
+  if (anchor) anchor.before(b);
+  else t.titleBar.append(b);
+}
+
+function updateSwitchers() {
+  if (!zoomed) return;
+  const list = swipeOrder();
+  const i = list.indexOf(zoomed);
+  const b = zoomed.titleBar.querySelector(".pane-switch") as HTMLElement | null;
+  if (!b) return;
+  const open = zoomed;
+  const waiting = queue.filter((id) => id !== open.id).length;
+  b.textContent = "";
+  const n = document.createElement("span");
+  n.textContent = i >= 0 ? `${i + 1}/${list.length}` : `${list.length}`;
+  b.append(n);
+  if (waiting) {
+    const w = document.createElement("span");
+    w.className = "pane-switch-waiting";
+    w.textContent = String(waiting);
+    w.title = `${waiting} other session${waiting === 1 ? "" : "s"} waiting for a look`;
+    b.append(w);
+  }
+  b.insertAdjacentHTML("beforeend", `<svg class="ico-svg" viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>`);
+}
+
+let paneSheet: HTMLElement | null = null;
+function closePaneSheet() {
+  if (paneSheet) paneSheet.hidden = true;
+}
+/** The session switcher: every pane, needs-you first, then working, then the rest (grid order within each). */
+function openPaneSheet() {
+  if (!paneSheet) {
+    paneSheet = document.createElement("div");
+    paneSheet.id = "paneSheet";
+    paneSheet.addEventListener("click", (e) => {
+      if (e.target === paneSheet) closePaneSheet();
+    });
+    document.body.append(paneSheet);
+  }
+  const sheet = paneSheet;
+  sheet.textContent = "";
+  const panel = document.createElement("div");
+  panel.className = "sheet-panel";
+  const head = document.createElement("div");
+  head.className = "sheet-head";
+  const title = document.createElement("span");
+  title.textContent = "Sessions";
+  const all = document.createElement("button");
+  all.className = "sheet-all";
+  all.textContent = "All boxes";
+  all.addEventListener("click", () => unzoom());
+  head.append(title, all);
+  panel.append(head);
+
+  const rank = (t: PaneView) =>
+    t.isWaiting() ? { question: 0, aborted: 1, done: 2 }[t.waitingKind()] : t.el.classList.contains("busy") ? 3 : 4;
+  const list = swipeOrder()
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => rank(a.t) - rank(b.t) || a.i - b.i)
+    .map((x) => x.t);
+  const rows = document.createElement("div");
+  rows.className = "sheet-rows";
+  for (const t of list) {
+    const row = document.createElement("button");
+    const state = t.isWaiting() ? t.waitingKind() : t.el.classList.contains("busy") ? "busy" : "idle";
+    row.className = `sheet-row ${state}` + (t === zoomed ? " current" : "");
+    const dot = document.createElement("span");
+    dot.className = "sheet-dot";
+    const text = document.createElement("span");
+    text.className = "sheet-text";
+    const name = document.createElement("span");
+    name.className = "sheet-name";
+    name.textContent = displayName(t.info);
+    const sub = document.createElement("span");
+    sub.className = "sheet-sub";
+    sub.textContent =
+      state === "question" ? "Needs you" : state === "aborted" ? "Cut off" : state === "done" ? "Done" : state === "busy" ? "Working…" : (t.info.lastInput || "").replace(/\s+/g, " ").trim() || t.info.cwd;
+    text.append(name, sub);
+    const kind = document.createElement("span");
+    kind.className = "sheet-kind";
+    kind.textContent = t.info.kind === "agent" ? "chat" : "terminal";
+    row.append(dot, text, kind);
+    row.addEventListener("click", () => {
+      closePaneSheet();
+      if (zoomed) switchTo(t, 0);
+      else zoom(t);
+    });
+    rows.append(row);
+  }
+  panel.append(rows);
+  sheet.append(panel);
+  sheet.hidden = false;
+}
 
 // ---- Drag to reorder --------------------------------------------------
 let dropTarget: HTMLElement | null = null;
@@ -906,11 +1125,13 @@ function notifyAttention(t: PaneView, kind: "question" | "done" | "aborted") {
 function enqueue(id: string, _kind: "question" | "done" | "aborted") {
   if (!queue.includes(id)) queue.push(id);
   renderQueue();
+  updateSwitchers(); // the open pane's "N need you" badge
 }
 function dequeue(id: string) {
   const i = queue.indexOf(id);
   if (i >= 0) queue.splice(i, 1);
   renderQueue();
+  updateSwitchers();
 }
 function setCleared(id: string) {
   panes.get(id)?.setWaiting(false);
@@ -1114,7 +1335,7 @@ function chatViewAvailable(cmd: string, remoteAgentCmd: string = ""): boolean {
 // select through "plain shell" (which force-unchecks, since a shell has no
 // chat view) and back doesn't strand the box on the terminal it never
 // re-checks itself out of. Reset to the default on every picker open.
-let chatViewWanted = true;
+let chatViewWanted = false;
 function updateChatViewAvailability() {
   const available = chatViewAvailable(agentSelect.value, sshAgentSelect.value);
   chatViewEl.disabled = !available;
@@ -1145,7 +1366,7 @@ agentSelect.addEventListener("change", updateSshRunRow);
 
 async function openPicker() {
   picker.hidden = false;
-  chatViewWanted = true;
+  chatViewWanted = false;
   updateChatViewAvailability();
   updateSshRunRow();
   // Resume where we left off; on first open use the saved default (or home).

@@ -32,7 +32,7 @@ function esc(s: string): string {
 }
 
 const SAFE_SCHEME = /^(https?:|mailto:)/i;
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)(\?[^\s]*)?$/i;
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|heic|heif)(\?[^\s]*)?$/i;
 const VIDEO_EXT = /\.(mp4|m4v|webm|ogv|mov)(\?[^\s]*)?$/i;
 const AUDIO_EXT = /\.(mp3|m4a|wav|oga|ogg|flac)(\?[^\s]*)?$/i;
 

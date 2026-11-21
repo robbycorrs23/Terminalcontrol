@@ -81,9 +81,10 @@ export function eventsFromTranscript(file, limit = 250) {
     if (d.isSidechain) continue;
 
     const msg = d.message;
+    const ts = d.timestamp ? Date.parse(d.timestamp) || undefined : undefined;
     if (d.type === "user" && msg) {
       if (typeof msg.content === "string") {
-        if (msg.content.trim()) events.push({ t: "user", id: d.uuid, text: msg.content });
+        if (msg.content.trim()) events.push({ t: "user", id: d.uuid, text: msg.content, ts });
       } else if (Array.isArray(msg.content)) {
         for (const b of msg.content) {
           if (b.type !== "tool_result") continue;
@@ -92,17 +93,19 @@ export function eventsFromTranscript(file, limit = 250) {
             id: b.tool_use_id,
             output: stringifyBlockContent(b.content),
             isError: !!b.is_error,
+            ts,
           });
         }
       }
     } else if (d.type === "assistant" && msg && Array.isArray(msg.content)) {
       for (const b of msg.content) {
-        if (b.type === "text" && b.text) {
-          events.push({ t: "assistant_done", id: d.uuid, text: b.text });
+        if (b.type === "thinking" && b.thinking) {
+          events.push({ t: "thinking", id: `${d.uuid}:th`, text: b.thinking, ts });
+        } else if (b.type === "text" && b.text) {
+          events.push({ t: "assistant_done", id: d.uuid, text: b.text, ts });
         } else if (b.type === "tool_use") {
-          events.push({ t: "tool_call", id: b.id, name: b.name, input: b.input });
+          events.push({ t: "tool_call", id: b.id, name: b.name, input: b.input, ts });
         }
-        // `thinking` blocks are dropped, matching the live driver.
       }
     }
   }

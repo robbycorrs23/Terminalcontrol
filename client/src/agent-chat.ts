@@ -1,44 +1,68 @@
-import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, setBusyClass, UsageRow, UsageWindow } from "./terminal";
-import { AgentEvent, AgentQuestion } from "./agent-events";
+import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, setBusyClass, profileOf, UsageRow, UsageWindow } from "./terminal";
+import { AgentEvent, AgentQuestion, ModelOption } from "./agent-events";
+import {
+  el,
+  toolLabel,
+  toolDetail,
+  todosOf,
+  renderTodos,
+  diffStat,
+  inputDiff,
+  inputPreview,
+  renderDiff,
+  stripAnsi,
+  fmtDuration,
+  lineCount,
+} from "./chat-steps";
+import { ApprovalDock, DockAnswer, PermissionEvent } from "./chat-dock";
+import { CommandMenu } from "./chat-commands";
+import { wireLightbox } from "./lightbox";
+import { mediaSrc } from "./markdown";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown } from "./markdown";
 import { enhanceRich } from "./rich";
 import { attachSecretPopover } from "./secret-popover";
 import { iconSvg, setIcon } from "./icons";
 
-function el(tag: string, cls: string): HTMLElement {
-  const n = document.createElement(tag);
-  n.className = cls;
-  return n;
+/** Images in a paste event, as named Files (a pasted screenshot has no useful name). */
+function clipboardImages(data: DataTransfer): File[] {
+  const out: File[] = [...data.files].filter((f) => f.type.startsWith("image/"));
+  if (!out.length) {
+    for (const item of data.items) {
+      if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+      const f = item.getAsFile();
+      if (f) out.push(f);
+    }
+  }
+  return out.map((f, i) => renamePasted(f, i));
 }
 
-function formatToolInput(input: unknown): string {
-  if (input == null) return "";
-  if (typeof input === "string") return input;
+/** Read images via the async Clipboard API (needs a user gesture; the browser may ask). */
+async function readClipboardImages(): Promise<File[]> {
   try {
-    return JSON.stringify(input, null, 2);
+    const items = await navigator.clipboard.read();
+    const out: File[] = [];
+    for (const item of items) {
+      const type = item.types.find((t) => t.startsWith("image/"));
+      if (!type) continue;
+      const blob = await item.getType(type);
+      out.push(renamePasted(new File([blob], "image", { type }), out.length));
+    }
+    return out;
   } catch {
-    return String(input);
+    return []; // denied, or nothing readable
   }
 }
 
-// The one field that says what a call actually DID, so a collapsed card reads
-// "Bash · npm run build" instead of a bare "Bash" that you have to open to
-// identify. Ordered most- to least-specific; unknown tools just get their
-// name, same as before. Any provider's tools work here (codex-driver.js maps
-// its own items onto the same `{name,input}` shape) — these are the field
-// names the common ones happen to use, not an exhaustive registry.
-const TOOL_DETAIL_KEYS = ["command", "file_path", "path", "pattern", "url", "query", "prompt"];
-function toolDetail(input: unknown): string {
-  if (typeof input === "string") return input;
-  if (!input || typeof input !== "object") return "";
-  const rec = input as Record<string, unknown>;
-  for (const key of TOOL_DETAIL_KEYS) {
-    const v = rec[key];
-    if (typeof v === "string" && v.trim()) return v.trim().replace(/\s+/g, " ");
-  }
-  return "";
+function renamePasted(f: File, i: number): File {
+  if (f.name && f.name !== "image.png" && f.name !== "image") return f;
+  const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg").replace(/[^a-z0-9]/g, "");
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
+  return new File([f], `pasted-${stamp}${i ? "-" + i : ""}.${ext}`, { type: f.type });
 }
+
+/** Steps a tool run shows before older ones fold behind "N earlier steps" (mirrored in styles.css). */
+const TOOL_RUN_VISIBLE = 3;
 
 /**
  * A "made for mobile" alternative to `Term`: instead of a PTY rendered
@@ -158,11 +182,22 @@ export class AgentChat implements PaneView {
   private isCodex: boolean;
   private isRemote: boolean;
   private inputEl: HTMLTextAreaElement;
-  private toolsEl!: HTMLElement;
-  private stopBtn!: HTMLButtonElement;
+  private plusMenu!: HTMLElement;
+  private sendBtn!: HTMLButtonElement;
   private jumpBtn!: HTMLButtonElement;
-  private modelEl!: HTMLElement;
+  private modelSel!: HTMLSelectElement;
+  private models: ModelOption[] = [];
   private usageEl!: HTMLElement;
+  private dock!: ApprovalDock;
+  private cmdMenu!: CommandMenu;
+  private suggestEl!: HTMLElement;
+  private busy = false;
+  private thinkingEls = new Map<string, HTMLElement>(); // thinking id -> row being streamed
+  private turnStart: number | null = null; // ts of the user message that opened the current turn
+  private turnEls: HTMLElement[] = []; // assistant text blocks of the current turn (for Copy)
+  private attachRow!: HTMLElement;
+  private attachments: { path: string; name: string; uploading?: boolean }[] = [];
+  private lastTs: number | undefined; // ts of the previous event (thinking's start when replayed whole)
   private ws?: WebSocket;
   private reconnectTimer?: number;
   private disposed = false;
@@ -179,7 +214,6 @@ export class AgentChat implements PaneView {
   // unbroken run of tool calls.
   private toolGroupEl: HTMLElement | null = null;
   private toolGroupBody: HTMLElement | null = null;
-  private toolGroupNames: string[] = [];
 
   constructor(info: PaneInfo, host: TermHost) {
     this.id = info.id;
@@ -272,7 +306,7 @@ export class AgentChat implements PaneView {
     // Term's `.work-logo`. Sits directly left of the mode selector (which is
     // itself already positioned right before the flag button above), so the
     // right-hand cluster reads badge → mode → flag → min → close.
-    if (info.cmd.endsWith("-work")) {
+    if (profileOf(info.cmd).endsWith("-work")) {
       this.el.classList.add("work");
       // Image comes from the machine's own settings via --work-logo; see
       // terminal.ts for the same treatment and main.ts for where it's set.
@@ -301,70 +335,107 @@ export class AgentChat implements PaneView {
     this.logEl = el("div", "chat-log");
     this.statusEl = el("div", "status-line");
     this.statusEl.hidden = true;
-    // ---- Tools row ------------------------------------------------------
-    // One home for every pane-level control, directly above the composer:
-    // actions on the left (attach, view flip, secret, permission mode), live
-    // state on the right (model, jump-to-latest, stop, usage). These used to be
-    // split between the title bar and the input bar — but a title bar already
-    // carrying a name, a drag handle and four window controls has no room for
-    // state, and a control you reach for WHILE typing belongs next to where you
-    // type.
-    this.toolsEl = el("div", "chat-tools");
-
-    const attachBtn = el("button", "ctl attach") as HTMLButtonElement;
-    setIcon(attachBtn, "attach");
-    attachBtn.title = "Add file(s)";
-    const viewBtn = el("button", "ctl view") as HTMLButtonElement;
-    setIcon(viewBtn, "terminal");
-    viewBtn.title = "Switch this box to terminal view";
-    const secretBtn = el("button", "ctl secret") as HTMLButtonElement;
-    setIcon(secretBtn, "secret");
+    // ---- "+" menu ---------------------------------------------------------
+    // Pane-level actions that aren't needed while typing — add files, hand
+    // over a secret, flip to terminal view — live behind the composer's "+",
+    // as in the Claude app, instead of in a row of bare icons of their own.
+    // (They used to be a separate tools row between log and composer.)
+    const menuItem = (cls: string, icon: Parameters<typeof setIcon>[1], label: string) => {
+      const b = el("button", `menu-item ${cls}`) as HTMLButtonElement;
+      b.innerHTML = iconSvg(icon);
+      const l = el("span", "menu-label");
+      l.textContent = label;
+      b.append(l);
+      b.title = label;
+      return b;
+    };
+    const attachBtn = menuItem("attach", "attach", "Add files");
+    // Explicit "paste what I copied" for when the system paste gesture won't
+    // offer an image (iOS shows no Paste in a text box for an image-only
+    // clipboard). Uses the async Clipboard API, which asks once.
+    const pasteBtn = menuItem("paste-img", "image", "Paste image");
+    const secretBtn = menuItem("secret", "secret", "Give it a secret");
     secretBtn.title = "Give this chat a secret (never saved to chat memory)";
+    // `.view` is what main.ts's flipView() looks up to disable during a flip.
+    const viewBtn = menuItem("view", "terminal", "Switch to terminal view");
+    this.plusMenu = el("div", "plus-menu");
+    this.plusMenu.hidden = true;
+    this.plusMenu.append(attachBtn, pasteBtn, secretBtn, viewBtn);
+    pasteBtn.hidden = !navigator.clipboard?.read;
+    pasteBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const files = await readClipboardImages();
+      if (files.length) void this.attachFiles(files);
+      else this.flashNote("No image on the clipboard — copy one first");
+    });
 
-    this.modelEl = el("span", "model-badge");
-    this.modelEl.hidden = true;
-    this.jumpBtn = el("button", "ctl jump") as HTMLButtonElement;
-    setIcon(this.jumpBtn, "down");
+    // Model picker: filled from the SDK's own list (`models` event); until it
+    // arrives (or for codex, which reports none) it's a disabled one-option
+    // badge for whatever the pane says it's running.
+    this.modelSel = document.createElement("select");
+    this.modelSel.className = "model-sel";
+    this.modelSel.title = "Model";
+    this.modelSel.hidden = true;
+    this.modelSel.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.modelSel.addEventListener("click", (e) => e.stopPropagation());
+    this.modelSel.addEventListener("change", () => this.wsSend({ t: "setModel", model: this.modelSel.value }));
+    // Floating "jump to latest" pill over the bottom of the log.
+    this.jumpBtn = el("button", "jump-pill") as HTMLButtonElement;
+    this.jumpBtn.innerHTML = iconSvg("down");
     this.jumpBtn.title = "Jump to latest";
+    this.jumpBtn.setAttribute("aria-label", "Jump to latest");
     this.jumpBtn.hidden = true;
-    // Interrupt. Until this existed a chat pane could not cancel a running turn
-    // at all: no softkeys, no PTY, so no Esc to send. The server and both
-    // drivers already understood {t:"interrupt"} — nothing was sending it.
-    this.stopBtn = el("button", "ctl stop") as HTMLButtonElement;
-    setIcon(this.stopBtn, "stop");
-    this.stopBtn.title = "Stop this turn";
-    this.stopBtn.hidden = true;
     this.usageEl = el("span", "use-rings");
 
-    this.toolsEl.append(
-      attachBtn,
-      viewBtn,
-      secretBtn,
-      this.modeSel,
-      this.modelEl,
-      el("span", "spacer"),
-      this.jumpBtn,
-      this.stopBtn,
-      this.usageEl
-    );
     if (info.model) this.setModel(info.model);
 
+    // ---- Composer -------------------------------------------------------
+    // One rounded box, as in the Claude app: the text on top, a row of
+    // controls under it — attach, permission mode, model, and a single
+    // button that is Send when there's text and Stop (■) while a turn runs
+    // with nothing typed. Typing during a turn still sends: the SDK queues
+    // it for when the current turn ends.
     const inputBar = el("div", "chat-input");
     this.inputEl = document.createElement("textarea");
     this.inputEl.rows = 1;
-    this.inputEl.placeholder = "Message…";
-    const sendBtn = el("button", "chat-send");
-    sendBtn.textContent = "Send";
-    // Phone-only (CSS decides): the tools row is wider than a 390px composer
-    // can spare, so on mobile it collapses behind this and opens as a wrapped
-    // row above the input. Lives in the input bar so it sits where the old
-    // attach button did — thumb-reachable, next to what it acts on.
-    const menuBtn = el("button", "chat-menu") as HTMLButtonElement;
-    setIcon(menuBtn, "menu");
-    menuBtn.title = "Tools";
-    menuBtn.setAttribute("aria-label", "Tools");
-    inputBar.append(menuBtn, this.inputEl, sendBtn);
-    chat.append(this.logEl, this.statusEl, this.toolsEl, inputBar, workingOverlay());
+    this.inputEl.placeholder = this.isCodex ? "Message Codex…" : "Message Claude…";
+    this.sendBtn = el("button", "chat-send") as HTMLButtonElement;
+    const plusBtn = el("button", "chat-plus") as HTMLButtonElement;
+    setIcon(plusBtn, "plus");
+    plusBtn.title = "Add files, secrets, view";
+    plusBtn.setAttribute("aria-label", "More");
+    const row = el("div", "composer-row");
+    row.append(plusBtn, this.modeSel, el("span", "spacer"), this.usageEl, this.modelSel, this.sendBtn);
+    // Attachments wait here as thumbnails (the way the app shows them) rather
+    // than as raw upload paths pasted into your message.
+    this.attachRow = el("div", "attach-row");
+    this.attachRow.hidden = true;
+    inputBar.append(this.attachRow, this.inputEl, row);
+
+    this.cmdMenu = new CommandMenu(this.inputEl, () => {
+      this.autoGrow();
+      this.syncSend();
+    });
+    this.suggestEl = el("div", "chat-suggest");
+    this.suggestEl.hidden = true;
+    this.dock = new ApprovalDock(
+      this.isCodex,
+      (ev, a) => this.answerPermission(ev, a),
+      (open) => {
+        chat.classList.toggle("has-dock", open);
+        // Move focus between composer and dock only if it was already in
+        // THIS pane — a prompt in another box must not steal your typing.
+        const mine = this.el.contains(document.activeElement);
+        if (open && mine) this.dock.focus();
+        else if (!open && mine) this.inputEl.focus({ preventScroll: true });
+        this.scrollToBottom();
+      }
+    );
+    const logWrap = el("div", "log-wrap");
+    logWrap.append(this.logEl, this.jumpBtn);
+    wireLightbox(chat);
+    chat.append(logWrap, this.statusEl, this.plusMenu, this.cmdMenu.el, this.suggestEl, this.dock.el, inputBar, workingOverlay());
+    this.syncSend();
 
     this.el.append(this.titleBar, cwdline, this.pinnedEl, chat);
     this.cell.append(this.el);
@@ -379,6 +450,7 @@ export class AgentChat implements PaneView {
     // remote host instead, not done here). Hide, don't wire — a visible but
     // silently-broken button would be worse than no button.
     if (this.isRemote) {
+      pasteBtn.hidden = true;
       secretBtn.hidden = true;
       attachBtn.hidden = true;
     } else {
@@ -390,51 +462,100 @@ export class AgentChat implements PaneView {
       wireFileDrop(this.el, (files) => void this.attachFiles(files));
     }
 
-    menuBtn.addEventListener("click", (e) => {
+    plusBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      this.el.classList.toggle("tools-open");
+      this.plusMenu.hidden = !this.plusMenu.hidden;
+      plusBtn.classList.toggle("open", !this.plusMenu.hidden);
     });
-    // Any button in the row finishes the job it was opened for, so close after
-    // it. The mode <select> is excluded — picking a mode is the whole action
-    // and the row collapsing out from under an open dropdown is jarring.
-    this.toolsEl.addEventListener("click", (e) => {
-      if ((e.target as HTMLElement).closest(".ctl")) this.el.classList.remove("tools-open");
+    // Picking anything finishes the job the menu was opened for. Capture
+    // phase: the file picker's own handler stops the click from bubbling.
+    this.plusMenu.addEventListener(
+      "click",
+      () => {
+        this.plusMenu.hidden = true;
+        plusBtn.classList.remove("open");
+      },
+      true
+    );
+    this.plusMenu.addEventListener("pointerdown", (e) => e.stopPropagation());
+    document.addEventListener("pointerdown", (e) => {
+      if (this.plusMenu.hidden || plusBtn.contains(e.target as Node)) return;
+      this.plusMenu.hidden = true;
+      plusBtn.classList.remove("open");
     });
-
     viewBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       host.onFlipView(this);
     });
-    this.stopBtn.addEventListener("click", (e) => {
+    this.sendBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      this.wsSend({ t: "interrupt" });
+      if (this.sendBtn.classList.contains("stop")) this.wsSend({ t: "interrupt" });
+      else this.submit();
+      this.inputEl.focus({ preventScroll: true });
     });
     this.jumpBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       this.logEl.scrollTop = this.logEl.scrollHeight;
       this.jumpBtn.hidden = true;
+      this.stick = true;
     });
     // Offer the jump button only when it would actually do something. 24px of
     // slack keeps it from flickering on during momentum scrolling at the bottom.
+    // Also decides whether new output follows the bottom: scrolled up to
+    // read something, the log stays put (the app doesn't yank you down
+    // mid-read); back at the bottom, it follows again.
     this.logEl.addEventListener("scroll", () => {
       const room = this.logEl.scrollHeight - this.logEl.scrollTop - this.logEl.clientHeight;
       this.jumpBtn.hidden = room < 24;
+      this.stick = room < 48;
     });
 
-    sendBtn.addEventListener("click", () => this.submit());
     this.inputEl.addEventListener("keydown", (e) => {
       e.stopPropagation(); // don't let Escape/etc bubble to the app-level zoom handler
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (this.cmdMenu.handleKey(e)) {
+        e.preventDefault();
+        return;
+      }
+      // Tab takes the suggested follow-up when the box is empty, like the CLI.
+      if (e.key === "Tab" && !e.shiftKey && !this.inputEl.value && this.suggestion) {
+        e.preventDefault();
+        this.inputEl.value = this.suggestion;
+        this.autoGrow();
+        this.syncSend();
+        return;
+      }
+      if (e.key === "Escape" && this.busy && !this.inputEl.value) {
+        e.preventDefault();
+        this.wsSend({ t: "interrupt" }); // Esc interrupts, as in Claude Code
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         this.submit();
       }
     });
-    this.inputEl.addEventListener("input", () => this.autoGrow());
+    this.inputEl.addEventListener("input", () => {
+      this.autoGrow();
+      this.cmdMenu.update();
+      this.syncSend();
+    });
+    this.inputEl.addEventListener("blur", () => this.cmdMenu.close());
+    // Paste a screenshot or copied image straight into the message. Safari
+    // often leaves clipboardData.files empty and puts the image only in
+    // .items, so read both. Text in the same paste still pastes normally
+    // unless an image was found.
+    this.inputEl.addEventListener("paste", (e) => {
+      if (this.isRemote || !e.clipboardData) return;
+      const files = clipboardImages(e.clipboardData);
+      if (!files.length) return;
+      e.preventDefault();
+      void this.attachFiles(files);
+    });
 
     // Click the box (outside controls/input) opens/zooms it, same as Term.
     this.el.addEventListener("click", (e) => {
       const tgt = e.target as HTMLElement;
-      if (tgt.closest(".ctl") || tgt.closest(".chat-input") || tgt.closest(".chat-tools")) return;
+      if (tgt.closest(".ctl, .chat-input, .plus-menu, .jump-pill, .chat-dock, .chat-suggest, .cmd-menu, .turn-meta")) return;
       host.onOpen(this);
     });
 
@@ -519,14 +640,9 @@ export class AgentChat implements PaneView {
         return;
       }
       if (m.t === "replay" && m.events) {
-        this.logEl.innerHTML = "";
-        this.toolEls.clear();
-        this.permEls.clear();
-        this.questionEls.clear();
-        this.streamingEls.clear();
-        this.endToolGroup();
+        this.resetLog();
         for (const ev of m.events) this.applyEvent(ev);
-        this.scrollToBottom();
+        this.scrollToBottom(true);
       } else if (m.t === "ev" && m.ev) {
         this.applyEvent(m.ev);
         this.scrollToBottom();
@@ -583,11 +699,39 @@ export class AgentChat implements PaneView {
   // ---- Input -----------------------------------------------------------
 
   private submit() {
-    const text = this.inputEl.value.trim();
-    if (!text) return;
+    const typed = this.inputEl.value.trim();
+    if (this.attachments.some((a) => a.uploading)) return; // wait for the upload
+    const paths = this.attachments.map((a) => a.path);
+    if (!typed && !paths.length) return;
+    const text = [typed, ...paths].filter(Boolean).join("\n");
+    this.attachments = [];
+    this.renderAttachments();
     this.inputEl.value = "";
     this.autoGrow();
+    this.cmdMenu.close();
+    this.stick = true; // sending is "take me to the bottom"
     this.wsSend({ t: "send", text });
+    this.syncSend();
+  }
+
+  /** A brief note above the composer (e.g. "no image on the clipboard"). */
+  private flashNote(text: string) {
+    const n = el("div", "chat-flash");
+    n.textContent = text;
+    this.el.querySelector(".chat")?.insertBefore(n, this.el.querySelector(".chat-input"));
+    setTimeout(() => n.remove(), 2600);
+  }
+
+  /** One button, two jobs: Send when there's text, Stop while a turn runs with nothing typed. */
+  private syncSend() {
+    const has = !!this.inputEl.value.trim() || this.attachments.length > 0;
+    const stop = this.busy && !has;
+    this.sendBtn.classList.toggle("stop", stop);
+    this.sendBtn.classList.toggle("empty", !stop && !has);
+    setIcon(this.sendBtn, stop ? "stop" : "send");
+    const label = stop ? "Stop (Esc)" : this.busy ? "Queue message" : "Send";
+    this.sendBtn.title = label;
+    this.sendBtn.setAttribute("aria-label", label);
   }
 
   private autoGrow() {
@@ -595,92 +739,189 @@ export class AgentChat implements PaneView {
     this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 160) + "px";
   }
 
+  /**
+   * Upload, then hold each file as a chip in the composer. On send their
+   * paths are appended to the message (one per line) — still the same text
+   * protocol the driver always had, so Claude reads them with its Read tool,
+   * images included — and the bubble renders them back as images.
+   */
   private async attachFiles(files: File[]) {
+    if (!files.length) return;
+    const placeholders: { path: string; name: string; uploading?: boolean }[] = files.map((f) => ({
+      path: "",
+      name: f.name || "image",
+      uploading: true,
+    }));
+    this.attachments.push(...placeholders);
+    this.renderAttachments();
     const paths = await uploadFiles(this.id, files);
-    if (!paths.length) return;
-    this.inputEl.value = (this.inputEl.value ? this.inputEl.value + " " : "") + paths.join(" ") + " ";
-    this.autoGrow();
-    this.inputEl.focus();
+    this.attachments = this.attachments.filter((a) => !placeholders.includes(a));
+    for (const path of paths) this.attachments.push({ path, name: basename(path) });
+    this.renderAttachments();
+    this.inputEl.focus({ preventScroll: true });
+  }
+
+  private renderAttachments() {
+    this.attachRow.textContent = "";
+    this.attachRow.hidden = !this.attachments.length;
+    for (const a of this.attachments) {
+      const chip = el("div", "attach-chip" + (a.uploading ? " uploading" : ""));
+      const media = a.path ? mediaSrc(a.path) : null;
+      if (media?.kind === "image") {
+        const thumb = el("span", "attach-thumb");
+        const img = document.createElement("img");
+        img.src = media.src;
+        img.alt = a.name;
+        thumb.append(img);
+        chip.append(thumb);
+      } else {
+        const name = el("span", "attach-name");
+        name.textContent = a.uploading ? "Uploading…" : a.name;
+        chip.append(name);
+      }
+      if (!a.uploading) {
+        const x = el("button", "attach-x") as HTMLButtonElement;
+        x.textContent = "✕";
+        x.title = `Remove ${a.name}`;
+        x.setAttribute("aria-label", `Remove ${a.name}`);
+        x.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.attachments = this.attachments.filter((b) => b !== a);
+          this.renderAttachments();
+        });
+        chip.append(x);
+      }
+      this.attachRow.append(chip);
+    }
+    this.syncSend();
   }
 
   // ---- Event rendering ---------------------------------------------------
 
+  private stick = true; // follow new output? false while the user is scrolled up reading
+  private suggestion = "";
+
+  private resetLog() {
+    this.logEl.innerHTML = "";
+    this.toolEls.clear();
+    this.permEls.clear();
+    this.questionEls.clear();
+    this.streamingEls.clear();
+    this.thinkingEls.clear();
+    this.dock.clear();
+    this.endToolGroup();
+    this.turnStart = null;
+    this.turnEls = [];
+    this.setSuggestion("");
+  }
+
   private applyEvent(ev: AgentEvent) {
+    this.applyEventInner(ev);
+    if (ev.ts) this.lastTs = ev.ts;
+  }
+
+  private applyEventInner(ev: AgentEvent) {
     switch (ev.t) {
       case "user":
+        this.closeThinking();
         this.appendBubble("user", ev.text);
+        this.turnStart = ev.ts ?? Date.now();
+        this.turnEls = [];
+        this.setSuggestion("");
         break;
       case "assistant_done": {
-        // codex-driver.js streams this SAME message as assistant_delta first,
-        // so a bubble for this id usually already exists and is fully
-        // rendered — finalize it in place. Appending unconditionally rendered
-        // every codex message twice. (`AgentMessageDeltaNotification.itemId`
-        // and the `agentMessage` `ThreadItem.id` are the same item id —
-        // verified against `codex app-server generate-ts` — so this lookup
-        // hits.) claude-driver.js sends no deltas, so it takes the else branch
-        // exactly as before.
+        // A streamed block (claude via includePartialMessages, codex natively)
+        // already has a bubble under this id — finalize it in place.
+        this.closeThinking();
         const streamed = this.streamingEls.get(ev.id);
         this.streamingEls.delete(ev.id);
         let bubbleEl: HTMLElement;
         if (streamed) {
-          // Trust the completed item's text over the accumulated deltas: it's
-          // the authoritative final form, and re-rendering from it repairs a
-          // bubble that dropped a delta mid-stream.
+          // Trust the completed text over the accumulated deltas: it's the
+          // authoritative form and repairs a dropped delta.
           streamed.dataset.raw = ev.text;
           streamed.innerHTML = renderMarkdown(ev.text);
-          // Charts/tables/clipping are built HERE and not on each delta: a
-          // half-streamed ```chart block is invalid JSON, and rebuilding SVG
-          // per token would thrash. The bubble reads as plain Markdown while
-          // it streams and gains its rich layer the moment it's complete.
+          streamed.classList.remove("streaming");
+          // Charts/tables are built HERE, not per delta: a half-streamed
+          // ```chart block is invalid JSON, and rebuilding SVG per token thrashes.
           enhanceRich(streamed);
           bubbleEl = streamed;
         } else {
           bubbleEl = this.appendBubble("assistant", ev.text);
         }
-        // claude-driver.js only sets this when the SDK itself says the
-        // message was truncated by an interrupt/abort — the content may end
-        // mid-word. Mark it the same way updateToolCard marks a failed tool
-        // result, so it doesn't read as a normal, if oddly-worded, finish.
+        this.turnEls.push(bubbleEl);
+        // Only set when the SDK itself says the message was truncated.
         bubbleEl.classList.toggle("aborted", !!ev.aborted);
         break;
       }
       case "assistant_delta": {
-        // Emitted by codex-driver.js (claude-driver.js has no partial-message
-        // streaming). Keeps the raw source in a dataset field so each delta
-        // re-renders the whole accumulated Markdown rather than appending to
-        // already-rendered HTML.
+        this.closeThinking();
         let bubble = this.streamingEls.get(ev.id);
         if (!bubble) {
           bubble = this.appendBubble("assistant", "");
+          bubble.classList.add("streaming");
           this.streamingEls.set(ev.id, bubble);
         }
         bubble.dataset.raw = (bubble.dataset.raw || "") + ev.delta;
         bubble.innerHTML = renderMarkdown(bubble.dataset.raw);
         break;
       }
+      case "thinking_delta":
+        this.thinkingRow(ev.id, ev.ts).dataset.raw += ev.delta;
+        this.renderThinking(ev.id);
+        break;
+      case "thinking": {
+        // Replayed whole (no deltas): it began roughly when the previous event landed.
+        const row = this.thinkingRow(ev.id, this.thinkingEls.has(ev.id) ? ev.ts : (this.lastTs ?? ev.ts));
+        row.dataset.raw = ev.text;
+        this.renderThinking(ev.id);
+        this.finishThinking(row, ev.ts);
+        break;
+      }
       case "tool_call":
-        this.appendToolCard(ev.id, ev.name, ev.input);
+        this.closeThinking();
+        this.appendToolCard(ev.id, ev.name, ev.input, ev.parent);
         break;
       case "tool_result":
         this.updateToolCard(ev.id, ev.output, ev.isError, ev.diff);
         break;
+      case "tool_progress": {
+        const card = this.toolEls.get(ev.id);
+        if (card?.classList.contains("pending")) {
+          const t = card.querySelector(":scope > summary .tool-time") as HTMLElement | null;
+          if (t) t.textContent = fmtDuration(ev.seconds * 1000);
+        }
+        break;
+      }
       case "permission_request":
-        this.appendPermissionCard(ev);
+        this.closeThinking();
+        this.appendPermissionNote(ev);
         break;
       case "permission_resolved":
-        this.resolvePermissionCard(ev.requestId, ev.decision);
+        this.resolvePermissionNote(ev.requestId, ev.decision, ev.message);
         break;
       case "question":
+        this.closeThinking();
         this.appendQuestionCard(ev);
         break;
       case "question_resolved":
         this.resolveQuestionCard(ev.requestId, ev.answers);
         break;
       case "status":
-        this.setStatus(ev.state, ev.detail);
+        this.setStatus(ev.state, ev.detail, ev.durationMs, ev.ts);
         break;
       case "mode":
         this.setModeUI(ev.mode);
+        break;
+      case "commands":
+        this.cmdMenu.setCommands(ev.commands);
+        break;
+      case "models":
+        this.models = ev.models;
+        this.renderModels();
+        break;
+      case "suggestion":
+        if (!this.busy) this.setSuggestion(ev.text);
         break;
     }
   }
@@ -690,65 +931,223 @@ export class AgentChat implements PaneView {
     const bubble = el("div", `msg ${role}`);
     // Assistant text is Markdown (renderMarkdown escapes untrusted source
     // before adding any markup — see markdown.ts). User/error/aborted text
-    // stays literal: the user typed it, or it's FleetView's own notice text,
-    // neither should be reinterpreted as Markdown.
+    // stays literal.
     if (role === "assistant") bubble.innerHTML = renderMarkdown(text);
+    else if (role === "user") this.renderUserText(bubble, text);
     else bubble.textContent = text;
     this.logEl.append(bubble);
     // After the append, so the rich pass can measure real laid-out height.
-    // Runs for user bubbles too — they carry no Markdown, but a pasted wall of
-    // text is exactly as unreadable from either speaker, and clipping is the
-    // only step that finds anything to do there.
-    if (role !== "error" && role !== "aborted") enhanceRich(bubble);
+    if (role !== "error" && role !== "aborted" && text) enhanceRich(bubble);
     return bubble;
   }
 
-  private appendToolCard(id: string, name: string, input: unknown) {
-    const details = document.createElement("details");
-    details.className = "tool-card";
-    details.open = false;
-    const summary = document.createElement("summary");
-    const detail = toolDetail(input);
-    summary.textContent = detail ? `⚙ ${name} · ${detail}` : `⚙ ${name}`;
-    summary.title = summary.textContent; // the CSS ellipsis hides long commands
-    const body = document.createElement("pre");
-    body.className = "tool-input";
-    body.textContent = formatToolInput(input);
-    details.append(summary, body);
-    this.toolGroup().append(details);
-    this.toolEls.set(id, details);
-    this.toolGroupNames.push(name);
-    this.renderToolGroupSummary();
+  /**
+   * Your message, with any image paths in it (attachments, or a path you
+   * typed) shown as the images themselves under the text — and dropped from
+   * the visible text, since a 90-character temp path tells you nothing.
+   */
+  private renderUserText(bubble: HTMLElement, text: string) {
+    const images: { src: string; name: string }[] = [];
+    const rest = text
+      .split("\n")
+      .map((line) =>
+        line
+          .split(/(\s+)/)
+          .filter((tok) => {
+            const m = /^(\/|~\/)\S+$/.test(tok) ? mediaSrc(tok) : null;
+            if (m?.kind !== "image") return true;
+            images.push({ src: m.src, name: basename(tok) });
+            return false;
+          })
+          .join("")
+          .trimEnd()
+      )
+      .join("\n")
+      .trim();
+    if (rest) {
+      const t = el("div", "msg-text");
+      t.textContent = rest;
+      bubble.append(t);
+    }
+    if (images.length) {
+      bubble.classList.add("has-images");
+      const grid = el("div", "msg-images");
+      for (const im of images) {
+        const img = document.createElement("img");
+        img.className = "msg-img";
+        img.src = im.src;
+        img.alt = im.name;
+        img.loading = "lazy";
+        img.decoding = "async";
+        img.addEventListener("error", () => img.classList.add("missing"));
+        grid.append(img);
+      }
+      bubble.append(grid);
+    }
   }
 
-  /** Current run's group container, creating one if the last thing appended wasn't a tool call. */
+  // ---- Thinking ------------------------------------------------------------
+  // A collapsible step in the same timeline as tool calls: "Thinking…" with a
+  // shimmer while it streams, "Thought for 8s" once done. Collapsed by
+  // default — it's the model's scratchpad, not the answer.
+
+  private thinkingRow(id: string, ts?: number): HTMLElement {
+    let row = this.thinkingEls.get(id);
+    if (row) return row;
+    row = document.createElement("details");
+    row.className = "tool-card thinking pending";
+    row.dataset.raw = "";
+    row.dataset.start = String(ts ?? Date.now());
+    const summary = document.createElement("summary");
+    const dot = el("span", "tool-dot");
+    const verb = el("span", "tool-verb");
+    verb.textContent = "Thinking…";
+    summary.append(dot, verb);
+    const body = el("div", "thinking-body");
+    row.append(summary, body);
+    this.toolGroup().append(row);
+    this.renderToolGroupSummary();
+    this.thinkingEls.set(id, row);
+    return row;
+  }
+
+  private renderThinking(id: string) {
+    const row = this.thinkingEls.get(id);
+    if (!row) return;
+    (row.querySelector(".thinking-body") as HTMLElement).innerHTML = renderMarkdown(row.dataset.raw || "");
+  }
+
+  private finishThinking(row: HTMLElement, ts?: number) {
+    if (!row.classList.contains("pending")) return;
+    row.classList.remove("pending");
+    const start = Number(row.dataset.start);
+    const secs = ts && start ? (ts - start) / 1000 : 0;
+    (row.querySelector(".tool-verb") as HTMLElement).textContent =
+      secs >= 1 ? `Thought for ${fmtDuration(secs * 1000)}` : "Thought";
+  }
+
+  /** Something else started, so any thinking still streaming is over. */
+  private closeThinking() {
+    for (const row of this.thinkingEls.values()) this.finishThinking(row, Date.now());
+  }
+
+  // ---- Tool steps ------------------------------------------------------------
+
+  /**
+   * One step in the Claude-app style: a borderless row reading "● Verb
+   * target  stat", whose dot pulses until its tool_result lands. Clicking it
+   * opens a body built for that tool: `$ command` + output for Bash, a diff
+   * for edits (shown before the result, from the call's own input), the
+   * checklist for todos (open by default), the plan for ExitPlanMode.
+   * Subagent steps (`parent` set) nest inside their Agent step.
+   */
+  private appendToolCard(id: string, name: string, input: unknown, parent?: string) {
+    if (this.toolEls.has(id)) return;
+    const details = document.createElement("details");
+    details.className = "tool-card pending";
+    details.dataset.tool = name;
+    const fileArg = input && typeof input === "object" ? (input as Record<string, unknown>).file_path : undefined;
+    if (typeof fileArg === "string") details.dataset.file = fileArg;
+    const summary = document.createElement("summary");
+    const { verb, target } = toolLabel(name, input);
+    const dot = el("span", "tool-dot");
+    const verbEl = el("span", "tool-verb");
+    verbEl.textContent = verb;
+    const targetEl = el("span", "tool-target");
+    targetEl.textContent = target;
+    const stat = el("span", "tool-stat");
+    const time = el("span", "tool-time");
+    summary.append(dot, verbEl, targetEl, stat, time);
+    const full = toolDetail(input);
+    summary.title = full ? `${name} · ${full}` : name;
+    details.append(summary);
+
+    const body = el("div", "tool-body");
+    const preview = inputPreview(name, input);
+    if (preview) body.append(preview);
+    details.append(body);
+
+    const todos = name === "TodoWrite" ? todosOf(input) : null;
+    if (todos) {
+      details.classList.add("todos");
+      details.open = true;
+      stat.textContent = `${todos.filter((t) => t.status === "completed").length}/${todos.length}`;
+    }
+    if (name === "ExitPlanMode" && preview) {
+      details.classList.add("plan");
+      details.open = true;
+      enhanceRich(preview);
+    }
+    const diff = inputDiff(name, input);
+    if (diff) this.setDiffStat(stat, diff);
+    if (name === "Task" || name === "Agent") {
+      details.classList.add("agent");
+      const kids = el("div", "tool-children");
+      body.prepend(kids);
+    }
+
+    const parentCard = parent ? this.toolEls.get(parent) : undefined;
+    if (parentCard) {
+      parentCard.querySelector(".tool-children")?.append(details);
+      const n = parentCard.querySelectorAll(".tool-children > .tool-card").length;
+      (parentCard.querySelector(":scope > summary .tool-stat") as HTMLElement).textContent = `${n} step${n === 1 ? "" : "s"}`;
+    } else {
+      this.toolGroup().append(details);
+      this.renderToolGroupSummary();
+    }
+    this.toolEls.set(id, details);
+  }
+
+  private setDiffStat(stat: HTMLElement, diff: string) {
+    const { add, del } = diffStat(diff);
+    stat.textContent = "";
+    const a = el("span", "add");
+    a.textContent = `+${add}`;
+    const d = el("span", "del");
+    d.textContent = `−${del}`;
+    stat.append(a, d);
+  }
+
+  /**
+   * Current run's container, creating one if the last thing appended wasn't a
+   * step. A run is a vertical timeline of rows, always visible — only once it
+   * grows past TOOL_RUN_VISIBLE do the OLDER rows fold behind "N earlier
+   * steps", so the live edge stays in view. The fold is CSS (nth-last-child).
+   */
   private toolGroup(): HTMLElement {
     if (this.toolGroupBody) return this.toolGroupBody;
-    const group = document.createElement("details");
-    group.className = "tool-group";
-    group.open = false;
-    const summary = document.createElement("summary");
+    const group = el("div", "tool-group");
+    const more = el("button", "tool-more") as HTMLButtonElement;
+    more.hidden = true;
+    more.addEventListener("click", (e) => {
+      e.stopPropagation();
+      group.classList.toggle("expanded");
+      this.renderToolGroupSummary(group);
+    });
     const body = el("div", "tool-group-body");
-    group.append(summary, body);
+    group.append(more, body);
     this.logEl.append(group);
     this.toolGroupEl = group;
     this.toolGroupBody = body;
-    this.toolGroupNames = [];
     return body;
   }
 
-  private renderToolGroupSummary() {
-    if (!this.toolGroupEl) return;
-    const n = this.toolGroupNames.length;
-    const preview = this.toolGroupNames.slice(0, 4).join(", ") + (n > 4 ? `, +${n - 4} more` : "");
-    (this.toolGroupEl.querySelector("summary") as HTMLElement).textContent =
-      `⚙ ${n} tool call${n === 1 ? "" : "s"}: ${preview}`;
+  private renderToolGroupSummary(group: HTMLElement | null = this.toolGroupEl) {
+    if (!group) return;
+    const more = group.querySelector(".tool-more") as HTMLButtonElement;
+    // Count exactly what the CSS fold hides: rows before the last
+    // TOOL_RUN_VISIBLE, minus the ones it always keeps (errors, todo lists).
+    const rows = [...group.querySelector(".tool-group-body")!.children];
+    const hidden = rows.filter((r, i) => i < rows.length - TOOL_RUN_VISIBLE && !r.matches(".error, .todos")).length;
+    more.hidden = hidden <= 0;
+    more.textContent = group.classList.contains("expanded")
+      ? "Hide earlier steps"
+      : `${hidden} earlier step${hidden === 1 ? "" : "s"}`;
   }
 
   private endToolGroup() {
     this.toolGroupEl = null;
     this.toolGroupBody = null;
-    this.toolGroupNames = [];
   }
 
   private updateToolCard(id: string, output: string, isError: boolean, diff?: string) {
@@ -759,61 +1158,136 @@ export class AgentChat implements PaneView {
       this.appendToolCard(id, "tool result", null);
       card = this.toolEls.get(id)!;
     }
+    card.classList.remove("pending", "awaiting");
     card.classList.toggle("error", isError);
-    // Surface the error on the (possibly already-collapsed) group too, so a
-    // failed call isn't hidden behind a summary line that only shows names.
-    if (isError) card.closest(".tool-group")?.classList.add("error");
-    if (diff) {
-      const pre = document.createElement("pre");
-      pre.className = "tool-diff";
-      pre.innerHTML = diff
-        .split("\n")
-        .map((line) => {
-          const cls = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "";
-          const span = document.createElement("span");
-          span.className = cls;
-          span.textContent = line;
-          return span.outerHTML;
-        })
-        .join("\n");
-      card.append(pre);
-    } else {
-      const out = document.createElement("pre");
-      out.className = "tool-output";
-      out.textContent = output;
-      card.append(out);
+    (card.querySelector(":scope > summary .tool-time") as HTMLElement).textContent = "";
+    // Surface the error on the group too; .tool-card.error is also exempt
+    // from the "earlier steps" fold, so a failure is never tucked away.
+    if (isError) {
+      const group = card.closest(".tool-group") as HTMLElement | null;
+      group?.classList.add("error");
+      this.renderToolGroupSummary(group);
     }
+    const name = card.dataset.tool || "";
+    const body = card.querySelector(":scope > .tool-body") as HTMLElement;
+    const stat = card.querySelector(":scope > summary .tool-stat") as HTMLElement;
+    const text = stripAnsi(output || "");
+
+    // The checklist / plan already say everything; their results are boilerplate.
+    if ((name === "TodoWrite" || name === "ExitPlanMode") && !isError) return;
+    if (diff) {
+      this.setDiffStat(stat, diff);
+      body.append(renderDiff(diff));
+      return;
+    }
+    // Edits already show their diff from the input; a success message adds nothing.
+    if (!isError && card.querySelector(":scope > .tool-body .diff-block")) return;
+
+    if (!isError && name === "Read") {
+      const fp = card.dataset.file || "";
+      const media = fp ? mediaSrc(fp) : null;
+      if (media?.kind === "image") {
+        // Claude looked at a picture — show the picture, not "[image]".
+        const img = document.createElement("img");
+        img.className = "step-img";
+        img.src = media.src;
+        img.alt = basename(fp);
+        img.loading = "lazy";
+        body.querySelector(".tool-input")?.remove(); // the picture says which file
+        body.append(img);
+        (card as HTMLDetailsElement).open = true;
+        return;
+      }
+    }
+    if (!isError && (name === "Read" || name === "Grep" || name === "Glob") && !stat.textContent) {
+      const n = lineCount(text);
+      stat.textContent = name === "Read" ? `${n} line${n === 1 ? "" : "s"}` : `${n} result${n === 1 ? "" : "s"}`;
+    }
+    if (card.classList.contains("agent") && !isError && text.trim()) {
+      // A subagent's final report is prose — render it like a reply.
+      const md = el("div", "agent-result msg assistant");
+      md.innerHTML = renderMarkdown(text);
+      body.append(md);
+      return;
+    }
+    if (!text.trim()) return;
+    // A denial's "result" just echoes the reason already shown on the row.
+    if (isError && card.querySelector(":scope > summary .step-note.denied")) return;
+    const term = body.querySelector(".term-block") as HTMLElement | null;
+    if (term && name === "Bash") {
+      const out = el("span", isError ? "term-out err" : "term-out");
+      out.textContent = "\n" + text;
+      term.append(out);
+      term.classList.add("tool-output");
+      return;
+    }
+    const out = el("pre", "tool-output");
+    out.textContent = text;
+    body.append(out);
   }
 
-  private appendPermissionCard(ev: Extract<AgentEvent, { t: "permission_request" }>) {
-    this.endToolGroup();
-    const card = el("div", "permission-card");
-    const text = el("div", "perm-text");
-    text.textContent = ev.title || ev.description || `Allow "${ev.tool}"?`;
-    const btns = el("div", "perm-btns");
-    const mk = (label: string, decision: "allow" | "deny" | "always", cls: string) => {
-      const b = document.createElement("button");
-      b.className = `ctl perm-btn ${cls}`;
-      b.textContent = label;
-      b.addEventListener("click", (e) => {
-        e.stopPropagation();
-        btns.querySelectorAll("button").forEach((x) => ((x as HTMLButtonElement).disabled = true));
-        this.wsSend({ t: "approve", requestId: ev.requestId, decision });
-      });
-      return b;
-    };
-    btns.append(mk("Deny", "deny", "deny"), mk("Allow", "allow", "allow"), mk("Always Allow", "always", "always"));
-    card.append(text, btns);
-    this.logEl.append(card);
-    this.permEls.set(ev.requestId, card);
+  // ---- Permissions -----------------------------------------------------------
+  // The prompt itself lives in the dock (chat-dock.ts), where the composer
+  // is. In the log, the step it gates is marked in place — amber "Waiting
+  // for approval", then "Denied — <your reason>" / "Always allowed" (plain
+  // Allow just lets the step run, which says it already). Only a prompt with
+  // no matching step (codex has no tool-use id) gets a standalone line.
+
+  private appendPermissionNote(ev: PermissionEvent) {
+    if (this.permEls.has(ev.requestId)) return;
+    const card = ev.toolUseId ? this.toolEls.get(ev.toolUseId) : undefined;
+    if (card) {
+      card.classList.add("awaiting");
+      this.setStepNote(card, "Waiting for approval", "pending");
+      this.permEls.set(ev.requestId, card);
+    } else {
+      const note = el("div", "perm-note pending");
+      const { verb, target } = toolLabel(ev.tool, ev.input);
+      note.dataset.what = `${verb}${target ? " " + target : ""}`;
+      note.textContent = `Waiting for approval · ${note.dataset.what}`;
+      this.logEl.append(note);
+      this.permEls.set(ev.requestId, note);
+    }
+    this.dock.add(ev);
   }
 
-  private resolvePermissionCard(requestId: string, decision: string) {
-    const card = this.permEls.get(requestId);
-    if (!card) return;
-    card.classList.add("resolved");
-    const btns = card.querySelector(".perm-btns");
-    if (btns) btns.textContent = decision === "deny" ? "Denied" : "Allowed";
+  /** A short status beside a step's label ("Waiting for approval", "Denied — …"). */
+  private setStepNote(card: HTMLElement, text: string, kind: string) {
+    const summary = card.querySelector(":scope > summary") as HTMLElement;
+    let note = summary.querySelector(".step-note") as HTMLElement | null;
+    if (!text) return note?.remove();
+    if (!note) {
+      note = el("span", "step-note");
+      summary.querySelector(".tool-stat")!.before(note);
+    }
+    note.className = `step-note ${kind}`;
+    note.textContent = text;
+    note.title = text;
+  }
+
+  private answerPermission(ev: PermissionEvent, a: DockAnswer) {
+    this.wsSend({ t: "approve", requestId: ev.requestId, decision: a.decision, ...(a.message ? { message: a.message } : {}) });
+    // Plan approval also picks the mode to carry on in, as the CLI does.
+    if (a.mode && a.decision !== "deny") this.wsSend({ t: "setMode", mode: a.mode });
+  }
+
+  private resolvePermissionNote(requestId: string, decision: string, message?: string) {
+    this.dock.resolve(requestId);
+    const target = this.permEls.get(requestId);
+    if (!target) return;
+    if (target.classList.contains("tool-card")) {
+      target.classList.remove("awaiting");
+      if (decision === "deny") this.setStepNote(target, message ? `Denied — “${message}”` : "Denied", "denied");
+      else this.setStepNote(target, decision === "always" ? "Always allowed" : "", "allowed");
+      return;
+    }
+    target.classList.remove("pending");
+    target.classList.add(decision === "deny" ? "denied" : "allowed");
+    const what = target.dataset.what || "";
+    target.textContent =
+      decision === "deny"
+        ? `Denied · ${what}${message ? ` — “${message}”` : ""}`
+        : `${decision === "always" ? "Always allowed" : "Allowed"} · ${what}`;
   }
 
   /**
@@ -1000,22 +1474,118 @@ export class AgentChat implements PaneView {
     foot.textContent = "✓ " + Object.values(answers).join(" · ");
   }
 
-  private setStatus(state: string, detail?: string) {
+  private setStatus(state: string, detail?: string, durationMs?: number, ts?: number) {
     this.setBusy(state === "working");
     if (state === "working" || state === "waiting_permission") {
       this.statusEl.hidden = false;
-      this.statusEl.textContent = state === "waiting_permission" ? "● Waiting on your approval…" : "● Working…";
-    } else {
-      this.statusEl.hidden = true;
+      this.statusEl.textContent = "";
+      // Claude Code's own spinner glyph + a word; the spark is animated in CSS.
+      const spark = el("span", "spark");
+      spark.textContent = "✻";
+      const word = el("span", "status-word");
+      word.textContent = state === "waiting_permission" ? "Waiting for your approval…" : "Working…";
+      const hint = el("span", "status-hint");
+      hint.textContent = state === "working" ? "esc to interrupt" : "";
+      this.statusEl.append(spark, word, hint);
+      this.statusEl.classList.toggle("waiting", state === "waiting_permission");
+      this.setSuggestion("");
+      return;
     }
+    this.statusEl.hidden = true;
+    this.closeThinking();
+    // The turn is over, so nothing is still in flight: settle any step whose
+    // result never arrived (interrupted turn, transcript replay that ended
+    // mid-call) instead of letting its dot pulse forever — and drop any
+    // prompt nobody can answer any more.
+    this.logEl.querySelectorAll(".tool-card.pending").forEach((c) => c.classList.remove("pending"));
+    for (const [id, t] of this.permEls)
+      if (t.classList.contains("pending") || t.classList.contains("awaiting")) this.resolvePermissionNote(id, "deny");
+    for (const card of this.streamingEls.values()) card.classList.remove("streaming");
+
     if (state === "error") this.appendBubble("error", detail || "Something went wrong.");
-    // Distinct from "error": the turn was cut off (interrupt/restart/rate
-    // limit/API hiccup), not necessarily something to fix — see
-    // claude-driver.js/codex-driver.js's terminal_reason/Turn.status handling.
     else if (state === "aborted") this.appendBubble("aborted", detail || "This turn was interrupted before finishing.");
+    this.appendTurnMeta(durationMs ?? (this.turnStart && ts ? ts - this.turnStart : undefined));
   }
 
-  /** Reflects the session's current permission mode in the title-bar selector — see the `mode` AgentEvent. */
+  /**
+   * The line under a finished turn: "Worked for 1m 12s" + Copy (the turn's
+   * whole reply as Markdown). Only after a turn that actually said something.
+   */
+  private appendTurnMeta(durationMs?: number) {
+    const texts = this.turnEls.slice();
+    this.turnStart = null;
+    this.turnEls = [];
+    if (!texts.length) return;
+    this.endToolGroup();
+    const meta = el("div", "turn-meta");
+    const copy = el("button", "turn-copy") as HTMLButtonElement;
+    setIcon(copy, "copy");
+    copy.title = "Copy reply";
+    copy.setAttribute("aria-label", "Copy reply");
+    copy.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const md = texts.map((t) => t.dataset.raw || t.innerText).join("\n\n");
+      try {
+        await navigator.clipboard.writeText(md);
+        setIcon(copy, "check");
+        setTimeout(() => setIcon(copy, "copy"), 1200);
+      } catch {}
+    });
+    meta.append(copy);
+    if (durationMs && durationMs >= 1000) {
+      const d = el("span", "turn-time");
+      d.textContent = `Worked for ${fmtDuration(durationMs)}`;
+      meta.append(d);
+    }
+    this.logEl.append(meta);
+  }
+
+  /** A suggested follow-up: a chip above the composer, and the input's placeholder (Tab takes it). */
+  private setSuggestion(text: string) {
+    this.suggestion = text;
+    this.suggestEl.textContent = "";
+    this.suggestEl.hidden = !text;
+    this.inputEl.placeholder = text ? `${text}  (Tab)` : this.isCodex ? "Message Codex…" : "Message Claude…";
+    if (!text) return;
+    const chip = el("button", "suggest-chip") as HTMLButtonElement;
+    chip.textContent = text;
+    chip.title = "Use this suggestion";
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.inputEl.value = text;
+      this.autoGrow();
+      this.syncSend();
+      this.inputEl.focus();
+    });
+    this.suggestEl.append(chip);
+  }
+
+  /** Fill the model picker: the SDK's list when we have it, else just the current model, disabled. */
+  private renderModels() {
+    const cur = this.info.model || "";
+    this.modelSel.textContent = "";
+    const opts = this.models.slice();
+    const match = opts.find((m) => m.value === cur || m.resolved === cur);
+    if (cur && !match) opts.unshift({ value: cur, label: shortModel(cur), description: "" });
+    for (const m of opts) {
+      const o = document.createElement("option");
+      o.value = m.value;
+      o.textContent = m.value === cur ? shortModel(cur) : m.label;
+      o.title = m.description;
+      this.modelSel.append(o);
+    }
+    if (match) {
+      this.modelSel.value = match.value;
+      // The selected row reads as the concrete model ("Opus 5.5"), not "Default".
+      const sel = this.modelSel.selectedOptions[0];
+      if (sel) sel.textContent = shortModel(cur);
+    } else if (cur) this.modelSel.value = cur;
+    this.modelSel.disabled = this.models.length < 2 || this.isRemote;
+    this.modelSel.hidden = !opts.length;
+    this.modelSel.title = cur ? `Model: ${cur}` : "Model";
+  }
+
+  /** Reflects the session's current permission mode in the composer's selector — see the `mode` AgentEvent. */
   private setModeUI(mode: string) {
     // A codex pane created before this control existed has "default"
     // persisted, which matches none of the codex <option> values and would
@@ -1023,14 +1593,13 @@ export class AgentChat implements PaneView {
     if (this.isCodex && !["read-only", "auto", "full-access"].includes(mode)) mode = "auto";
     this.modeSel.value = mode;
     // The one mode per provider that skips every approval prompt — worth a
-    // visual "this is the dangerous one" cue distinct from the others, which
-    // all still ask before something destructive happens (plan/read-only ask
-    // by never running anything at all).
+    // visual "this is the dangerous one" cue.
     this.modeSel.classList.toggle("bypass", mode === "bypassPermissions" || mode === "full-access");
+    this.modeSel.classList.toggle("plan", mode === "plan");
   }
 
-  private scrollToBottom() {
-    this.logEl.scrollTop = this.logEl.scrollHeight;
+  private scrollToBottom(force = false) {
+    if (force || this.stick) this.logEl.scrollTop = this.logEl.scrollHeight;
   }
 
   // ---- PaneView -----------------------------------------------------
@@ -1056,8 +1625,9 @@ export class AgentChat implements PaneView {
   }
   setBusy(on: boolean) {
     setBusyClass(this.el, on);
-    // Only offer to stop something that is actually running.
-    if (this.stopBtn) this.stopBtn.hidden = !on;
+    this.busy = on;
+    // The composer's button becomes Stop while a turn runs (see syncSend).
+    if (this.sendBtn) this.syncSend();
   }
 
   /**
@@ -1084,9 +1654,7 @@ export class AgentChat implements PaneView {
   setModel(model: string) {
     if (!model) return;
     this.info.model = model;
-    this.modelEl.textContent = shortModel(model);
-    this.modelEl.title = model;
-    this.modelEl.hidden = false;
+    if (this.modelSel) this.renderModels();
   }
   isFlagged(): boolean {
     return this.el.classList.contains("flagged");
@@ -1123,7 +1691,8 @@ export class AgentChat implements PaneView {
     this.scrollToBottom();
   }
   focusTerm() {
-    this.inputEl.focus();
+    if (this.dock.open) this.dock.focus();
+    else this.inputEl.focus();
   }
   dispose() {
     this.disposed = true;
