@@ -1,0 +1,388 @@
+/* Composer, approval dock, "/" menu, suggestions. */
+/* ---- Composer ------------------------------------------------------------
+   One rounded box, as in the Claude app: text on top, controls underneath
+   (attach · mode · … · model · send/stop). */
+.term .chat-input {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 8px 8px;
+  padding: 6px 6px 6px 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  transition: border-color 0.15s;
+}
+.term .chat-input:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+.term .chat-input textarea {
+  width: 100%;
+  min-height: 28px;
+  max-height: 160px;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  padding: 4px 4px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.term .chat-input textarea:focus {
+  outline: none;
+}
+.term .chat-input textarea::placeholder {
+  color: var(--text-dim);
+}
+.term .composer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.term .composer-row .spacer {
+  flex: 1;
+}
+.term .chat-plus {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.term .chat-plus:hover,
+.term .chat-plus.open {
+  background: var(--btn);
+  color: var(--text);
+}
+/* Mode + model: quiet text chips, the way the app shows them. */
+.term .composer-row .mode-sel,
+.term .composer-row .model-sel {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 28px;
+  max-width: 130px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.term .composer-row .mode-sel:hover,
+.term .composer-row .model-sel:not(:disabled):hover {
+  background: var(--btn);
+  color: var(--text);
+}
+.term .composer-row .model-sel:disabled {
+  cursor: default;
+  opacity: 1;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.term .composer-row .mode-sel.plan {
+  color: #2f9e8f;
+  border-color: color-mix(in srgb, #2f9e8f 50%, transparent);
+}
+.term .composer-row .mode-sel.bypass {
+  color: var(--use-crit);
+  border-color: color-mix(in srgb, var(--use-crit) 50%, transparent);
+}
+/* Send ⇄ Stop: one round button. */
+.term .chat-send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+}
+.term .chat-send:hover {
+  filter: brightness(1.08);
+}
+.term .chat-send .ico-svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 2.5;
+}
+.term .chat-send.empty {
+  opacity: 0.35;
+  cursor: default;
+}
+.term .chat-send.stop {
+  background: var(--text);
+  color: var(--term-bg);
+}
+.term .chat-send.stop .ico-svg {
+  width: 13px;
+  height: 13px;
+}
+/* While a prompt is waiting on you, it takes the composer's place. */
+.term .chat.has-dock .chat-input,
+.term .chat.has-dock .chat-suggest,
+.term .chat.has-dock .status-line {
+  display: none;
+}
+
+/* ---- Approval dock (chat-dock.ts) ---------------------------------------- */
+.term .chat-dock {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: 70%;
+  overflow-y: auto;
+  margin: 4px 8px 8px;
+  padding: 10px 12px 12px;
+  background: var(--panel);
+  border: 1px solid var(--waiting);
+  border-radius: 16px;
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  outline: none;
+}
+.term .chat-dock.plan {
+  max-height: 85%;
+}
+.term .chat-dock.sending {
+  opacity: 0.6;
+}
+.term .dock-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.term .dock-verb {
+  flex: none;
+  font-weight: 700;
+}
+.term .dock-target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.term .dock-count {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.term .dock-question {
+  color: var(--text);
+}
+.term .dock-preview {
+  min-height: 0;
+  max-height: 240px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.term .chat-dock.plan .dock-preview {
+  max-height: none;
+}
+.term .dock-preview > * {
+  margin: 0;
+}
+.term .dock-preview pre {
+  margin: 0;
+  max-height: none;
+}
+.term .dock-preview .tool-input,
+.term .dock-preview .term-block {
+  padding: 8px 10px;
+  background: var(--term-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11.5px;
+}
+.term .dock-preview .tool-input::before {
+  content: none;
+}
+.term .dock-preview .tool-diff {
+  max-height: none;
+  overflow-x: auto;
+  white-space: pre;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11.5px;
+  margin: 0;
+  padding: 4px 0;
+  background: var(--term-bg);
+}
+.term .dock-note {
+  font-size: 11.5px;
+  color: var(--waiting);
+}
+.term .dock-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.term .dock-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px; /* real touch target */
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.term .dock-opt:hover,
+.term .dock-opt.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+.term .dock-opt:first-child {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+.term .dock-key {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font: 600 11px ui-monospace, Menlo, Monaco, monospace;
+  color: var(--text-dim);
+}
+.term .dock-feedback {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.term .dock-feedback textarea {
+  flex: 1;
+  min-height: 40px;
+  resize: vertical;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
+}
+.term .dock-feedback textarea:focus {
+  outline: none;
+}
+.term .dock-send {
+  flex: none;
+  height: 40px;
+  padding: 0 14px;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ---- "/" command menu (chat-commands.ts) ---------------------------------- */
+.term .cmd-menu {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 40%;
+  overflow-y: auto;
+  margin: 0 8px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.18);
+}
+.term .cmd-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  min-width: 0;
+}
+.term .cmd-row.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.term .cmd-name {
+  flex: none;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.term .cmd-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 35%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.term .cmd-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+/* ---- Suggested follow-up ------------------------------------------------- */
+.term .chat-suggest {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 0 10px;
+  overflow-x: auto;
+}
+.term .suggest-chip {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 5px 12px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.term .suggest-chip:hover {
+  border-color: var(--accent);
+}

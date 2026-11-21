@@ -1,0 +1,161 @@
+/* Usage rings. */
+/* ---- Usage rings --------------------------------------------------------
+   A single ratio against a limit, so: a meter, not a pie. The percentage is
+   always drawn as text in normal ink — colour is the glanceable secondary cue,
+   never the only one (the amber step is intentionally low-contrast on light). */
+.term .use-rings {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Each window is its own bordered pill — same 28px box, 6px radius and
+   --line border as the model badge, so the row reads as one set of chips
+   rather than two floating graphics. The label sits BESIDE the ring, which
+   is also what keeps identity off colour alone with two windows showing. */
+.term .ring {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.term .ring-face {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.term .ring-face svg {
+  display: block;
+}
+.term .ring-num {
+  position: absolute;
+  font-size: 8px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--text);
+}
+.term .ring-tag {
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1;
+  color: var(--text-dim);
+}
+/* --btn on --panel is nearly invisible, which made a low-usage ring look
+   broken rather than empty. --line is the app's "there is a thing here" tone. */
+.term .ring-track {
+  stroke: var(--line);
+}
+.term .ring.ok .ring-fill {
+  stroke: var(--use-ok);
+}
+.term .ring.warn .ring-fill {
+  stroke: var(--use-warn);
+}
+.term .ring.crit .ring-fill {
+  stroke: var(--use-crit);
+}
+@media (max-width: 640px) {
+  .term .chat-input textarea {
+    font-size: 16px; /* keeps iOS Safari from zooming the page in on focus */
+  }
+  /* A phone pane is barely taller than the desktop cap, so 320px of output
+     would fill the whole box and hide the conversation around it. */
+  .term .tool-output,
+  .term .tool-diff {
+    max-height: 200px;
+  }
+}
+
+/* Mobile-only soft-key row (Esc/Ctrl/Tab/arrows) — a phone's on-screen keyboard
+   has none of these. Hidden by default; shown only under the mobile media
+   query, and only while zoomed (see there) — a physical keyboard already has
+   real versions of all of these, so desktop never needs this row at all. */
+.term .softkeys {
+  display: none;
+  flex: 0 0 auto;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+.term .softkeys button {
+  flex: 1;
+  min-height: 40px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.term .softkeys button:hover {
+  border-color: var(--accent);
+}
+.term .softkeys button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.badge {
+  background: var(--waiting);
+  color: #000;
+  border-radius: 10px;
+  padding: 0 7px;
+  font-weight: 700;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* Waiting state: glow + pulse until you open it. */
+.term.waiting {
+  border-color: var(--waiting);
+  color: var(--waiting);
+  box-shadow: 0 0 0 2px var(--waiting), 0 0 18px 2px var(--waiting);
+  animation: pulse 1.3s ease-in-out infinite;
+}
+.term.waiting.done {
+  border-color: var(--done);
+  color: var(--done);
+  box-shadow: 0 0 0 2px var(--done), 0 0 18px 2px var(--done);
+}
+.term.waiting.done .badge {
+  background: var(--done);
+}
+/* Cut off mid-turn (interrupt/restart/rate limit/API error) — deliberately
+   distinct from .done: the pane needs a look, but "here's an incomplete
+   answer" is a different situation than "here's your answer." */
+.term.waiting.aborted {
+  border-color: var(--aborted);
+  color: var(--aborted);
+  box-shadow: 0 0 0 2px var(--aborted), 0 0 18px 2px var(--aborted);
+}
+.term.waiting.aborted .badge {
+  background: var(--aborted);
+  color: #fff;
+}
+/* Follow-up flag: a steady, non-animated purple marker. Distinct from the
+   pulsing attention glow, and left intact when a box is also waiting. */
+.term.flagged {
+  border-color: var(--flag);
+  box-shadow: 0 0 0 1px var(--flag);
+}
+/* When a box is both flagged and waiting, the animated attention glow wins the
+   ring; the flag stays identifiable via the active title-bar button. */
+.term.flagged.waiting {
+  border-color: var(--waiting);
+  box-shadow: 0 0 0 2px var(--waiting), 0 0 18px 2px var(--waiting);
+}
+.term.flagged.waiting.done {
+  border-color: var(--done);
+  box-shadow: 0 0 0 2px var(--done), 0 0 18px 2px var(--done);
+}
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 0 2px currentColor, 0 0 28px 7px currentColor;
+  }
+}

@@ -1,4 +1,9 @@
 import { openNewSession } from "./new-session";
+import { checkVersion } from "./version-check";
+import { initPhoneNav, setPaneOpen, switchTo, closePaneSheet, updateSwitchers, addSwitcherButton, addTitleSubline } from "./phone-nav";
+// ONE usage ramp + reset formatter, shared with the chat panes' rings — if they
+// ever disagree, the same account reads green on a ring and amber here.
+import { usageLevel, resetAt } from "./chat-usage";
 import { Term, PaneInfo, PaneView, TermHost, UsageRow, UsageWindow, displayName, profileOf } from "./terminal";
 import { AgentChat } from "./agent-chat";
 import { play } from "./sound";
@@ -781,233 +786,24 @@ function onVisualViewportChange() {
 window.visualViewport?.addEventListener("resize", onVisualViewportChange);
 window.visualViewport?.addEventListener("scroll", onVisualViewportChange);
 
-// ---- Phone: move between panes without going back -----------------------
-// On a phone an open pane fills the screen, and getting to the next one used
-// to mean ‹ back to the list, find it, tap. Two ways round that, both only
-// while a pane is open on a phone:
-//   · swipe left/right on the pane → next/previous pane;
-//   · the "3/12 ⌄" button in its title → a sheet of every session, the ones
-//     that need you first, one tap to switch.
-// Swipe order is the GRID order, deliberately not the list's attention order:
-// opening a pane clears its attention, which would re-sort the list under
-// your thumb mid-swipe.
-
-/** body.pane-open hides #bar on phones (CSS); keep --bar-h and friends in step. */
-function setPaneOpen(on: boolean) {
-  document.body.classList.toggle("pane-open", on);
-  syncBarHeightVar();
-}
-
-/** Panes you can swipe between: everything on the grid (not minimized), in grid order. */
-function swipeOrder(): PaneView[] {
-  return [...grid.children]
-    .map((c) => panes.get((c as HTMLElement).dataset.id || ""))
-    .filter((t): t is PaneView => !!t && !minimized.has(t.id));
-}
-
-/** Swap the open pane for another, with a short slide in the swipe's direction. */
-function switchTo(t: PaneView, dir: 1 | -1 | 0): void {
-  const old = zoomed;
-  if (!old) return zoom(t);
-  if (old === t) return;
-  closePaneSheet();
-  if (minimized.has(t.id)) restore(t.id);
-  old.el.style.transition = "none";
-  old.el.classList.remove("zoomed", "slide-l", "slide-r");
-  old.el.removeAttribute("style");
-  old.refit();
-  zoomed = t;
-  clearAttention(t.id);
-  const el = t.el;
-  el.style.transition = "none";
-  el.classList.add("zoomed");
-  setRect(el, centerRect());
-  el.classList.remove("slide-l", "slide-r");
-  if (dir) {
-    void el.offsetWidth; // restart the animation
-    el.classList.add(dir > 0 ? "slide-l" : "slide-r");
-  }
-  t.refit();
-  updateSwitchers();
-}
-
-function stepPane(dir: 1 | -1) {
-  if (!zoomed) return;
-  const list = swipeOrder();
-  const i = list.indexOf(zoomed);
-  const next = list[i + dir];
-  if (next) switchTo(next, dir);
-  else zoomed.el.animate([{ transform: "translateX(0)" }, { transform: `translateX(${-dir * 18}px)` }, { transform: "translateX(0)" }], { duration: 220 });
-}
-
-/** True if the touch began inside something that scrolls sideways (code, tables, chips). */
-function inHorizontalScroller(node: Element | null, stop: Element): boolean {
-  for (let n = node; n && n !== stop; n = n.parentElement) {
-    if (n.scrollWidth > n.clientWidth + 2) {
-      const ox = getComputedStyle(n).overflowX;
-      if (ox === "auto" || ox === "scroll") return true;
-    }
-  }
-  return false;
-}
-
-let swipe: { x: number; y: number; t: number } | null = null;
-document.addEventListener(
-  "touchstart",
-  (e) => {
-    swipe = null;
-    if (!zoomed || !mobileQuery.matches || e.touches.length !== 1) return;
-    const target = e.target as Element;
-    if (!zoomed.el.contains(target)) return;
-    if (target.closest("textarea, input, select, .chat-dock, .cmd-menu, .plus-menu, .spop, .lightbox")) return;
-    // A terminal box's body is xterm/tmux's own touch surface; there the
-    // swipe only works on the title strip above it.
-    if (target.closest(".xt") || inHorizontalScroller(target, zoomed.el)) return;
-    swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
-  },
-  { passive: true }
-);
-document.addEventListener(
-  "touchend",
-  (e) => {
-    const s = swipe;
-    swipe = null;
-    if (!s || !zoomed || !e.changedTouches.length) return;
-    const dx = e.changedTouches[0].clientX - s.x;
-    const dy = e.changedTouches[0].clientY - s.y;
-    if (Date.now() - s.t > 700 || Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
-    if (window.getSelection()?.toString()) return; // they were selecting text
-    stepPane(dx < 0 ? 1 : -1);
-  },
-  { passive: true }
-);
-
-/**
- * Two-line title for the phone header: the name, and under it where the
- * session lives — prefixed by its state ("Working · ", "Needs you · ") purely
- * in CSS off the box's own .busy/.waiting classes, so nothing has to keep it
- * in sync. Desktop hides the second line.
- */
-function addTitleSubline(t: PaneView) {
-  const path = t.titleBar.querySelector(".path");
-  if (!path || path.parentElement?.classList.contains("title-text")) return;
-  const wrap = document.createElement("span");
-  wrap.className = "title-text";
-  path.before(wrap);
-  const sub = document.createElement("span");
-  sub.className = "pane-sub";
-  const parts = (t.info.cwd || "").split("/").filter(Boolean);
-  sub.textContent = parts.length > 2 ? parts.slice(-2).join("/") : t.info.cwd || "";
-  sub.title = t.info.cwd || "";
-  wrap.append(path, sub);
-}
-
-/** The "3/12 ⌄" control, added to every box's title bar; CSS shows it only on an open pane on a phone. */
-function addSwitcherButton(t: PaneView) {
-  const b = document.createElement("button");
-  b.className = "ctl pane-switch";
-  b.title = "Switch session";
-  b.setAttribute("aria-label", "Switch session");
-  b.addEventListener("click", (e) => {
-    e.stopPropagation();
-    openPaneSheet();
-  });
-  b.addEventListener("pointerdown", (e) => e.stopPropagation());
-  const anchor = t.titleBar.querySelector(".spacer");
-  if (anchor) anchor.before(b);
-  else t.titleBar.append(b);
-}
-
-function updateSwitchers() {
-  if (!zoomed) return;
-  const list = swipeOrder();
-  const i = list.indexOf(zoomed);
-  const b = zoomed.titleBar.querySelector(".pane-switch") as HTMLElement | null;
-  if (!b) return;
-  const open = zoomed;
-  const waiting = queue.filter((id) => id !== open.id).length;
-  b.textContent = "";
-  const n = document.createElement("span");
-  n.textContent = i >= 0 ? `${i + 1}/${list.length}` : `${list.length}`;
-  b.append(n);
-  if (waiting) {
-    const w = document.createElement("span");
-    w.className = "pane-switch-waiting";
-    w.textContent = String(waiting);
-    w.title = `${waiting} other session${waiting === 1 ? "" : "s"} waiting for a look`;
-    b.append(w);
-  }
-  b.insertAdjacentHTML("beforeend", `<svg class="ico-svg" viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>`);
-}
-
-let paneSheet: HTMLElement | null = null;
-function closePaneSheet() {
-  if (paneSheet) paneSheet.hidden = true;
-}
-/** The session switcher: every pane, needs-you first, then working, then the rest (grid order within each). */
-function openPaneSheet() {
-  if (!paneSheet) {
-    paneSheet = document.createElement("div");
-    paneSheet.id = "paneSheet";
-    paneSheet.addEventListener("click", (e) => {
-      if (e.target === paneSheet) closePaneSheet();
-    });
-    document.body.append(paneSheet);
-  }
-  const sheet = paneSheet;
-  sheet.textContent = "";
-  const panel = document.createElement("div");
-  panel.className = "sheet-panel";
-  const head = document.createElement("div");
-  head.className = "sheet-head";
-  const title = document.createElement("span");
-  title.textContent = "Sessions";
-  const all = document.createElement("button");
-  all.className = "sheet-all";
-  all.textContent = "All boxes";
-  all.addEventListener("click", () => unzoom());
-  head.append(title, all);
-  panel.append(head);
-
-  const rank = (t: PaneView) =>
-    t.isWaiting() ? { question: 0, aborted: 1, done: 2 }[t.waitingKind()] : t.el.classList.contains("busy") ? 3 : 4;
-  const list = swipeOrder()
-    .map((t, i) => ({ t, i }))
-    .sort((a, b) => rank(a.t) - rank(b.t) || a.i - b.i)
-    .map((x) => x.t);
-  const rows = document.createElement("div");
-  rows.className = "sheet-rows";
-  for (const t of list) {
-    const row = document.createElement("button");
-    const state = t.isWaiting() ? t.waitingKind() : t.el.classList.contains("busy") ? "busy" : "idle";
-    row.className = `sheet-row ${state}` + (t === zoomed ? " current" : "");
-    const dot = document.createElement("span");
-    dot.className = "sheet-dot";
-    const text = document.createElement("span");
-    text.className = "sheet-text";
-    const name = document.createElement("span");
-    name.className = "sheet-name";
-    name.textContent = displayName(t.info);
-    const sub = document.createElement("span");
-    sub.className = "sheet-sub";
-    sub.textContent =
-      state === "question" ? "Needs you" : state === "aborted" ? "Cut off" : state === "done" ? "Done" : state === "busy" ? "Working…" : (t.info.lastInput || "").replace(/\s+/g, " ").trim() || t.info.cwd;
-    text.append(name, sub);
-    const kind = document.createElement("span");
-    kind.className = "sheet-kind";
-    kind.textContent = t.info.kind === "agent" ? "chat" : "terminal";
-    row.append(dot, text, kind);
-    row.addEventListener("click", () => {
-      closePaneSheet();
-      if (zoomed) switchTo(t, 0);
-      else zoom(t);
-    });
-    rows.append(row);
-  }
-  panel.append(rows);
-  sheet.append(panel);
-  sheet.hidden = false;
-}
+// ---- Phone: move between panes (phone-nav.ts) -------------------------------
+// The state stays here; phone-nav.ts reads it through these accessors.
+initPhoneNav({
+  grid,
+  panes,
+  minimized,
+  queue,
+  mobileQuery,
+  zoomed: () => zoomed,
+  setZoomed: (t) => (zoomed = t),
+  zoom,
+  unzoom,
+  restore,
+  clearAttention,
+  setRect,
+  centerRect,
+  syncBarHeightVar,
+});
 
 // ---- Drag to reorder --------------------------------------------------
 let dropTarget: HTMLElement | null = null;
@@ -1797,53 +1593,6 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-// ---- Version / update check -------------------------------------------------
-// "I pulled and restarted, but nothing changed" used to be invisible. The server
-// now rebuilds a stale bundle and fixes dependencies at startup
-// (server/self-check.js); this side catches the last gap — a tab or home-screen
-// app still running the bundle it loaded before the update — and shows what the
-// machine is running in Settings.
-type VersionInfo = {
-  server: { commit: string | null; branch: string | null; dirty: boolean; startedAt: number };
-  bundle: { commit: string | null; builtAt: number } | null;
-  deps: { name: string; want: string; have: string | null }[];
-};
-async function checkVersion() {
-  let v: VersionInfo;
-  try {
-    const res = await fetch("/api/version", { cache: "no-store" });
-    if (!res.ok) return; // an older server without the route
-    v = await res.json();
-  } catch {
-    return;
-  }
-  const el = document.getElementById("updateNote") as HTMLButtonElement;
-  const mine = typeof __BUILD_INFO__ !== "undefined" ? __BUILD_INFO__ : null;
-  const stale = !!(v.bundle && mine && v.bundle.builtAt !== mine.builtAt);
-  if (v.deps?.length) {
-    el.textContent = "This machine needs npm install";
-    el.title = v.deps.map((d) => `${d.name}: ${d.have || "missing"} → ${d.want}`).join("\n");
-    el.onclick = () => openSettingsPanel();
-    el.hidden = false;
-  } else if (stale) {
-    el.textContent = "FleetView was updated — tap to reload";
-    el.title = `Running ${mine?.commit || "?"}, server has ${v.bundle?.commit || "?"}`;
-    el.onclick = () => location.reload();
-    el.hidden = false;
-  } else el.hidden = true;
-
-  const ver = document.getElementById("mcVersion");
-  if (ver) {
-    const s = v.server;
-    const when = (t?: number) => (t ? new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "?");
-    ver.textContent = `${s.commit || "unknown"}${s.branch && s.branch !== "HEAD" ? " · " + s.branch : ""}${s.dirty ? " · modified" : ""}`;
-    ver.title =
-      `Server running ${s.commit} since ${when(s.startedAt)}\n` +
-      `App built from ${v.bundle?.commit || "?"} at ${when(v.bundle?.builtAt)}\n` +
-      `This tab: ${mine?.commit || "?"} (built ${when(mine?.builtAt)})`;
-  }
-}
-
 function connectControl() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/control?session=${encodeURIComponent(SESSION)}`);
@@ -1852,7 +1601,7 @@ function connectControl() {
     const m = JSON.parse(e.data);
     switch (m.t) {
       case "panes": {
-        void checkVersion(); // every (re)connect — a server restart is when updates land
+        void checkVersion(openSettingsPanel); // every (re)connect — a server restart is when updates land
         // Authoritative snapshot of this window's live terminals (sent on every
         // connect). Add new ones and drop any box the server no longer has —
         // e.g. a terminal closed while we were asleep.
@@ -2312,23 +2061,9 @@ const usageListEl = document.getElementById("usageList")!;
 const usageRefreshEl = document.getElementById("usageRefresh") as HTMLButtonElement;
 let usageRows: UsageRow[] = [];
 
-/** Colour by headroom, so a row that's about to bite reads as urgent. */
-// ONE ramp, shared with the usage rings in each chat pane's tools row
-// (usageLevel in agent-chat.ts). If these two ever disagree the same account
-// reads green on a ring and amber in this panel.
-function usageLevel(pct: number): string {
-  if (pct >= 90) return "crit";
-  if (pct >= 75) return "warn";
-  return "ok";
-}
-
 /** "6:59 PM" today, "Thu 6:59 PM" beyond it — a bare time would be a lie. */
 function resetLabel(at: number | null): string {
-  if (!at) return "";
-  const d = new Date(at);
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const sameDay = d.toDateString() === new Date().toDateString();
-  return sameDay ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  return at ? resetAt(at) : "";
 }
 
 function renderUsage() {

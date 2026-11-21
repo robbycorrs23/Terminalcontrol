@@ -1,0 +1,1129 @@
+/* Chat pane typography, inline images, phone navigation and headers, history, queue, highlighting, status pieces, pickers. */
+/* ---- Chat pane: app-like typography & layout ----------------------------
+   The chat view reads as a conversation, not a terminal: prose in the system
+   UI font (code, paths, commands stay monospace via their own rules). */
+.term.agent .chat {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", sans-serif;
+}
+.term.agent .chat .msg {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.term.agent .chat .msg.user {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.term.agent .chat .msg code,
+.term.agent .chat .msg pre,
+.term.agent .chat .msg kbd {
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+}
+.term.agent .chat .tool-card,
+.term.agent .chat .perm-note,
+.term.agent .chat .turn-meta {
+  font-size: 13px;
+}
+.term .log-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term .log-wrap > .chat-log {
+  flex: 1;
+}
+.term .jump-pill {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  z-index: 2;
+}
+.term .jump-pill:hover {
+  border-color: var(--accent);
+}
+.term .jump-pill[hidden] {
+  display: none;
+}
+/* The composer's "+" menu: opens upward, left-aligned over the composer. */
+.term .plus-menu {
+  position: absolute;
+  left: 10px;
+  bottom: 74px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+}
+.term .plus-menu[hidden] {
+  display: none;
+}
+.term .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  background: none;
+  color: var(--text);
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.term .menu-item:hover {
+  background: var(--btn);
+}
+.term .menu-item:disabled {
+  opacity: 0.5;
+}
+.term .menu-item .ico-svg {
+  color: var(--text-dim);
+}
+.term .menu-item[hidden] {
+  display: none;
+}
+/* Usage rings sit in the composer row, quieter than the old tools row. */
+.term .composer-row .use-rings {
+  gap: 4px;
+}
+.term .composer-row .use-rings[hidden] {
+  display: none;
+}
+/* Approval state shown on the step itself. */
+.term .step-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+}
+.term .step-note.pending {
+  color: var(--waiting);
+}
+.term .step-note.denied {
+  color: #f85149;
+}
+.term .step-note.allowed {
+  color: var(--text-dim);
+}
+@media (max-width: 640px) {
+  .term .composer-row .ring-tag {
+    display: none; /* rings alone at phone width; the % stays */
+  }
+}
+
+/* ---- Inline images -------------------------------------------------------
+   Attachments wait in the composer as thumbnails; your message shows them as
+   images (not temp paths); a screenshot Claude reads shows in its step. Any
+   of them opens full-screen in the lightbox (lightbox.ts). */
+.term .attach-row {
+  display: flex;
+  gap: 6px;
+  padding: 2px 0 4px;
+  overflow-x: auto;
+}
+.term .attach-row[hidden] {
+  display: none;
+}
+.term .attach-chip {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 56px;
+  min-width: 56px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.term .attach-chip.uploading {
+  opacity: 0.6;
+}
+.term .attach-thumb img {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  cursor: zoom-in;
+}
+.term .attach-name {
+  max-width: 140px;
+  padding: 0 26px 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.term .attach-x {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  border: 0;
+  border-radius: 50%;
+  font-size: 10px;
+  cursor: pointer;
+}
+.term .msg.user.has-images {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.term .msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.term .msg-img {
+  display: block;
+  max-width: min(260px, 100%);
+  max-height: 260px;
+  border-radius: 10px;
+  object-fit: cover;
+  cursor: zoom-in;
+  background: var(--panel);
+}
+.term .msg-images .msg-img:only-child {
+  max-width: min(320px, 100%);
+  max-height: 360px;
+}
+.term .msg-img.missing {
+  min-width: 120px;
+  min-height: 60px;
+  border: 1px dashed var(--line);
+}
+.term .step-img {
+  display: block;
+  max-width: min(320px, 100%);
+  max-height: 260px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: zoom-in;
+}
+.term .md-img {
+  cursor: zoom-in;
+}
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  background: rgba(0, 0, 0, 0.92);
+  cursor: zoom-out;
+}
+.lightbox[hidden] {
+  display: none;
+}
+.lightbox img {
+  max-width: 100%;
+  max-height: calc(100% - 40px);
+  object-fit: contain;
+  border-radius: 6px;
+}
+.lightbox-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.lightbox-actions [hidden] {
+  display: none;
+}
+.lightbox-copy {
+  padding: 8px 16px;
+  background: #ffffff;
+  color: #000;
+  border: 0;
+  border-radius: 999px;
+  font: 600 13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  cursor: pointer;
+}
+.term .chat-flash {
+  align-self: center;
+  margin: 0 8px 4px;
+  padding: 6px 12px;
+  background: var(--btn);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text);
+}
+.lightbox-open {
+  color: #c9d1d9;
+  font: 13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  text-decoration: underline;
+}
+
+/* ---- Phone: pane switcher + swipe (main.ts "Phone: move between panes") ---- */
+.term .pane-switch {
+  display: none;
+}
+@media (max-width: 640px) {
+  .term.zoomed .title .pane-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: auto;
+    height: 28px;
+    padding: 0 8px;
+    margin-left: 6px;
+    flex: none;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    border-radius: 14px;
+    font: 600 12px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  .term.zoomed .title .pane-switch .ico-svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+.pane-switch-waiting {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--waiting);
+  color: #000;
+  font-size: 11px;
+}
+.term.zoomed.slide-l {
+  animation: pane-in-l 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.term.zoomed.slide-r {
+  animation: pane-in-r 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes pane-in-l {
+  from {
+    transform: translateX(40%);
+    opacity: 0.3;
+  }
+}
+@keyframes pane-in-r {
+  from {
+    transform: translateX(-40%);
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term.zoomed.slide-l,
+  .term.zoomed.slide-r {
+    animation: none;
+  }
+}
+#paneSheet {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(0, 0, 0, 0.5);
+}
+#paneSheet[hidden] {
+  display: none;
+}
+#paneSheet .sheet-panel {
+  width: 100%;
+  max-height: 75%;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 8px max(10px, env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  border-radius: 16px 16px 0 0;
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  animation: sheet-up 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(40%);
+  }
+}
+#paneSheet .sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 10px;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+}
+#paneSheet .sheet-all {
+  padding: 6px 12px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+#paneSheet .sheet-rows {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+#paneSheet .sheet-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 10px;
+  background: none;
+  color: var(--text);
+  border: 0;
+  border-radius: 12px;
+  font: inherit;
+  text-align: left;
+}
+#paneSheet .sheet-row.current {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+#paneSheet .sheet-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0.5;
+}
+#paneSheet .sheet-row.question .sheet-dot {
+  background: var(--waiting);
+  opacity: 1;
+}
+#paneSheet .sheet-row.done .sheet-dot {
+  background: var(--done);
+  opacity: 1;
+}
+#paneSheet .sheet-row.aborted .sheet-dot {
+  background: var(--aborted);
+  opacity: 1;
+}
+#paneSheet .sheet-row.busy .sheet-dot {
+  background: var(--busy);
+  opacity: 1;
+}
+#paneSheet .sheet-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+#paneSheet .sheet-name {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#paneSheet .sheet-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#paneSheet .sheet-row.question .sheet-sub {
+  color: var(--waiting);
+}
+#paneSheet .sheet-kind {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ---- Phone home: an inbox, not a stack of terminal title bars -----------
+   Each unopened pane is one row — name, what you last asked, its state — in
+   the UI font, like the Claude app's session list. The attention glow and
+   badges still carry needs-you / done; the coloured title strip, the full
+   path line and the monospace are what made it read as a terminal dump.
+   `body` prefix: out-ranks the work/tint title colours declared earlier. */
+@media (max-width: 640px) {
+  #grid {
+    gap: 6px;
+  }
+  body .term:not(.zoomed) {
+    background: var(--panel);
+    border-color: transparent;
+    border-radius: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+  body .term:not(.zoomed) .title {
+    background: transparent;
+    padding: 8px 4px 2px 12px;
+    color: var(--text);
+  }
+  body .term:not(.zoomed) .title .path {
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  body .term:not(.zoomed) .title .dot {
+    font-size: 10px;
+  }
+  body .term:not(.zoomed) .title .ctl.flag:not(.active),
+  body .term:not(.zoomed) .title .ctl.close {
+    opacity: 0.45;
+  }
+  body .term:not(.zoomed) .cwdline {
+    display: none;
+  }
+  body .term:not(.zoomed) .pinned {
+    background: transparent;
+    border-top: 0;
+    padding: 0 12px 10px 30px;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  body .term:not(.zoomed) .pinned::before {
+    content: none;
+  }
+  /* No last prompt yet: give the row the same bottom breathing room. */
+  body .term:not(.zoomed) .title:last-child,
+  body .term:not(.zoomed) .pinned[hidden] {
+    margin-bottom: 0;
+  }
+  body .term:not(.zoomed):not(:has(.pinned:not([hidden]))) .title {
+    padding-bottom: 8px;
+  }
+}
+
+/* ---- Phone: an open pane gets the whole screen ---------------------------
+   main.ts sets body.pane-open while a pane is open; on phones the app bar
+   steps aside (its chips' job is done by the title's "3/12 ⌄ 2" switcher).
+   The bar used to own the notch/Dynamic Island inset, so the pane's title
+   takes it over — its colour runs up under the status bar like a native app. */
+@media (max-width: 640px) {
+  body.pane-open #bar {
+    display: none;
+  }
+  body.pane-open .term.zoomed > .title {
+    padding-top: calc(2px + env(safe-area-inset-top));
+  }
+}
+
+/* ---- "Load earlier messages" marker at the top of the log ---- */
+.term .history-top {
+  align-self: center;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.term .history-top:hover {
+  background: var(--btn);
+  color: var(--text);
+}
+.term .history-top.loading {
+  cursor: default;
+  background: none;
+}
+.term .history-top[hidden] {
+  display: none;
+}
+
+/* ---- Messages queued while a turn runs ---- */
+.term .chat-queue {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 8px 4px;
+  max-height: 30%;
+  overflow-y: auto;
+}
+.term .chat-queue[hidden],
+.term .chat.has-dock .chat-queue {
+  display: none;
+}
+.term .queued {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
+  background: var(--panel);
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+}
+.term .queued-label {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.term .queued-text {
+  flex: 1;
+  min-width: 0;
+  max-height: 60px;
+  overflow: hidden;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+}
+.term .queued-text .msg-img {
+  max-height: 40px;
+  max-width: 60px;
+}
+.term .queued-now,
+.term .queued-x {
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.term .queued-x {
+  width: 28px;
+  padding: 0;
+}
+
+/* ---- Syntax highlighting (highlight.ts) — GitHub-like, per theme ---- */
+.term .tk-kw { color: #ff7b72; }
+.term .tk-str { color: #a5d6ff; }
+.term .tk-com { color: #8b949e; font-style: italic; }
+.term .tk-num { color: #79c0ff; }
+.term .tk-fn { color: #d2a8ff; }
+.term .tk-key,
+.term .tk-tag { color: #7ee787; }
+.term .tk-var { color: #ffa657; }
+.term .tk-meta { color: #d2a8ff; }
+.term .tk-add { color: #3fb950; }
+.term .tk-del { color: #f85149; }
+body.light .term .tk-kw { color: #cf222e; }
+body.light .term .tk-str { color: #0a3069; }
+body.light .term .tk-com { color: #6e7781; }
+body.light .term .tk-num { color: #0550ae; }
+body.light .term .tk-fn,
+body.light .term .tk-meta { color: #8250df; }
+body.light .term .tk-key,
+body.light .term .tk-tag { color: #116329; }
+body.light .term .tk-var { color: #953800; }
+body.light .term .tk-add { color: #1a7f37; }
+body.light .term .tk-del { color: #cf222e; }
+
+/* ---- "Reconnecting…" over the log while the socket is down ---- */
+.term .conn-banner {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: 5px 14px;
+  background: var(--waiting);
+  color: #000;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+.term .conn-banner[hidden] {
+  display: none;
+}
+
+/* ---- API retry in the status line ---- */
+.term .status-line.retry {
+  color: var(--waiting);
+}
+.term .status-line.retry .spark {
+  color: var(--waiting);
+}
+
+/* ---- Compaction marker ---- */
+.term .compact-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.term .compact-divider::before,
+.term .compact-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* ---- Context-window meter (composer row) ---- */
+.term .ctx-meter {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.term .ctx-meter[hidden] {
+  display: none;
+}
+.term .ctx-bar {
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+.term .ctx-fill {
+  display: block;
+  height: 100%;
+  background: var(--use-ok);
+}
+.term .ctx-meter.warn .ctx-fill { background: var(--use-warn); }
+.term .ctx-meter.crit .ctx-fill { background: var(--use-crit); }
+.term .ctx-meter.crit .ctx-num { color: var(--text); font-weight: 600; }
+
+/* ---- Background tasks tray ---- */
+.term .task-tray {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 8px 4px;
+  max-height: 30%;
+  overflow-y: auto;
+}
+.term .task-tray[hidden] {
+  display: none;
+}
+.term .task-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.term .task-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: tool-pulse 1.1s ease-in-out infinite;
+}
+.term .task-row:not(.running):not(.pending) .task-dot {
+  animation: none;
+  background: var(--text-dim);
+}
+.term .task-row.completed .task-dot { background: #3fb950; }
+.term .task-row.failed .task-dot { background: #f85149; }
+.term .task-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term .task-name {
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.term .task-sub {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.term .task-stop {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: var(--btn);
+  color: var(--use-crit);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.term .task-stop .ico-svg {
+  width: 12px;
+  height: 12px;
+}
+.term .task-stop:disabled {
+  opacity: 0.4;
+}
+@media (prefers-reduced-motion: reduce) {
+  .term .task-dot {
+    animation: none;
+  }
+}
+
+/* ---- Mode / model pickers: a styled label with the real <select> invisibly
+   on top at 16px. iOS zooms the page when a control under 16px gets focus;
+   tapping the old 11.5px select zoomed the whole app and left it there. ---- */
+.term .sel-chip {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  max-width: 130px;
+  padding: 0 20px 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.term .sel-chip[hidden] {
+  display: none;
+}
+.term .sel-chip::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin-top: -4px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  opacity: 0.7;
+}
+.term .sel-chip:hover:not(.disabled) {
+  background: var(--btn);
+  color: var(--text);
+}
+.term .sel-chip.disabled {
+  padding-right: 8px;
+  cursor: default;
+}
+.term .sel-chip.disabled::after {
+  display: none;
+}
+.term .sel-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.term .composer-row .sel-chip select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  font-size: 16px; /* the whole point: no iOS focus-zoom */
+  border: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.term .sel-chip.disabled select {
+  cursor: default;
+}
+.term .sel-chip.plan {
+  color: #2f9e8f;
+  border-color: color-mix(in srgb, #2f9e8f 50%, transparent);
+}
+.term .sel-chip.bypass {
+  color: var(--use-crit);
+  border-color: color-mix(in srgb, var(--use-crit) 50%, transparent);
+}
+.term .ctx-meter {
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.term .ctx-meter:hover {
+  background: var(--btn);
+}
+
+/* ---- + menu header: context and plan usage, in words ---- */
+.term .menu-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.term .menu-info[hidden] {
+  display: none;
+}
+.term .info-line {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 12px;
+  font-size: 13px;
+}
+.term .info-label {
+  color: var(--text);
+}
+.term .info-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.term .info-sub {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+@media (max-width: 640px) {
+  /* No room for the rings beside a composer at phone width — the + menu
+     shows the same numbers, labelled. */
+  .term .composer-row .use-rings {
+    display: none;
+  }
+  /* Same iOS focus-zoom rule for every other field in a pane. */
+  .term input,
+  .term textarea,
+  .term select {
+    font-size: 16px;
+  }
+  .term .composer-row .sel-chip {
+    max-width: 110px;
+  }
+}
+
+/* ---- Title text: name (+ a phone-only second line) ---- */
+.term .title .title-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.term .pane-sub {
+  display: none;
+}
+/* Bar icons are SVG now (no emoji in chrome — see icons.ts). */
+#bar button .ico-svg {
+  width: 15px;
+  height: 15px;
+}
+#settingsBtn {
+  display: inline-grid;
+  place-items: center;
+}
+#addBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+#addBtn .ico-svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.5;
+}
+
+@media (max-width: 640px) {
+  /* ---- Phone home bar: a large title and two round buttons, like an iOS
+     app's navigation bar; attention chips scroll sideways in one row. ---- */
+  #barRow {
+    min-height: 56px;
+    padding: 4px 12px 4px 16px;
+    gap: 10px;
+  }
+  .brand {
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -0.3px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #bar #settingsBtn,
+  #bar #addBtn {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+    justify-content: center;
+    border: 0;
+    border-radius: 50%;
+  }
+  #bar #settingsBtn .ico-svg {
+    width: 19px;
+    height: 19px;
+  }
+  #bar #addBtn {
+    background: var(--accent);
+    color: #fff;
+  }
+  #bar #addBtn .ico-svg {
+    width: 20px;
+    height: 20px;
+  }
+  #addBtn .add-label {
+    display: none;
+  }
+  #barChips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 16px 10px;
+  }
+  #queue,
+  #followups,
+  #recovery {
+    flex-wrap: nowrap;
+  }
+  #barChips .qchip,
+  #barChips .fchip,
+  #barChips .rchip {
+    flex: none;
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  /* ---- Phone pane header: a neutral navigation bar. ‹ back, the name with
+     its state + folder under it, the session switcher, ⚑. The account tint,
+     badges, – and ✕ (✕ only ever meant "back" here) are dropped. ---- */
+  body .term.zoomed > .title,
+  body.pane-open .term.zoomed > .title {
+    min-height: 56px;
+    padding: calc(env(safe-area-inset-top) + 4px) 6px 6px 2px;
+    gap: 6px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+  .term.zoomed > .title .ctl.back {
+    width: 40px;
+    min-width: 40px;
+    height: 44px;
+    font-size: 30px;
+    font-weight: 400;
+    color: var(--accent);
+  }
+  .term.zoomed > .title .dot,
+  .term.zoomed > .title .badge-slot,
+  .term.zoomed > .title .acct-slot,
+  .term.zoomed > .title .ctl.min,
+  .term.zoomed > .title .ctl.close,
+  .term.zoomed > .title .ctl.color {
+    display: none;
+  }
+  .term.zoomed > .title .title-text {
+    flex: 1 1 auto;
+  }
+  .term.zoomed > .title .path {
+    font-family: inherit;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+  .term.zoomed > .title .pane-sub {
+    display: block;
+    font-size: 12.5px;
+    line-height: 1.3;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .term.zoomed.busy > .title .pane-sub::before {
+    content: "Working · ";
+    color: var(--busy);
+    font-weight: 600;
+  }
+  .term.zoomed.waiting > .title .pane-sub::before {
+    content: "Needs you · ";
+    color: var(--waiting);
+    font-weight: 600;
+  }
+  .term.zoomed.waiting.done > .title .pane-sub::before {
+    content: "Done · ";
+    color: var(--done);
+  }
+  .term.zoomed.waiting.aborted > .title .pane-sub::before {
+    content: "Cut off · ";
+    color: var(--aborted);
+  }
+  .term.zoomed > .title .spacer {
+    display: none;
+  }
+  .term.zoomed .title .pane-switch {
+    height: 32px;
+    padding: 0 10px;
+    margin-left: 0;
+    border: 0;
+    border-radius: 16px;
+    background: var(--btn);
+    color: var(--text);
+    font-size: 13px;
+  }
+  .term.zoomed > .title .ctl.flag {
+    width: 40px;
+    height: 44px;
+  }
+  /* Chat panes: your last message is right there in the log. */
+  .term.agent.zoomed > .pinned {
+    display: none;
+  }
+}
