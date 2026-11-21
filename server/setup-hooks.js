@@ -11,23 +11,36 @@ const MARKER = "FLEET_PANE_ID";
  * The shell command Claude Code runs for the hook. It is guarded so it is a true
  * no-op in any shell that is NOT a FleetView terminal: $FLEET_PANE_ID is only set
  * for shells we spawn, so elsewhere the `[ -n ... ]` test fails and nothing runs.
- * Inside FleetView it POSTs the pane id + kind to the local server.
+ * Inside FleetView it POSTs to the local server, with the pane id and kind in the
+ * QUERY STRING and Claude's own hook JSON forwarded verbatim as the body.
+ *
+ * Forwarding the body is what makes a terminal pane flippable into a chat pane:
+ * that JSON carries `session_id`, the only channel by which a tmux-hosted
+ * `claude` ever tells us which conversation it is running. Without it, a PTY
+ * pane has no resumable id at all and can only ever be re-opened blank (see
+ * pane-registry.js `flip`). `--max-time` is insurance: a hook that blocked on
+ * stdin would stall Claude itself, not just us.
+ *
+ * The server still accepts the older body-only form (`{pane, kind}` with no
+ * query string), so a `claude` session that is already running with the
+ * previously-installed hook keeps working until it restarts.
  */
 function hookCommand(kind) {
   return (
     '[ -n "$FLEET_PANE_ID" ] && ' +
-    'curl -s -X POST "http://localhost:${FLEET_PORT:-4280}/hook" ' +
-    "-H 'content-type: application/json' " +
-    '-d "{\\"pane\\":\\"$FLEET_PANE_ID\\",\\"kind\\":\\"' +
+    "curl -s --max-time 2 -X POST " +
+    '"http://localhost:${FLEET_PORT:-4280}/hook?pane=$FLEET_PANE_ID&kind=' +
     kind +
-    '\\"}" >/dev/null 2>&1 || true'
+    '" ' +
+    "-H 'content-type: application/json' --data-binary @- >/dev/null 2>&1 || true"
   );
 }
 
 /**
  * UserPromptSubmit hook: Claude puts the submitted prompt on stdin as JSON, so we
- * forward stdin verbatim and let the server pull out `.prompt`. The pane id rides
- * in the query string. Guarded so it's a no-op outside FleetView terminals.
+ * forward stdin verbatim and let the server pull out `.prompt` (and `.session_id`
+ * — see hookCommand above). The pane id rides in the query string. Guarded so
+ * it's a no-op outside FleetView terminals.
  */
 function promptHookCommand() {
   return (

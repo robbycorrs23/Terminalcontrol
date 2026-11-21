@@ -234,10 +234,49 @@ app.use("/gate", gate);
 const proxy = httpProxy.createProxyServer({ target: TARGET, ws: true, xfwd: true });
 proxy.on("error", (err, _req, res) => {
   console.warn(`[fleetview-gate] proxy error: ${err.message}`);
-  if (res && !res.headersSent) res.writeHead(502).end("FleetView is unreachable through the gate");
+  if (!res) return;
+  // For a plain HTTP request `res` is a real http.ServerResponse. For a failed
+  // WebSocket upgrade (ws:true above — /term, /control) http-proxy instead
+  // hands back the raw net.Socket, which has no writeHead/headersSent. Calling
+  // writeHead() on it throws, uncaught, and takes the whole gate process down
+  // with it — turning a backend blip into a crash loop for every open tab's
+  // reconnect attempt. Branch on which one we actually got.
+  if (typeof res.writeHead === "function") {
+    if (!res.headersSent) res.writeHead(502).end("FleetView is unreachable through the gate");
+  } else if (typeof res.destroy === "function") {
+    res.destroy();
+  }
 });
 
+// The handful of files a browser needs BEFORE anyone is signed in, purely to
+// decide the site is an installable web app: the manifest and its icons. They
+// have to bypass the session check because browsers fetch a same-origin
+// manifest with credentials omitted, so it can never carry the gate cookie —
+// gate it and the site is simply not installable, which on iOS also means no
+// push notifications (the Push API is home-screen-only there).
+//
+// Safe to expose: an app name, a theme colour, and a square logo. Note what is
+// deliberately NOT in here — /sw.js stays gated. It's only ever registered from
+// an already-authenticated page, and a 401 on a background update check just
+// leaves the existing worker in place.
+const PUBLIC_PWA = new Set([
+  "/manifest.webmanifest",
+  "/icon-192.png",
+  "/apple-touch-icon.png",
+  "/badge-96.png",
+  "/favicon.svg",
+]);
+
+// Icons are colour-scoped per machine (/icons/<colour>/icon-192.png — see
+// server/identity.js), so this is a prefix rather than a fixed list. Narrow on
+// purpose: GET only, must end in .png, and no ".." so it can't be walked out of
+// the icons tree into something that isn't a logo.
+const isPublicIcon = (p) => /^\/icons\/[a-z0-9-]+\/[a-z0-9.-]+\.png$/.test(p) && !p.includes("..");
+
 app.use((req, res) => {
+  if (req.method === "GET" && (PUBLIC_PWA.has(req.path) || isPublicIcon(req.path))) {
+    return proxy.web(req, res);
+  }
   if (!isLoggedIn(req)) {
     if (req.method === "GET" && req.headers.accept?.includes("text/html")) {
       return res.redirect("/gate/login");

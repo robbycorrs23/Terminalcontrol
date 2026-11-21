@@ -1,8 +1,10 @@
-import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, setBusyClass } from "./terminal";
+import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, setBusyClass, UsageRow, UsageWindow } from "./terminal";
 import { AgentEvent, AgentQuestion } from "./agent-events";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown } from "./markdown";
+import { enhanceRich } from "./rich";
 import { attachSecretPopover } from "./secret-popover";
+import { iconSvg, setIcon } from "./icons";
 
 function el(tag: string, cls: string): HTMLElement {
   const n = document.createElement(tag);
@@ -50,6 +52,96 @@ function toolDetail(input: unknown): string {
  * zoom, tray, drag, and attention-queue code needs zero changes to host
  * this alongside terminal panes — see terminal.ts's `PaneView` doc comment.
  */
+/**
+ * Turn a model id into something that fits a badge: "claude-opus-4-5-20260315"
+ * -> "Opus 4.5". Falls back to the raw id minus the vendor prefix and date
+ * suffix, so an unrecognised model still reads as something rather than
+ * vanishing — the full id is always on the title attribute.
+ */
+function shortModel(id: string): string {
+  const m = /(opus|sonnet|haiku)[-_]?(\d+)(?:[-.](\d+))?/i.exec(id);
+  if (!m) return id.replace(/^claude-/, "").replace(/-\d{8}$/, "");
+  const name = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+  return m[3] ? `${name} ${m[2]}.${m[3]}` : `${name} ${m[2]}`;
+}
+
+/** "5-hour" -> "5h", "7-day" -> "7d". Codex labels are data-driven, so fall back. */
+function winShort(label: string): string {
+  const m = /^(\d+)[-\s]*(hour|day|week|min)/i.exec(label);
+  if (!m) return label.slice(0, 3);
+  return m[1] + m[2][0].toLowerCase();
+}
+
+/**
+ * A usage window as a small ring meter. This is the "single ratio against a
+ * limit" case, so it is a meter, not a pie — and the percentage is ALWAYS
+ * rendered in normal ink beside/inside the ring, never conveyed by colour
+ * alone. That matters twice over: status colour must carry a label to be
+ * accessible, and the amber step is deliberately low-contrast on a light
+ * surface, so the numeral is what stays readable.
+ */
+const RING_NS = "http://www.w3.org/2000/svg";
+
+function usageRing(win: UsageWindow): HTMLElement {
+  const size = 20; // sits inside the 28px pill alongside its label
+  const stroke = 3;
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, Math.round(win.percent)));
+
+  const wrap = el("span", "ring " + usageLevel(pct));
+  const svg = document.createElementNS(RING_NS, "svg");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  svg.setAttribute("aria-hidden", "true"); // the text below carries it for AT
+
+  const mk = (cls: string, dash?: string) => {
+    const c = document.createElementNS(RING_NS, "circle");
+    c.setAttribute("cx", String(size / 2));
+    c.setAttribute("cy", String(size / 2));
+    c.setAttribute("r", String(r));
+    c.setAttribute("fill", "none");
+    c.setAttribute("stroke-width", String(stroke));
+    c.setAttribute("class", cls);
+    if (dash) {
+      c.setAttribute("stroke-dasharray", dash);
+      c.setAttribute("stroke-linecap", "round");
+      // start at 12 o'clock instead of 3
+      c.setAttribute("transform", `rotate(-90 ${size / 2} ${size / 2})`);
+    }
+    return c;
+  };
+  svg.append(mk("ring-track"));
+  if (pct > 0) svg.append(mk("ring-fill", `${(pct / 100) * circ} ${circ}`));
+
+  const num = el("b", "ring-num");
+  num.textContent = String(pct);
+  const tag = el("i", "ring-tag");
+  tag.textContent = winShort(win.label);
+
+  const face = el("span", "ring-face");
+  face.append(svg, num);
+  wrap.append(face, tag);
+  wrap.title =
+    `${win.label}: ${pct}% used` + (win.resetsAt ? ` · resets ${resetAt(win.resetsAt)}` : "");
+  return wrap;
+}
+
+/** Same thresholds as the settings panel's bars — one shared ramp (main.ts). */
+function usageLevel(pct: number): string {
+  if (pct >= 90) return "crit";
+  if (pct >= 75) return "warn";
+  return "ok";
+}
+
+function resetAt(at: number): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
 export class AgentChat implements PaneView {
   id: string;
   info: PaneInfo;
@@ -61,8 +153,16 @@ export class AgentChat implements PaneView {
   private statusEl: HTMLElement;
   private pinnedEl: HTMLElement;
   private badgeSlot: HTMLElement;
+  private acctSlot!: HTMLElement;
   private modeSel: HTMLSelectElement;
+  private isCodex: boolean;
+  private isRemote: boolean;
   private inputEl: HTMLTextAreaElement;
+  private toolsEl!: HTMLElement;
+  private stopBtn!: HTMLButtonElement;
+  private jumpBtn!: HTMLButtonElement;
+  private modelEl!: HTMLElement;
+  private usageEl!: HTMLElement;
   private ws?: WebSocket;
   private reconnectTimer?: number;
   private disposed = false;
@@ -109,47 +209,57 @@ export class AgentChat implements PaneView {
       `</select>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
-      `<button class="ctl secret" title="Give this chat a secret (never saved to chat memory)">🔒</button>` +
-      `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
+      // Account/host badges live in their OWN slot, not in .badge-slot:
+      // setWaiting() clears .badge-slot on every attention change, which would
+      // wipe them permanently the first time the pane said "needs you".
+      `<span class="acct-slot"></span>` +
+      `<button class="ctl flag" title="Mark for follow-up">${iconSvg("flag")}</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
     (this.titleBar.querySelector(".path") as HTMLElement).textContent = displayName(info);
     (this.titleBar.querySelector(".path") as HTMLElement).title = info.cwd;
     this.badgeSlot = this.titleBar.querySelector(".badge-slot") as HTMLElement;
+    this.acctSlot = this.titleBar.querySelector(".acct-slot") as HTMLElement;
 
-    // Permission-mode selector: which of the SDK's modes (default = ask for
+    // Permission-mode selector: which mode this session runs under, and the
+    // only way to change it — there's no separate terminal TUI here to show
+    // the agent's own mode indicator, since this view talks to the Agent SDK /
+    // app-server directly.
+    //
+    // The two providers do NOT share a mode vocabulary, so neither does this
+    // control. Claude has one permissionMode enum (default = ask for
     // everything, acceptEdits = auto-approve file edits, auto = route each
-    // prompt through a model classifier instead of asking you, plan =
-    // read-only/no execution, bypassPermissions = approve everything) this
-    // session runs under, and the only way to change it — there's no separate terminal
-    // TUI here to show Claude Code's own mode indicator/Shift+Tab toggle,
-    // since this view talks to the Agent SDK directly (see claude-driver.js).
-    // Only wired for claude-driver.js today — codex-driver.js's app-server
-    // protocol doesn't have a confirmed equivalent (see that file's own
-    // comment on not guessing at unverified wire behavior), so the control
-    // is hidden rather than silently doing nothing for a codex pane.
+    // prompt through a model classifier, plan = read-only/no execution,
+    // bypassPermissions = approve everything). Codex has two orthogonal axes
+    // (approvalPolicy × sandboxPolicy), so it gets its OWN three options named
+    // the way Codex names them, rather than being squeezed into Claude's
+    // words — see CODEX_MODES in codex-driver.js for the exact pairs.
     this.modeSel = this.titleBar.querySelector(".mode-sel") as HTMLSelectElement;
-    // Right side, immediately before the flag button — grouped with the
-    // other pane-level (not per-message) controls, rather than crowding the
-    // name on the left. Written in the HTML string next to .path above only
-    // because that's where its <option> list was easiest to author; this
-    // moves the actual node (not a clone) to where it's meant to render.
-    this.titleBar.querySelector(".flag")!.before(this.modeSel);
-    if (info.cmd === "codex" || info.cmd === "codex-work") {
-      this.modeSel.hidden = true;
-    } else {
-      this.setModeUI(info.mode || "default");
-      // Not `.ctl` (which enableDrag() in main.ts already excludes from the
-      // drag handle) — that class also carries Term's 20x18 icon-button
-      // sizing, which would squash this chip-styled <select>. Stopping
-      // pointerdown/click here does the same drag/zoom exclusion without
-      // pulling that sizing in.
-      this.modeSel.addEventListener("pointerdown", (e) => e.stopPropagation());
-      this.modeSel.addEventListener("click", (e) => e.stopPropagation());
-      this.modeSel.addEventListener("change", () => {
-        this.wsSend({ t: "setMode", mode: this.modeSel!.value });
-      });
+    this.isCodex = info.cmd === "codex" || info.cmd === "codex-work";
+    if (this.isCodex) {
+      this.modeSel.innerHTML =
+        `<option value="read-only">Read Only</option>` +
+        `<option value="auto">Auto</option>` +
+        `<option value="full-access">Full Access</option>`;
     }
+    // Authored in the title-bar HTML string above only because that is where
+    // its <option> list was easiest to write; it is MOVED (not cloned) into the
+    // tools row below, next to the other pane-level controls. Detach it here so
+    // the title bar is left with just name + flag/min/close.
+    this.modeSel.remove();
+    // Matches AgentManager.create's default so the chip never briefly shows a
+    // mode the pane isn't actually running in.
+    this.setModeUI(info.mode || "auto");
+    // Not `.ctl` (which enableDrag() in main.ts already excludes from the
+    // drag handle) — that class also carries Term's 20x18 icon-button
+    // sizing, which would squash this chip-styled <select>. Stopping
+    // pointerdown/click here does the same drag/zoom exclusion without
+    // pulling that sizing in.
+    this.modeSel.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.modeSel.addEventListener("click", (e) => e.stopPropagation());
+    this.modeSel.addEventListener("change", () => {
+      this.wsSend({ t: "setMode", mode: this.modeSel!.value });
+    });
 
     // Work-account panes (opened via "claude (work)" / "codex (work)") get a
     // didit-blue title tint, same as Term's — `.term.work .title` in
@@ -162,14 +272,24 @@ export class AgentChat implements PaneView {
     // Term's `.work-logo`. Sits directly left of the mode selector (which is
     // itself already positioned right before the flag button above), so the
     // right-hand cluster reads badge → mode → flag → min → close.
-    if (info.cmd === "claude-work" || info.cmd === "codex-work") {
+    if (info.cmd.endsWith("-work")) {
       this.el.classList.add("work");
-      const badge = document.createElement("img");
-      badge.className = "work-badge";
-      badge.src = "/didit-logo-white.png";
-      badge.alt = "Work account";
+      // Image comes from the machine's own settings via --work-logo; see
+      // terminal.ts for the same treatment and main.ts for where it's set.
+      const badge = el("span", "work-badge");
       badge.title = "Work account";
-      this.modeSel.before(badge);
+      this.acctSlot.append(badge);
+    }
+    // Remote (ssh) panes: claude/codex is running on another host, not here
+    // (see server/ssh-remote-agent.js) — a small text badge, same slot/sizing
+    // family as the work-account image badge above, since there's no logo
+    // asset for an arbitrary hostname.
+    this.isRemote = !!info.remote;
+    if (info.remote) {
+      const badge = el("span", "remote-badge");
+      badge.textContent = "⇢ " + info.remote.target;
+      badge.title = "Running on " + info.remote.target;
+      this.acctSlot.append(badge);
     }
 
     const cwdline = el("div", "cwdline");
@@ -181,17 +301,70 @@ export class AgentChat implements PaneView {
     this.logEl = el("div", "chat-log");
     this.statusEl = el("div", "status-line");
     this.statusEl.hidden = true;
+    // ---- Tools row ------------------------------------------------------
+    // One home for every pane-level control, directly above the composer:
+    // actions on the left (attach, view flip, secret, permission mode), live
+    // state on the right (model, jump-to-latest, stop, usage). These used to be
+    // split between the title bar and the input bar — but a title bar already
+    // carrying a name, a drag handle and four window controls has no room for
+    // state, and a control you reach for WHILE typing belongs next to where you
+    // type.
+    this.toolsEl = el("div", "chat-tools");
+
+    const attachBtn = el("button", "ctl attach") as HTMLButtonElement;
+    setIcon(attachBtn, "attach");
+    attachBtn.title = "Add file(s)";
+    const viewBtn = el("button", "ctl view") as HTMLButtonElement;
+    setIcon(viewBtn, "terminal");
+    viewBtn.title = "Switch this box to terminal view";
+    const secretBtn = el("button", "ctl secret") as HTMLButtonElement;
+    setIcon(secretBtn, "secret");
+    secretBtn.title = "Give this chat a secret (never saved to chat memory)";
+
+    this.modelEl = el("span", "model-badge");
+    this.modelEl.hidden = true;
+    this.jumpBtn = el("button", "ctl jump") as HTMLButtonElement;
+    setIcon(this.jumpBtn, "down");
+    this.jumpBtn.title = "Jump to latest";
+    this.jumpBtn.hidden = true;
+    // Interrupt. Until this existed a chat pane could not cancel a running turn
+    // at all: no softkeys, no PTY, so no Esc to send. The server and both
+    // drivers already understood {t:"interrupt"} — nothing was sending it.
+    this.stopBtn = el("button", "ctl stop") as HTMLButtonElement;
+    setIcon(this.stopBtn, "stop");
+    this.stopBtn.title = "Stop this turn";
+    this.stopBtn.hidden = true;
+    this.usageEl = el("span", "use-rings");
+
+    this.toolsEl.append(
+      attachBtn,
+      viewBtn,
+      secretBtn,
+      this.modeSel,
+      this.modelEl,
+      el("span", "spacer"),
+      this.jumpBtn,
+      this.stopBtn,
+      this.usageEl
+    );
+    if (info.model) this.setModel(info.model);
+
     const inputBar = el("div", "chat-input");
     this.inputEl = document.createElement("textarea");
     this.inputEl.rows = 1;
     this.inputEl.placeholder = "Message…";
-    const attachBtn = el("button", "chat-attach");
-    attachBtn.textContent = "📎";
-    attachBtn.title = "Add file(s)";
     const sendBtn = el("button", "chat-send");
     sendBtn.textContent = "Send";
-    inputBar.append(attachBtn, this.inputEl, sendBtn);
-    chat.append(this.logEl, this.statusEl, inputBar, workingOverlay());
+    // Phone-only (CSS decides): the tools row is wider than a 390px composer
+    // can spare, so on mobile it collapses behind this and opens as a wrapped
+    // row above the input. Lives in the input bar so it sits where the old
+    // attach button did — thumb-reachable, next to what it acts on.
+    const menuBtn = el("button", "chat-menu") as HTMLButtonElement;
+    setIcon(menuBtn, "menu");
+    menuBtn.title = "Tools";
+    menuBtn.setAttribute("aria-label", "Tools");
+    inputBar.append(menuBtn, this.inputEl, sendBtn);
+    chat.append(this.logEl, this.statusEl, this.toolsEl, inputBar, workingOverlay());
 
     this.el.append(this.titleBar, cwdline, this.pinnedEl, chat);
     this.cell.append(this.el);
@@ -199,9 +372,54 @@ export class AgentChat implements PaneView {
 
     this.wireRename(host);
     this.wireTitleBarButtons(host);
-    attachSecretPopover(this.titleBar.querySelector(".secret") as HTMLElement, this.el, host, this);
-    wireFilePicker(attachBtn, this.el, (files) => void this.attachFiles(files));
-    wireFileDrop(this.el, (files) => void this.attachFiles(files));
+    // Both features write a file/secret to a path on FLEETVIEW'S OWN local
+    // disk and hand that path to the driver as chat text — meaningless for a
+    // remote pane, since claude/codex is running on a different machine and
+    // can't read it (see the plan: a real fix means scp'ing bytes to the
+    // remote host instead, not done here). Hide, don't wire — a visible but
+    // silently-broken button would be worse than no button.
+    if (this.isRemote) {
+      secretBtn.hidden = true;
+      attachBtn.hidden = true;
+    } else {
+      attachSecretPopover(secretBtn, this.el, host, this);
+      // The popover defaults to hanging under the title bar; its anchor now
+      // lives at the BOTTOM of the box, so open it upward instead.
+      this.el.querySelector(".spop")?.classList.add("up");
+      wireFilePicker(attachBtn, this.el, (files) => void this.attachFiles(files));
+      wireFileDrop(this.el, (files) => void this.attachFiles(files));
+    }
+
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.el.classList.toggle("tools-open");
+    });
+    // Any button in the row finishes the job it was opened for, so close after
+    // it. The mode <select> is excluded — picking a mode is the whole action
+    // and the row collapsing out from under an open dropdown is jarring.
+    this.toolsEl.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest(".ctl")) this.el.classList.remove("tools-open");
+    });
+
+    viewBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      host.onFlipView(this);
+    });
+    this.stopBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.wsSend({ t: "interrupt" });
+    });
+    this.jumpBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.logEl.scrollTop = this.logEl.scrollHeight;
+      this.jumpBtn.hidden = true;
+    });
+    // Offer the jump button only when it would actually do something. 24px of
+    // slack keeps it from flickering on during momentum scrolling at the bottom.
+    this.logEl.addEventListener("scroll", () => {
+      const room = this.logEl.scrollHeight - this.logEl.scrollTop - this.logEl.clientHeight;
+      this.jumpBtn.hidden = room < 24;
+    });
 
     sendBtn.addEventListener("click", () => this.submit());
     this.inputEl.addEventListener("keydown", (e) => {
@@ -216,7 +434,7 @@ export class AgentChat implements PaneView {
     // Click the box (outside controls/input) opens/zooms it, same as Term.
     this.el.addEventListener("click", (e) => {
       const tgt = e.target as HTMLElement;
-      if (tgt.closest(".ctl") || tgt.closest(".chat-input")) return;
+      if (tgt.closest(".ctl") || tgt.closest(".chat-input") || tgt.closest(".chat-tools")) return;
       host.onOpen(this);
     });
 
@@ -392,15 +610,45 @@ export class AgentChat implements PaneView {
       case "user":
         this.appendBubble("user", ev.text);
         break;
-      case "assistant_done":
+      case "assistant_done": {
+        // codex-driver.js streams this SAME message as assistant_delta first,
+        // so a bubble for this id usually already exists and is fully
+        // rendered — finalize it in place. Appending unconditionally rendered
+        // every codex message twice. (`AgentMessageDeltaNotification.itemId`
+        // and the `agentMessage` `ThreadItem.id` are the same item id —
+        // verified against `codex app-server generate-ts` — so this lookup
+        // hits.) claude-driver.js sends no deltas, so it takes the else branch
+        // exactly as before.
+        const streamed = this.streamingEls.get(ev.id);
         this.streamingEls.delete(ev.id);
-        this.appendBubble("assistant", ev.text);
+        let bubbleEl: HTMLElement;
+        if (streamed) {
+          // Trust the completed item's text over the accumulated deltas: it's
+          // the authoritative final form, and re-rendering from it repairs a
+          // bubble that dropped a delta mid-stream.
+          streamed.dataset.raw = ev.text;
+          streamed.innerHTML = renderMarkdown(ev.text);
+          // Charts/tables/clipping are built HERE and not on each delta: a
+          // half-streamed ```chart block is invalid JSON, and rebuilding SVG
+          // per token would thrash. The bubble reads as plain Markdown while
+          // it streams and gains its rich layer the moment it's complete.
+          enhanceRich(streamed);
+          bubbleEl = streamed;
+        } else {
+          bubbleEl = this.appendBubble("assistant", ev.text);
+        }
+        // claude-driver.js only sets this when the SDK itself says the
+        // message was truncated by an interrupt/abort — the content may end
+        // mid-word. Mark it the same way updateToolCard marks a failed tool
+        // result, so it doesn't read as a normal, if oddly-worded, finish.
+        bubbleEl.classList.toggle("aborted", !!ev.aborted);
         break;
+      }
       case "assistant_delta": {
-        // Not emitted by claude-driver.js yet (no partial-message streaming
-        // in the Phase 1 MVP) — handled here for forward compatibility. Keeps
-        // the raw source in a dataset field so each delta re-renders the whole
-        // accumulated Markdown rather than appending to already-rendered HTML.
+        // Emitted by codex-driver.js (claude-driver.js has no partial-message
+        // streaming). Keeps the raw source in a dataset field so each delta
+        // re-renders the whole accumulated Markdown rather than appending to
+        // already-rendered HTML.
         let bubble = this.streamingEls.get(ev.id);
         if (!bubble) {
           bubble = this.appendBubble("assistant", "");
@@ -437,15 +685,21 @@ export class AgentChat implements PaneView {
     }
   }
 
-  private appendBubble(role: "user" | "assistant" | "error", text: string): HTMLElement {
+  private appendBubble(role: "user" | "assistant" | "error" | "aborted", text: string): HTMLElement {
     this.endToolGroup();
     const bubble = el("div", `msg ${role}`);
     // Assistant text is Markdown (renderMarkdown escapes untrusted source
-    // before adding any markup — see markdown.ts). User and error text stays
-    // literal: the user typed it, and an error string shouldn't be reinterpreted.
+    // before adding any markup — see markdown.ts). User/error/aborted text
+    // stays literal: the user typed it, or it's FleetView's own notice text,
+    // neither should be reinterpreted as Markdown.
     if (role === "assistant") bubble.innerHTML = renderMarkdown(text);
     else bubble.textContent = text;
     this.logEl.append(bubble);
+    // After the append, so the rich pass can measure real laid-out height.
+    // Runs for user bubbles too — they carry no Markdown, but a pasted wall of
+    // text is exactly as unreadable from either speaker, and clipping is the
+    // only step that finds anything to do there.
+    if (role !== "error" && role !== "aborted") enhanceRich(bubble);
     return bubble;
   }
 
@@ -455,7 +709,7 @@ export class AgentChat implements PaneView {
     details.open = false;
     const summary = document.createElement("summary");
     const detail = toolDetail(input);
-    summary.textContent = detail ? `🔧 ${name} · ${detail}` : `🔧 ${name}`;
+    summary.textContent = detail ? `⚙ ${name} · ${detail}` : `⚙ ${name}`;
     summary.title = summary.textContent; // the CSS ellipsis hides long commands
     const body = document.createElement("pre");
     body.className = "tool-input";
@@ -488,7 +742,7 @@ export class AgentChat implements PaneView {
     const n = this.toolGroupNames.length;
     const preview = this.toolGroupNames.slice(0, 4).join(", ") + (n > 4 ? `, +${n - 4} more` : "");
     (this.toolGroupEl.querySelector("summary") as HTMLElement).textContent =
-      `🔧 ${n} tool call${n === 1 ? "" : "s"}: ${preview}`;
+      `⚙ ${n} tool call${n === 1 ? "" : "s"}: ${preview}`;
   }
 
   private endToolGroup() {
@@ -755,16 +1009,24 @@ export class AgentChat implements PaneView {
       this.statusEl.hidden = true;
     }
     if (state === "error") this.appendBubble("error", detail || "Something went wrong.");
+    // Distinct from "error": the turn was cut off (interrupt/restart/rate
+    // limit/API hiccup), not necessarily something to fix — see
+    // claude-driver.js/codex-driver.js's terminal_reason/Turn.status handling.
+    else if (state === "aborted") this.appendBubble("aborted", detail || "This turn was interrupted before finishing.");
   }
 
   /** Reflects the session's current permission mode in the title-bar selector — see the `mode` AgentEvent. */
   private setModeUI(mode: string) {
+    // A codex pane created before this control existed has "default"
+    // persisted, which matches none of the codex <option> values and would
+    // render the select blank. Codex's own default is Auto, so land there.
+    if (this.isCodex && !["read-only", "auto", "full-access"].includes(mode)) mode = "auto";
     this.modeSel.value = mode;
-    // bypassPermissions skips every approval prompt — worth a visual "this is
-    // the dangerous one" cue distinct from the other three, which all still
-    // ask before something destructive happens (plan asks by never running
-    // anything at all).
-    this.modeSel.classList.toggle("bypass", mode === "bypassPermissions");
+    // The one mode per provider that skips every approval prompt — worth a
+    // visual "this is the dangerous one" cue distinct from the others, which
+    // all still ask before something destructive happens (plan/read-only ask
+    // by never running anything at all).
+    this.modeSel.classList.toggle("bypass", mode === "bypassPermissions" || mode === "full-access");
   }
 
   private scrollToBottom() {
@@ -776,21 +1038,55 @@ export class AgentChat implements PaneView {
   isWaiting(): boolean {
     return this.el.classList.contains("waiting");
   }
-  waitingKind(): "question" | "done" {
-    return this.el.classList.contains("done") ? "done" : "question";
+  waitingKind(): "question" | "done" | "aborted" {
+    if (this.el.classList.contains("done")) return "done";
+    if (this.el.classList.contains("aborted")) return "aborted";
+    return "question";
   }
-  setWaiting(on: boolean, kind: "question" | "done" = "question") {
+  setWaiting(on: boolean, kind: "question" | "done" | "aborted" = "question") {
     this.el.classList.toggle("waiting", on);
     this.el.classList.toggle("done", on && kind === "done");
+    this.el.classList.toggle("aborted", on && kind === "aborted");
     this.badgeSlot.innerHTML = "";
     if (on) {
       const badge = el("span", "badge");
-      badge.textContent = kind === "done" ? "done" : "needs you";
+      badge.textContent = kind === "done" ? "done" : kind === "aborted" ? "cut off" : "needs you";
       this.badgeSlot.append(badge);
     }
   }
   setBusy(on: boolean) {
     setBusyClass(this.el, on);
+    // Only offer to stop something that is actually running.
+    if (this.stopBtn) this.stopBtn.hidden = !on;
+  }
+
+  /**
+   * Render this pane's account usage. A remote pane deliberately shows nothing:
+   * its agent runs on another host against THAT machine's account, so the local
+   * numbers would be confidently wrong.
+   */
+  setUsage(row: UsageRow | null) {
+    this.usageEl.textContent = "";
+    if (!row || !row.available || this.isRemote) {
+      this.usageEl.hidden = true;
+      return;
+    }
+    const wins = [row.primary, row.secondary].filter(Boolean) as UsageWindow[];
+    if (!wins.length) {
+      this.usageEl.hidden = true;
+      return;
+    }
+    for (const w of wins) this.usageEl.append(usageRing(w));
+    this.usageEl.hidden = false;
+  }
+
+  /** Which model this session resolved to; hidden until the driver says. */
+  setModel(model: string) {
+    if (!model) return;
+    this.info.model = model;
+    this.modelEl.textContent = shortModel(model);
+    this.modelEl.title = model;
+    this.modelEl.hidden = false;
   }
   isFlagged(): boolean {
     return this.el.classList.contains("flagged");

@@ -64,8 +64,11 @@ npm run doctor   # checks tmux / curl / claude; offers to install tmux
 npm run go       # build the client, then start the server
 ```
 
-Open **http://localhost:4280**. Click **+ Terminal**, pick a folder, and a shell opens
-there running `claude` (untick "run claude" for a plain shell).
+Open **http://localhost:4280**. Click **+ Terminal**, pick a folder, and a box opens
+there running `claude` — as a **chat pane** by default, or as a classic terminal if you
+untick "💬 Chat view". The "run on open" select also offers `codex` and a plain shell.
+The `💬`/`▤` button in the top bar flips **every** box between the two views at once,
+carrying each conversation across.
 
 > 🌐 A visual tour lives at **[schoppllc.github.io/Terminalcontrol](https://schoppllc.github.io/Terminalcontrol/)**.
 
@@ -78,6 +81,7 @@ Needs **Node.js** (macOS or Linux). Three external tools matter:
 | **tmux** | **durability** — terminals surviving a server restart / sleep | the headline "sleep-safe / survives restart" feature **won't work**; treat tmux as **required** |
 | **curl** | the attention hooks (glow / ding) | no alerts; usually preinstalled |
 | **`claude`** | running `claude` in a box | plain shells still work |
+| **`claude-work`** / **`codex-work`** | a *terminal* box running an agent (a `PATH` wrapper that sets the account's config dir) | chat boxes still work; terminal boxes fail with "command not found" |
 
 `npm run doctor` reports exactly what's missing with the install command for your
 platform, and can install tmux for you (interactive, or set `FLEET_AUTO_INSTALL=1`).
@@ -189,11 +193,23 @@ signed-in, approved device on your tailnet.
 
 ## Windows & sessions
 
-Each browser window is an independent workspace (a "session", kept in
-`sessionStorage`). A **refresh reconnects** to that window's terminals; a **new
-window starts empty** so you can run a different layout in each window. Terminals,
-dings, and the attention queue are scoped per window; layouts are shared across
-all windows (saving one updates every window's dropdown live).
+**One workspace per machine.** Every window looking at the same FleetView sees the
+same fleet — your laptop browser, a second window next to it, and the app on your
+phone are all views of one set of terminals. Open a terminal on the laptop and it
+appears on the phone; the attention queue, dings and layouts match everywhere.
+Separate workspaces come from running FleetView on separate machines, which is
+already how a tailnet is laid out.
+
+This changed. Windows used to each be an independent workspace (a "session" in
+`sessionStorage`), so a new window started empty. That model couldn't survive a
+phone: an installed home-screen web app cold-launches with no session and a
+manifest `start_url` with nowhere to put one, so it always opened an empty grid
+instead of the fleet you actually run — and sharing by hand-copying a `?session=`
+URL is not a substitute for the app icon just working.
+
+A session id is still generated per window and still appears in the URL, but it no
+longer decides what you see. It survives because ephemeral pane secrets are
+released against the window that authorised them (see "Ephemeral secrets").
 
 ## How the alerting works (no output scraping)
 
@@ -208,6 +224,65 @@ So Claude tells FleetView *exactly* which box needs attention — nothing is par
 from the terminal text. The hook commands are guarded with
 `[ -n "$FLEET_PANE_ID" ]`, meaning they're a **no-op in any shell that isn't a
 FleetView terminal**.
+
+### Phone notifications (install it to your Home Screen)
+
+The glow, the ding and the browser-tab indicator all need FleetView to be *open*
+somewhere. To be told a terminal needs you while the app is closed — on a phone
+in your pocket — install FleetView as a web app and turn on push:
+
+1. Reach FleetView over **HTTPS**. Web Push and service workers require a secure
+   context, so this means the `tailscale serve` setup in
+   [TAILSCALE.md](TAILSCALE.md) (`http://localhost` also counts, for desktop
+   testing). A plain `http://` LAN address will not work.
+2. On iPhone/iPad: Safari → Share → **Add to Home Screen**, then open it from
+   there. This step is not cosmetic — **iOS gives the Push API only to
+   home-screen web apps**, never to a Safari tab. Android/desktop Chrome can
+   subscribe from an ordinary tab.
+3. Settings (⚙) → Alerts → **"Push to this device even when FleetView is
+   closed"**. That checkbox is the per-device switch; the two options under it
+   choose *what* gets pushed — a terminal needing an answer (on by default), and
+   a turn finishing or being cut off (off by default, since it's noisy on a busy
+   fleet). Those two are ordinary settings, so they follow you across devices;
+   the device switch does not.
+
+Tapping a notification opens the app with that terminal zoomed. The home-screen
+icon carries a badge with the number of terminals waiting on you.
+
+**What's in a notification:** the terminal's name and what happened — *"didit-web
+needs you"*. Never the folder path, the command, the prompt, or any output. The
+payload is also end-to-end encrypted (RFC 8291) with keys your browser generated,
+so Apple's or Google's push service relays ciphertext it cannot read.
+
+### Naming each machine's app
+
+Because the workspace is per-machine, you'll often have FleetView installed for
+more than one — and identical tiles called "FleetView" on a Home Screen full of
+real shells is a genuinely bad idea. So each server declares an identity, which
+shows up in the app name, the icon colour, and the in-app top bar and tab title:
+
+| Var | Default | Notes |
+|---|---|---|
+| `FLEET_LABEL` | the machine's short hostname, lowercased | Home Screen caption, top bar, tab title. |
+| `FLEET_ICON_COLOR` | picked from the palette by hashing the label | One of `blue`, `violet`, `green`, `amber`, `red`, `teal`. The default already differs between machines; set it to choose deliberately. |
+| `FLEET_PUSH_CONTACT` | this repo's URL | The VAPID `sub` — who a push service contacts about this app server. Must be a `mailto:` or `https:` URL; Apple rejects anything else with `403 BadJwtToken`. |
+
+Set them where the server actually runs — for the auto-start service that means
+exporting them *before* `npm run service:install`, since a launchd/systemd unit
+inherits nothing from your shell (`scripts/install-service.js` bakes them in).
+
+⚠ **iOS caches an installed web app's name and icon at install time.** Changing
+either means deleting the app from the Home Screen and re-adding it on that
+device; a running server can't push the change.
+
+To change the palette itself, edit and re-run `scripts/make-icons.sh` (needs
+macOS `sips`, or swap in `rsvg-convert`) — the PNGs are committed artifacts, not
+a build step.
+
+The identity keypair is generated once at `~/.fleetview/vapid.json` (0600), and
+subscriptions live beside it in `~/.fleetview/push-subscriptions.json`. ⚠ Deleting
+`vapid.json` invalidates **every** device's subscription — each one only recovers
+when you open FleetView on it again and re-subscribe.
 
 ### Removing the hooks
 

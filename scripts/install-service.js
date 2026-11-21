@@ -46,10 +46,24 @@ function capturePath() {
 }
 
 const PATH = capturePath();
+// Baked into the service definition at INSTALL time — a launchd/systemd service
+// inherits none of your shell's environment, so anything not captured here is
+// simply absent for the running server. Re-run service:install to change one.
 const envPass = {};
-if (process.env.FLEET_PORT) envPass.FLEET_PORT = process.env.FLEET_PORT;
-if (process.env.FLEET_HOST) envPass.FLEET_HOST = process.env.FLEET_HOST;
-if (process.env.FLEET_ALLOWED_HOSTS) envPass.FLEET_ALLOWED_HOSTS = process.env.FLEET_ALLOWED_HOSTS;
+for (const key of [
+  "FLEET_PORT",
+  "FLEET_HOST",
+  "FLEET_ALLOWED_HOSTS",
+  // Per-machine identity: app name / icon colour / in-app label. Without these
+  // the service falls back to the hostname and a hash-picked palette entry,
+  // which is a sane default but not the one you chose.
+  "FLEET_LABEL",
+  "FLEET_ICON_COLOR",
+  // Who push services contact about this app server (VAPID `sub`).
+  "FLEET_PUSH_CONTACT",
+]) {
+  if (process.env[key]) envPass[key] = process.env[key];
+}
 
 if (process.platform === "darwin") installMac();
 else if (process.platform === "linux") installLinux();

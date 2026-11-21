@@ -2,9 +2,26 @@
 // you notice even when FleetView isn't the focused tab. One entry point,
 // `setTabAttention`, driven from the attention queue in main.ts.
 
-const BASE_TITLE = "▦ FleetView";
+// The machine's label (see server/identity.js). Since one workspace = one
+// machine, a tab titled just "FleetView" is ambiguous the moment you have two
+// of them open — and these tabs contain shells on different hosts, so the tab
+// strip should say which. Set once at boot; falls back to plain "FleetView"
+// until /api/identity answers (or if it never does).
+let appLabel = "";
+export function setAppLabel(label: string) {
+  appLabel = label || "";
+  // Repaint the idle title immediately; an attention title will pick it up on
+  // the next setTabAttention() call.
+  if (!document.title.startsWith("(")) document.title = baseTitle();
+}
+function baseTitle() {
+  return appLabel ? `▦ ${appLabel}` : "▦ FleetView";
+}
+function suffix() {
+  return appLabel || "FleetView";
+}
 
-export type AttentionKind = "question" | "done";
+export type AttentionKind = "question" | "done" | "aborted";
 
 let iconEl: HTMLLinkElement | null = null;
 function iconLink(): HTMLLinkElement {
@@ -32,7 +49,7 @@ let lastIconKey = "";
  * @param kind  its kind, or null when nothing is waiting
  */
 export function setTabAttention(count: number, name: string, kind: AttentionKind | null) {
-  document.title = count > 0 ? `(${count}) ${name} — FleetView` : BASE_TITLE;
+  document.title = count > 0 ? `(${count}) ${name} — ${suffix()}` : baseTitle();
 
   const key = count > 0 && kind ? kind : "idle";
   if (key === lastIconKey) return;
@@ -65,13 +82,19 @@ function drawFavicon(kind: AttentionKind | null): string {
     }
   }
 
-  // Attention dot badge, top-right: orange = needs you, yellow = done. Colours
-  // come from the same CSS variables the boxes and chips use, so the favicon
-  // can't drift out of sync with the palette (and follows light/dark too).
+  // Attention dot badge, top-right: orange = needs you, yellow = done,
+  // red = cut off. Colours come from the same CSS variables the boxes and
+  // chips use, so the favicon can't drift out of sync with the palette (and
+  // follows light/dark too).
   if (kind) {
     x.beginPath();
     x.arc(S - 8, 8, 6, 0, Math.PI * 2);
-    x.fillStyle = kind === "done" ? cssVar("--done", "#f5d142") : cssVar("--waiting", "#f0a35e");
+    x.fillStyle =
+      kind === "done"
+        ? cssVar("--done", "#f5d142")
+        : kind === "aborted"
+          ? cssVar("--aborted", "#f85149")
+          : cssVar("--waiting", "#f0a35e");
     x.fill();
     x.lineWidth = 2;
     x.strokeStyle = "#0d1117";

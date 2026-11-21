@@ -1,11 +1,14 @@
-import { Term, PaneInfo, PaneView, TermHost, displayName } from "./terminal";
+import { Term, PaneInfo, PaneView, TermHost, UsageRow, displayName } from "./terminal";
 import { AgentChat } from "./agent-chat";
 import { play } from "./sound";
-import { setTabAttention } from "./tab";
+import { setTabAttention, setAppLabel } from "./tab";
 import { initTasks, applyRemoteTasks, closeTasksIfOpen } from "./tasks";
 import { getSettings, patchSettings, loadSettings, putPrefs, xtermTheme, xtermFontSize, FX_ORDER, Settings } from "./settings";
+import { initPush, enablePush, disablePush, pushActive, setBadge } from "./push";
+import { iconSvg } from "./icons";
 
 const grid = document.getElementById("grid")!;
+const brandEl = document.querySelector<HTMLElement>(".brand")!;
 const scrim = document.getElementById("scrim")!;
 const tray = document.getElementById("tray")!;
 const queueEl = document.getElementById("queue")!;
@@ -23,6 +26,12 @@ const layoutSel = document.getElementById("layoutSel") as HTMLSelectElement;
 // copyable, not just ones that arrived via a shared link.
 const SESSION = (() => {
   const params = new URLSearchParams(location.search);
+  // NOTE: this id no longer decides which panes you see — the server shows every
+  // client the same fleet ("one workspace per machine", see pane-registry.js).
+  // It's still generated and sent because the server keys ephemeral-secret
+  // release on the window that authorised the secret, and because reorder/
+  // layout calls carry it. A cold-launched PWA minting a fresh id is therefore
+  // harmless: it still lands on the full fleet.
   let s = params.get("session") || sessionStorage.getItem("fleet-session");
   if (!s) s = (crypto.randomUUID?.() || String(Math.random()).slice(2)) as string;
   sessionStorage.setItem("fleet-session", s);
@@ -36,7 +45,7 @@ const SESSION = (() => {
 const currentEl = document.getElementById("current")!;
 
 // ---- Ephemeral secrets: optional WebAuthn step-up ----------------------
-// The 🔒 popover (terminal.ts) wants a fresh passkey confirmation right
+// The ⚿ popover (terminal.ts) wants a fresh passkey confirmation right
 // before releasing a secret, on top of whatever the passkey gate
 // (server/gate.js) already does with session cookies. That's only possible
 // when THIS page is actually being served through the gate — gate.js mounts
@@ -132,6 +141,9 @@ const host: TermHost = {
     closeTerm(t.id);
   },
   onMinimize: (t) => minimize(t),
+  onFlipView: (t) => {
+    void flipView(t);
+  },
   onToggleFollowUp: (t) => {
     const on = !t.isFlagged();
     t.setFollowUp(on); // optimistic; server broadcast confirms
@@ -183,23 +195,42 @@ const host: TermHost = {
 };
 
 // ---- Grid -------------------------------------------------------------
-function addTerm(info: PaneInfo): PaneView {
+/**
+ * `at` is the grid slot to drop the box into, used when one pane REPLACES
+ * another in place — a view flip destroys the pane and builds a new one with a
+ * new id, and appending that to the end would make a box visibly jump to the
+ * bottom of the grid for what is supposed to look like the same box changing
+ * clothes. Everything else (a genuinely new terminal, a respawn) appends.
+ */
+function addTerm(info: PaneInfo, at?: number): PaneView {
   const existing = panes.get(info.id);
   if (existing) return existing;
   const t = info.kind === "agent" ? new AgentChat(info, host) : new Term(info, host);
   panes.set(info.id, t);
   t.cell.dataset.id = info.id; // lets us read grid order for layout autosave
-  grid.append(t.cell);
+  if (at !== undefined && at >= 0 && at < grid.children.length) {
+    grid.insertBefore(t.cell, grid.children[at]);
+  } else {
+    grid.append(t.cell);
+  }
   enableDrag(t);
+  t.setUsage(usageFor(t)); // a box created after the last usage broadcast
   reflow();
   if (info.attention?.waiting) enqueue(info.id, info.attention.kind || "question");
   if (info.followUp) setFlagged(info.id, true);
   return t;
 }
 
+// Where a just-removed box was sitting, so a pane that REPLACES it (a view
+// flip) can be dropped into the same slot. Only ever read by the very next
+// `created`, so one entry is all it needs to hold.
+let vacated: { id: string; at: number } | null = null;
+
 function removeTerm(id: string) {
   const t = panes.get(id);
   if (!t) return;
+  const at = [...grid.children].indexOf(t.cell);
+  if (at !== -1) vacated = { id, at };
   if (zoomed === t) unzoom();
   t.dispose();
   panes.delete(id);
@@ -221,6 +252,15 @@ async function closeTerm(id: string) {
 // switch to one full-height terminal per "page" (scroll for the next) instead
 // — see the (max-width: 640px) rules in styles.css for the row sizing.
 const mobileQuery = matchMedia("(max-width: 640px)");
+/** A pane's account row is keyed by its `cmd` ("claude-work" / "codex-work"). */
+function usageFor(t: PaneView): UsageRow | null {
+  return usageRows.find((r) => r.id === t.info.cmd) ?? null;
+}
+
+function pushUsageToPanes() {
+  for (const t of panes.values()) t.setUsage(usageFor(t));
+}
+
 function reflow() {
   const n = Math.max(grid.children.length, 1);
   const cols = mobileQuery.matches ? 1 : Math.ceil(Math.sqrt(n));
@@ -229,15 +269,259 @@ function reflow() {
   reflowMobileOrder();
 }
 
+
+
+// ---- Per-machine settings (server/machine-config.js) ---------------------
+// Accounts, badge image and machine identity. Applied through a CSS custom
+// property rather than per-pane plumbing, so changing the badge updates every
+// box at once — including ones created before the fetch resolved.
+const mcLabel = document.getElementById("mcLabel") as HTMLInputElement;
+const mcColor = document.getElementById("mcColor") as HTMLSelectElement;
+const mcAccounts = document.getElementById("mcAccounts")!;
+const mcLogoPick = document.getElementById("mcLogoPick") as HTMLButtonElement;
+const mcLogoClear = document.getElementById("mcLogoClear") as HTMLButtonElement;
+const mcLogoFile = document.getElementById("mcLogoFile") as HTMLInputElement;
+const mcLogoPreview = document.getElementById("mcLogoPreview")!;
+const mcNote = document.getElementById("mcNote")!;
+
+/** Rebuild both picker selects from this machine's accounts. */
+function renderAgentOptions() {
+  const keepMain = agentSelect.value;
+  const keepSsh = sshAgentSelect.value;
+
+  // Remove only the direct <option> children — the SSH <optgroup> is a live
+  // node that renderSshOptions() fills, so it has to survive.
+  for (const o of [...agentSelect.children]) if (o.tagName === "OPTION") o.remove();
+  const frag = document.createDocumentFragment();
+  for (const id of machine.accounts) {
+    const o = document.createElement("option");
+    o.value = id;
+    o.textContent = profileLabel(id);
+    frag.append(o);
+  }
+  const shell = document.createElement("option");
+  shell.value = "";
+  shell.textContent = "plain shell";
+  frag.append(shell);
+  agentSelect.prepend(frag); // accounts, plain shell, then the SSH optgroup
+
+  sshAgentSelect.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "plain shell";
+  sshAgentSelect.append(none);
+  for (const id of machine.accounts) {
+    const o = document.createElement("option");
+    o.value = id;
+    o.textContent = profileLabel(id);
+    sshAgentSelect.append(o);
+  }
+
+  agentSelect.value = keepMain;
+  if (!agentSelect.value) agentSelect.value = machine.accounts[0] || "";
+  sshAgentSelect.value = keepSsh;
+  updateChatViewAvailability();
+}
+
+/** The badge image, as a custom property so every pane picks it up at once. */
+function applyMachineBadge() {
+  const url = machine.logoUrl;
+  document.documentElement.style.setProperty("--work-logo", url ? `url("${url}")` : "none");
+  document.body.classList.toggle("has-logo", !!url);
+  mcLogoPreview.hidden = !url;
+  mcLogoClear.hidden = !url;
+}
+
+function renderMachineSettings() {
+  mcLabel.value = machine.label || "";
+  mcLabel.placeholder = brandEl.textContent?.replace(/^▦\s*/, "") || "hostname";
+
+  mcColor.innerHTML = "";
+  const auto = document.createElement("option");
+  auto.value = "";
+  auto.textContent = "automatic";
+  mcColor.append(auto);
+  for (const c of machine.iconColors) {
+    const o = document.createElement("option");
+    o.value = c;
+    o.textContent = c;
+    mcColor.append(o);
+  }
+  mcColor.value = machine.iconColor || "";
+
+  mcAccounts.innerHTML = "";
+  for (const p of machine.profiles) {
+    const lbl = document.createElement("label");
+    lbl.className = "set-check";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = p.id;
+    cb.checked = machine.accounts.includes(p.id);
+    lbl.append(cb, document.createTextNode(" " + p.label));
+    if (!machine.installed.includes(p.id)) {
+      const warn = document.createElement("span");
+      warn.className = "mc-missing";
+      warn.textContent = "not signed in here";
+      lbl.append(warn);
+    }
+    cb.addEventListener("change", () => {
+      const picked = [...mcAccounts.querySelectorAll("input:checked")].map(
+        (i) => (i as HTMLInputElement).value
+      );
+      void saveMachine({ accounts: picked });
+    });
+    mcAccounts.append(lbl);
+  }
+
+  mcNote.textContent = machine.seeded
+    ? "Seeded from the logins found here — change it and it stays changed."
+    : "";
+  applyMachineBadge();
+}
+
+async function saveMachine(patch: Record<string, unknown>) {
+  try {
+    const res = await fetch("/api/machine", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const cfg = await res.json();
+    machine = { ...machine, ...cfg, seeded: false };
+    renderAgentOptions();
+    renderMachineSettings();
+  } catch {
+    mcNote.textContent = "Couldn't save — is the server still up?";
+  }
+}
+
+async function loadMachine() {
+  try {
+    const res = await fetch("/api/machine");
+    if (!res.ok) throw new Error(String(res.status));
+    machine = await res.json();
+  } catch {
+    // Older server (no /api/machine yet), or it's down. Fall back to whatever
+    // the static markup offers so the picker keeps working instead of
+    // collapsing to "plain shell" — this is the stale-bundle-vs-old-server
+    // case that bites constantly in this project.
+    machine = {
+      ...machine,
+      accounts: [...agentSelect.querySelectorAll("option")]
+        .map((o) => (o as HTMLOptionElement).value)
+        .filter(Boolean),
+      profiles: [],
+    };
+    return;
+  }
+  renderAgentOptions();
+  renderMachineSettings();
+}
+
+mcLabel.addEventListener("change", () => void saveMachine({ label: mcLabel.value.trim() || null }));
+mcColor.addEventListener("change", () => void saveMachine({ iconColor: mcColor.value || null }));
+mcLogoPick.addEventListener("click", () => mcLogoFile.click());
+mcLogoFile.addEventListener("change", () => {
+  const f = mcLogoFile.files?.[0];
+  mcLogoFile.value = "";
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const res = await fetch("/api/machine/logo", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dataUrl: reader.result }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      mcNote.textContent = body.error || "Couldn't use that image.";
+      return;
+    }
+    mcNote.textContent = "";
+    machine.logoUrl = body.logoUrl;
+    applyMachineBadge();
+  };
+  reader.readAsDataURL(f);
+});
+mcLogoClear.addEventListener("click", async () => {
+  await fetch("/api/machine/logo", { method: "DELETE" });
+  machine.logoUrl = null;
+  applyMachineBadge();
+});
+
+// ---- Per-pane view flip (terminal ⇄ chat) -------------------------------
+// The ❝ / ▤ button in each box's title bar. The picker's "❝ Chat view"
+// checkbox only decides what a NEW box becomes; this switches a box already on
+// the grid, which is a genuinely different operation: a chat pane is an
+// in-process SDK driver with no terminal behind it, and a terminal pane is a
+// tmux shell with no event stream. So the server tears the pane down and
+// re-creates it in the other kind, and what makes that a view switch rather
+// than a restart is that both halves resume the SAME Claude conversation by
+// session id, at the SAME permission mode (server/pane-registry.js `flip`).
+//
+// Which means it can legitimately fail, and saying why beats doing nothing
+// visible — the server returns a reason and this puts it in the top bar.
+const viewNote = document.getElementById("viewNote")!;
+let viewNoteTimer: number | undefined;
+
+const FLIP_REASON: Record<string, string> = {
+  busy: "it's mid-turn",
+  "not an agent pane": "it isn't running an agent",
+  "remote pane": "its agent runs on another host",
+  // The one users will actually hit: a terminal pane only learns its Claude
+  // session id when the agent inside fires a hook, so a box that hasn't been
+  // prompted yet has nothing to resume from.
+  "no conversation captured yet": "no conversation yet — send it a prompt first",
+  gone: "the box is gone",
+};
+
+function showViewNote(text: string) {
+  viewNote.textContent = "⇄ " + text;
+  viewNote.hidden = false;
+  clearTimeout(viewNoteTimer);
+  viewNoteTimer = setTimeout(() => (viewNote.hidden = true), 6000);
+}
+
+async function flipView(t: PaneView) {
+  const label = displayName(t.info);
+  // Terminal panes keep this in the title bar; chat panes moved it to the
+  // tools row above the composer — so search the whole box, not the title bar.
+  const btn = t.el.querySelector(".view") as HTMLButtonElement | null;
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/panes/${t.info.id}/flip`, { method: "POST" });
+    // A 404 here means the ROUTE is missing, not the pane: the server is still
+    // running code older than this bundle. Worth calling out by name — the
+    // server serving a new bundle while itself running old code is this
+    // project's most recurring trap, and "couldn't switch" sends you hunting
+    // for a bug that isn't there.
+    if (res.status === 404) {
+      showViewNote(`${label}: server is running older code — restart it`);
+      return;
+    }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.ok) {
+      showViewNote(`${label}: ${FLIP_REASON[body.reason] || body.reason || "couldn't switch"}`);
+      return;
+    }
+    // The box itself is replaced by the closed/created pair on the control
+    // socket, so there is nothing to re-render here.
+    if (body.resumed === false) showViewNote(`${label}: switched — started a fresh session`);
+  } catch {
+    showViewNote(`${label}: couldn't reach the server`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // Mobile-only visual ordering: terminals needing you float to the top of the
-// scroll stack (question > done > idle), stable otherwise. Pure presentation —
-// doesn't touch the underlying grid order that drag-to-reorder persists, so
-// desktop layouts and saved layouts are unaffected.
+// scroll stack (question > aborted > done > idle), stable otherwise. Pure
+// presentation — doesn't touch the underlying grid order that drag-to-reorder
+// persists, so desktop layouts and saved layouts are unaffected.
 function reflowMobileOrder() {
+  const rank = { question: 0, aborted: 1, done: 2 } as const;
   for (const t of panes.values()) {
-    t.cell.style.order = mobileQuery.matches
-      ? String(t.isWaiting() ? (t.waitingKind() === "done" ? 1 : 0) : 2)
-      : "";
+    t.cell.style.order = mobileQuery.matches ? String(t.isWaiting() ? rank[t.waitingKind()] : 3) : "";
   }
 }
 mobileQuery.addEventListener("change", reflow);
@@ -290,8 +574,8 @@ function renderTray() {
     const t = panes.get(id);
     if (!t) continue;
     const chip = document.createElement("div");
-    chip.className =
-      "tchip" + (t.isWaiting() ? " waiting" + (t.waitingKind() === "done" ? " done" : "") : "");
+    const wKind = t.isWaiting() ? t.waitingKind() : null;
+    chip.className = "tchip" + (wKind ? " waiting" + (wKind === "question" ? "" : " " + wKind) : "");
     chip.innerHTML = `<span class="tname"></span><span class="tclose" title="Close">✕</span>`;
     (chip.querySelector(".tname") as HTMLElement).textContent = displayName(t.info);
     chip.addEventListener("click", (e) => {
@@ -437,8 +721,12 @@ scrim.addEventListener("click", unzoom);
 addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const om = document.getElementById("openmode") as HTMLElement;
+  const sshEditEl = document.getElementById("sshEdit") as HTMLElement;
+  const sshManagerEl = document.getElementById("sshManager") as HTMLElement;
   if (!picker.hidden) closePicker();
   else if (om && !om.hidden) om.hidden = true;
+  else if (sshEditEl && !sshEditEl.hidden) sshEditEl.hidden = true;
+  else if (sshManagerEl && !sshManagerEl.hidden) sshManagerEl.hidden = true;
   else if (settingsPanel.classList.contains("open")) closeSettings();
   else if (closeTasksIfOpen()) {
     /* closed the task sidebar */
@@ -566,7 +854,7 @@ function setDropTarget(cell: HTMLElement | null) {
 }
 
 // ---- Attention queue --------------------------------------------------
-function onAttention(id: string, kind: "question" | "done") {
+function onAttention(id: string, kind: "question" | "done" | "aborted") {
   const t = panes.get(id);
   if (!t) return;
   if (zoomed === t) return; // you're already looking at it
@@ -586,16 +874,24 @@ function onAttention(id: string, kind: "question" | "done") {
  * `tag: id` means a pane that pings twice replaces its own notification instead
  * of stacking a second one.
  */
-function notifyAttention(t: PaneView, kind: "question" | "done") {
+function notifyAttention(t: PaneView, kind: "question" | "done" | "aborted") {
+  // Exactly one notifier per device. If this device holds a push subscription,
+  // the service worker will raise the notification (and can do it with the app
+  // fully closed, which this path cannot) — so stand down rather than showing a
+  // second, duplicate banner for the same event.
+  if (pushActive()) return;
   if (!getSettings().notify || !document.hidden) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   try {
     const name = displayName(t.info);
-    const n = new Notification(kind === "done" ? `${name} finished` : `${name} needs you`, {
-      body: kind === "done" ? "The agent ended its turn." : "Waiting on an approval or an answer.",
-      tag: t.id,
-      icon: "/favicon.svg",
-    });
+    const title = kind === "done" ? `${name} finished` : kind === "aborted" ? `${name} was cut off` : `${name} needs you`;
+    const body =
+      kind === "done"
+        ? "The agent ended its turn."
+        : kind === "aborted"
+          ? "The turn was interrupted before finishing — the response may be incomplete."
+          : "Waiting on an approval or an answer.";
+    const n = new Notification(title, { body, tag: t.id, icon: "/favicon.svg" });
     n.onclick = () => {
       window.focus();
       const live = panes.get(t.id);
@@ -607,7 +903,7 @@ function notifyAttention(t: PaneView, kind: "question" | "done") {
   }
 }
 
-function enqueue(id: string, _kind: "question" | "done") {
+function enqueue(id: string, _kind: "question" | "done" | "aborted") {
   if (!queue.includes(id)) queue.push(id);
   renderQueue();
 }
@@ -633,8 +929,8 @@ function renderQueue() {
   for (const id of queue) {
     const t = panes.get(id);
     const chip = document.createElement("span");
-    const kind = t?.waitingKind() === "done" ? "done" : "question";
-    chip.className = "qchip" + (kind === "done" ? " done" : "");
+    const kind = t?.waitingKind() ?? "question";
+    chip.className = "qchip" + (kind === "question" ? "" : " " + kind);
     chip.textContent = t ? displayName(t.info) : id;
     chip.onclick = () => t && zoom(t);
     queueEl.append(chip);
@@ -651,6 +947,9 @@ function renderQueue() {
     head ? displayName(head.info) : "",
     head ? head.waitingKind() : null
   );
+  // Same count on the installed app's home-screen icon. Piggybacks on the tab
+  // indicator's choke point so the two can't drift.
+  setBadge(queue.length);
 }
 nextBtn.onclick = () => {
   const t = queue[0] && panes.get(queue[0]);
@@ -749,6 +1048,9 @@ const crumbsEl = document.getElementById("crumbs")!;
 const plistEl = document.getElementById("plist")!;
 const precentEl = document.getElementById("precent")!;
 const agentSelect = document.getElementById("agentSelect") as HTMLSelectElement;
+const sshOptGroup = document.getElementById("sshOptGroup") as HTMLOptGroupElement;
+const sshRunRow = document.getElementById("sshRunRow") as HTMLElement;
+const sshAgentSelect = document.getElementById("sshAgentSelect") as HTMLSelectElement;
 const chatViewEl = document.getElementById("chatView") as HTMLInputElement;
 const searchEl = document.getElementById("psearch") as HTMLInputElement;
 const sortEl = document.getElementById("psort") as HTMLSelectElement;
@@ -770,13 +1072,43 @@ async function loadPrefs() {
   applySettings(); // server values may differ from the localStorage mirror we booted on
 }
 
-// Chat view (see agent-chat.ts) is available for all four claude/codex agent
-// options (backed by claude-driver.js / codex-driver.js — see the plan).
-// Every new agent box defaults to it, on desktop as well as mobile; opting
-// back into the classic terminal is a per-open, explicit uncheck. Existing
-// boxes are unaffected — this only decides what a NEWLY created box becomes.
-function chatViewAvailable(cmd: string): boolean {
-  return cmd === "claude" || cmd === "claude-work" || cmd === "codex" || cmd === "codex-work";
+// Chat view (see agent-chat.ts) is available for the four local claude/codex
+// agent options (backed by claude-driver.js / codex-driver.js), OR for an
+// SSH pick once "and run — there" (sshAgentSelect) also names one of those
+// four profiles — the remote counterpart, driven the same way but over ssh
+// (see server/ssh-remote-agent.js). Every new agent box defaults to it, on
+// desktop as well as mobile; opting back into the classic terminal is a
+// per-open, explicit uncheck. Existing boxes are unaffected — this only
+// decides what a NEWLY created box becomes.
+// Which accounts THIS machine offers — a property of the machine, not of the
+// product, so it comes from the server (~/.fleetview/machine.json) rather than
+// being baked in here. Hardcoding it is what put a work-only picker and a work
+// badge on a personal machine when the branch was pulled.
+type MachineProfile = { id: string; provider: string; account: string; label: string };
+type MachineInfo = {
+  label: string | null;
+  iconColor: string | null;
+  accounts: string[];
+  badgeLogo: string | null;
+  seeded: boolean;
+  profiles: MachineProfile[];
+  installed: string[];
+  iconColors: string[];
+  logoUrl: string | null;
+};
+let machine: MachineInfo = {
+  label: null, iconColor: null, accounts: [], badgeLogo: null, seeded: false,
+  profiles: [], installed: [], iconColors: [], logoUrl: null,
+};
+
+function isAgentProfile(v: string): boolean {
+  return machine.accounts.includes(v);
+}
+function profileLabel(id: string): string {
+  return machine.profiles.find((p) => p.id === id)?.label || id;
+}
+function chatViewAvailable(cmd: string, remoteAgentCmd: string = ""): boolean {
+  return isAgentProfile(cmd) || (isSshValue(cmd) && isAgentProfile(remoteAgentCmd));
 }
 // What the user wants for THIS picker session, so that bouncing the agent
 // select through "plain shell" (which force-unchecks, since a shell has no
@@ -784,22 +1116,42 @@ function chatViewAvailable(cmd: string): boolean {
 // re-checks itself out of. Reset to the default on every picker open.
 let chatViewWanted = true;
 function updateChatViewAvailability() {
-  const available = chatViewAvailable(agentSelect.value);
+  const available = chatViewAvailable(agentSelect.value, sshAgentSelect.value);
   chatViewEl.disabled = !available;
   chatViewEl.checked = available && chatViewWanted;
 }
 agentSelect.addEventListener("change", updateChatViewAvailability);
+sshAgentSelect.addEventListener("change", updateChatViewAvailability);
 chatViewEl.addEventListener("change", () => {
   if (!chatViewEl.disabled) chatViewWanted = chatViewEl.checked;
 });
+
+// "and run — there": only meaningful once an SSH server is picked. Combined
+// with Chat view (above), it decides which pane gets created: plain shell →
+// PTY typing `ssh ...`; an agent profile + Chat view unchecked → PTY typing
+// `ssh -t ... '<agent>; exec $SHELL -l'`; an agent profile + Chat view
+// checked → an "agent" pane whose claude/codex runs over ssh instead of
+// locally (see choose()/resolveRemoteTarget() below). Hidden/reset the rest
+// of the time.
+function isSshValue(v: string): boolean {
+  return v.startsWith("sshprofile:") || v.startsWith("sshhost:");
+}
+function updateSshRunRow() {
+  const isSsh = isSshValue(agentSelect.value);
+  sshRunRow.hidden = !isSsh;
+  if (!isSsh) sshAgentSelect.value = "";
+}
+agentSelect.addEventListener("change", updateSshRunRow);
 
 async function openPicker() {
   picker.hidden = false;
   chatViewWanted = true;
   updateChatViewAvailability();
+  updateSshRunRow();
   // Resume where we left off; on first open use the saved default (or home).
   await navigate(pickPath ?? prefs.defaultDir);
   loadPickerRecents();
+  loadSshHosts(); // cheap re-read of ~/.ssh/config in case it was hand-edited since last open
   searchEl.focus();
 }
 function closePicker() {
@@ -875,7 +1227,7 @@ function renderList() {
   for (const e of items) {
     const row = document.createElement("div");
     row.className = "prow";
-    row.innerHTML = `<span class="ico">📁</span><span class="nm"></span>`;
+    row.innerHTML = `<span class="ico">${iconSvg("folder")}</span><span class="nm"></span>`;
     (row.querySelector(".nm") as HTMLElement).textContent = e.name;
     if (mode !== "name") {
       const meta = document.createElement("span");
@@ -943,16 +1295,116 @@ async function loadPickerRecents() {
 }
 
 function choose(path: string) {
-  const kind = chatViewAvailable(agentSelect.value) && chatViewEl.checked ? "agent" : "pty";
-  openTermAt(path, agentSelect.value, kind);
+  const ssh = isSshValue(agentSelect.value);
+  const remoteAgent = ssh ? sshAgentSelect.value : "";
+  const wantsChat = chatViewAvailable(agentSelect.value, remoteAgent) && chatViewEl.checked;
+  if (ssh && remoteAgent && wantsChat) {
+    // Remote CHAT VIEW pane: cmd stays the bare profile name (agent-manager.js
+    // derives provider/account from it exactly like a local agent pane) plus
+    // a structured `remote` target — never a typed shell command.
+    const remote = resolveRemoteTarget(agentSelect.value);
+    if (remote) {
+      openTermAt(path, remoteAgent, "agent", remote);
+      closePicker();
+      return;
+    }
+  }
+  // Everything else (local agent/shell, or SSH terminal-view with or without
+  // an agent running there) keeps the existing typed-shell-command path.
+  openTermAt(path, resolveCmd(agentSelect.value), wantsChat ? "agent" : "pty");
   closePicker();
 }
-async function openTermAt(cwd: string, cmd: string, kind: "pty" | "agent" = "pty") {
+type RemoteTarget = { target: string; port?: number; identityFile?: string };
+async function openTermAt(cwd: string, cmd: string, kind: "pty" | "agent" = "pty", remote?: RemoteTarget) {
   await fetch("/api/panes", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ cwd, cmd, session: SESSION, kind }),
+    body: JSON.stringify({ cwd, cmd, session: SESSION, kind, ...(remote ? { remote } : {}) }),
   });
+}
+// The structured counterpart of resolveCmd's sshprofile:/sshhost: branching,
+// for the remote-CHAT-VIEW path above — a target descriptor instead of a
+// shell string (agent-manager.js/ssh-remote-agent.js build the ssh argv
+// server-side; nothing here gets typed into a shell).
+function resolveRemoteTarget(value: string): RemoteTarget | null {
+  if (value.startsWith("sshprofile:")) {
+    const p = sshProfiles.find((p) => p.name === value.slice("sshprofile:".length));
+    if (!p) return null;
+    const t: RemoteTarget = { target: `${p.user}@${p.host}` };
+    if (p.port && p.port !== 22) t.port = p.port;
+    if (p.identityFile) t.identityFile = p.identityFile;
+    return t;
+  }
+  if (value.startsWith("sshhost:")) return { target: value.slice("sshhost:".length) };
+  return null;
+}
+
+// ---- SSH: turning an agentSelect value into the real typed command --------
+// "claude-work" / "codex-work" / "" (plain shell) pass
+// through unchanged — the option value IS the command, same as always. SSH
+// picks are encoded as "sshprofile:<name>" (a FleetView-managed profile,
+// resolved via its stored host/port/user/identityFile) or "sshhost:<alias>"
+// (an alias auto-discovered read-only from ~/.ssh/config — ssh itself applies
+// the rest of that config). Either way, `sshAgentSelect` (the "and run …
+// there" row, only shown once an SSH pick is made) optionally names an agent
+// profile to launch on the REMOTE box. This function ONLY handles the
+// terminal-view case (a plain interactive process typed into a real shell —
+// see remoteAgentCmd() below for how each agent profile turns into
+// what's actually typed remotely); the chat-view case is resolveRemoteTarget()
+// above, which never builds a shell string at all.
+function resolveCmd(value: string): string {
+  const agentCmd = isSshValue(value) ? sshAgentSelect.value : "";
+  if (value.startsWith("sshprofile:")) {
+    const p = sshProfiles.find((p) => p.name === value.slice("sshprofile:".length));
+    return p ? buildSshCommand(p, agentCmd) : "";
+  }
+  if (value.startsWith("sshhost:")) {
+    const parts = ["ssh"];
+    if (agentCmd) parts.push("-t");
+    parts.push(shQuote(value.slice("sshhost:".length)));
+    if (agentCmd) parts.push(shQuote(remoteAgentCmd(agentCmd)));
+    return parts.join(" ");
+  }
+  return value;
+}
+function buildSshCommand(p: SshProfile, agentCmd: string): string {
+  const parts = ["ssh"];
+  if (agentCmd) parts.push("-t"); // force a pty — needed for an interactive remote command
+  if (p.port && p.port !== 22) parts.push("-p", String(p.port));
+  if (p.identityFile) parts.push("-o", "IdentitiesOnly=yes", "-i", shQuote(p.identityFile));
+  parts.push(shQuote(`${p.user}@${p.host}`));
+  if (agentCmd) parts.push(shQuote(remoteAgentCmd(agentCmd)));
+  return parts.join(" ");
+}
+// Turns an sshAgentSelect value into what actually gets typed on the REMOTE
+// host, then falls back to an interactive login shell when the agent exits
+// (so quitting claude/codex doesn't just drop the ssh connection).
+//
+// The "-work" profiles can't rely on the local
+// `claude-work` wrapper script existing remotely (~/.local/bin/claude-work is
+// a local PATH convenience, not something any given remote box has) — instead
+// they set the same env var that script sets, inline: CLAUDE_CONFIG_DIR for
+// claude, CODEX_HOME for codex (same mapping agent-manager.js uses for the
+// local SDK-driven "-work" panes, agent-manager.js:108-112). This assumes the
+// remote account has its own ~/.claude-work / ~/.codex-work set up — same
+// assumption the local "-work" picker options already make about this
+// machine.
+function remoteAgentCmd(agentCmd: string): string {
+  const p = machine.profiles.find((x) => x.id === agentCmd);
+  // A personal account runs the bare CLI; a work account can't rely on a local
+  // `*-work` wrapper existing on the remote box, so it sets the same env var
+  // that wrapper sets, inline.
+  const run = !p
+    ? agentCmd
+    : p.account === "work"
+      ? `${p.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"}="$HOME/.${p.provider}-work" ${p.provider}`
+      : p.provider;
+  return `${run}; exec $SHELL -l`;
+}
+// POSIX single-quote escaping, so a value with spaces/special chars still
+// types as one literal argument into the pane's shell.
+function shQuote(s: string): string {
+  return "'" + s.replace(/'/g, `'\\''`) + "'";
 }
 function prettyPath(p: string): string {
   if (pickHome && (p === pickHome || p.startsWith(pickHome + "/")))
@@ -1004,6 +1456,43 @@ picker.addEventListener("click", (e) => {
 
 // ---- Control socket (grid-level events) -------------------------------
 let controlWs: WebSocket | null = null;
+// ---- Deep links from a tapped notification -----------------------------
+// A notification carries `#pane=<id>`. The fragment is the only part of the URL
+// that survives clients.openWindow() into a cold-started app in a form we can
+// read on boot — but we can't act on it immediately, because no pane exists
+// until the first `panes` snapshot arrives over the control socket. So it's
+// parked here and consumed there, once.
+let pendingDeepLink: string | null = (() => {
+  const m = /(?:^|[#&])pane=([^&]+)/.exec(location.hash);
+  return m ? decodeURIComponent(m[1]) : null;
+})();
+
+function consumeDeepLink() {
+  if (!pendingDeepLink) return;
+  const t = panes.get(pendingDeepLink);
+  pendingDeepLink = null;
+  if (!t) return; // the pane died between the push and the tap
+  zoom(t);
+  // Drop the fragment so a later refresh doesn't re-zoom, without adding a
+  // history entry.
+  history.replaceState(null, "", `${location.pathname}${location.search}`);
+}
+
+// The service worker talks to us for two things: a tapped notification that
+// found this window already open (focus-pane), and a courtesy heads-up that a
+// push arrived (push-attention). The latter is only a hint — the control socket
+// is the authority on pane state and the two race by design.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (ev: MessageEvent) => {
+    const m = ev.data || {};
+    if (m.t === "focus-pane" && m.pane) {
+      const t = panes.get(m.pane);
+      if (t) zoom(t);
+      else pendingDeepLink = m.pane; // not here yet — let the next snapshot catch it
+    }
+  });
+}
+
 function connectControl() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/control?session=${encodeURIComponent(SESSION)}`);
@@ -1018,12 +1507,19 @@ function connectControl() {
         const live = new Set((m.panes as PaneInfo[]).map((p) => p.id));
         for (const info of m.panes as PaneInfo[]) addTerm(info);
         for (const id of [...panes.keys()]) if (!live.has(id)) removeTerm(id);
+        consumeDeepLink(); // panes only exist now — see the note on pendingDeepLink
         break;
       }
-      case "created":
+      case "created": {
         undormant(m.pane.id); // a respawn lands here — drop its recovery chip
-        addTerm(m.pane);
+        // A view flip broadcasts `closed` then `created` with `replaces` set to
+        // the old id, which is what lets the new box reclaim the old one's slot.
+        const slot = vacated;
+        vacated = null;
+        const at = slot !== null && slot.id === m.replaces ? slot.at : undefined;
+        addTerm(m.pane, at);
         break;
+      }
       case "closed":
         removeTerm(m.pane);
         break;
@@ -1045,6 +1541,11 @@ function connectControl() {
       case "usage":
         usageRows = m.usage || [];
         renderUsage();
+        pushUsageToPanes();
+        break;
+      // A pane's driver reported which model it resolved to (agent-manager.js).
+      case "model":
+        panes.get(m.pane)?.setModel(m.model);
         break;
       case "usage-reset":
         onUsageReset(m);
@@ -1082,6 +1583,9 @@ function connectControl() {
       }
       case "layouts":
         loadLayouts(); // a layout was saved/removed in some window
+        break;
+      case "ssh-profiles":
+        loadSshProfiles(); // an SSH server profile was added/edited/removed in some window
         break;
     }
   };
@@ -1254,30 +1758,215 @@ async function loadLayouts() {
   layoutSel.value = currentLayout || keep || "";
 }
 
+// ---- SSH servers --------------------------------------------------------
+// Two sources, merged in the picker's "SSH" optgroup: FleetView-managed
+// profiles (sshProfiles, editable via the Manage… modal, key/agent auth
+// only — see server/ssh-profiles.js) and aliases auto-discovered read-only
+// from ~/.ssh/config (sshHosts — see server/ssh-hosts.js). FleetView never
+// writes to ~/.ssh/config; it only reads it.
+type SshProfile = { name: string; host: string; port: number; user: string; identityFile?: string };
+type SshHost = { alias: string; hostName: string; user: string; port: number };
+let sshProfiles: SshProfile[] = [];
+let sshHosts: SshHost[] = [];
+
+async function loadSshProfiles() {
+  sshProfiles = await fetch("/api/ssh-profiles").then((r) => r.json());
+  renderSshOptions();
+  renderSshManagerList();
+}
+async function loadSshHosts() {
+  sshHosts = await fetch("/api/ssh-hosts").then((r) => r.json());
+  renderSshOptions();
+  renderSshManagerList();
+}
+
+function renderSshOptions() {
+  const keep = agentSelect.value;
+  sshOptGroup.innerHTML = "";
+  for (const p of sshProfiles) {
+    const o = document.createElement("option");
+    o.value = "sshprofile:" + p.name;
+    o.textContent = p.name;
+    sshOptGroup.append(o);
+  }
+  for (const h of sshHosts) {
+    const o = document.createElement("option");
+    o.value = "sshhost:" + h.alias;
+    o.textContent = h.alias + " (~/.ssh/config)";
+    sshOptGroup.append(o);
+  }
+  // Re-selecting the same value after rebuilding options only "sticks" if it
+  // still exists (e.g. a profile that was just deleted falls back to claude).
+  agentSelect.value = keep;
+  if (agentSelect.value !== keep) agentSelect.value = machine.accounts[0] || "";
+  updateChatViewAvailability();
+  updateSshRunRow();
+}
+
+// ---- SSH server manager modal -------------------------------------------
+const sshManager = document.getElementById("sshManager") as HTMLElement;
+const sshList = document.getElementById("sshList")!;
+const sshEdit = document.getElementById("sshEdit") as HTMLElement;
+const sshEditTitle = document.getElementById("sshEditTitle")!;
+const sshNameEl = document.getElementById("sshName") as HTMLInputElement;
+const sshHostEl = document.getElementById("sshHost") as HTMLInputElement;
+const sshPortEl = document.getElementById("sshPort") as HTMLInputElement;
+const sshUserEl = document.getElementById("sshUser") as HTMLInputElement;
+const sshIdentityEl = document.getElementById("sshIdentity") as HTMLInputElement;
+let sshEditOriginalName: string | null = null; // set when editing, so Save can rename via delete+create
+
+function openSshManager() {
+  sshManager.hidden = false;
+  renderSshManagerList();
+}
+function closeSshManager() {
+  sshManager.hidden = true;
+}
+function renderSshManagerList() {
+  if (sshManager.hidden) return;
+  sshList.innerHTML = "";
+  if (!sshProfiles.length) {
+    const empty = document.createElement("div");
+    empty.className = "prow empty";
+    empty.textContent = "no saved servers yet — “+ Add server” below";
+    sshList.append(empty);
+  }
+  for (const p of sshProfiles) {
+    const row = document.createElement("div");
+    row.className = "prow sshrow";
+    const nm = document.createElement("span");
+    nm.className = "nm";
+    const main = document.createElement("span");
+    main.textContent = p.name;
+    const sub = document.createElement("span");
+    sub.className = "sub";
+    sub.textContent = `${p.user}@${p.host}${p.port !== 22 ? ":" + p.port : ""}${p.identityFile ? " · " + p.identityFile : ""}`;
+    nm.append(main, sub);
+    const actions = document.createElement("span");
+    actions.className = "ssh-actions";
+    const edit = document.createElement("button");
+    edit.textContent = "✎";
+    edit.title = "Edit";
+    edit.onclick = () => openSshEdit(p);
+    const del = document.createElement("button");
+    del.className = "ssh-del";
+    del.textContent = "✕";
+    del.title = "Delete";
+    del.onclick = () => deleteSshProfile(p.name);
+    actions.append(edit, del);
+    row.append(nm, actions);
+    sshList.append(row);
+  }
+  if (sshHosts.length) {
+    const label = document.createElement("div");
+    label.className = "prow empty";
+    label.textContent = "From ~/.ssh/config (read-only):";
+    sshList.append(label);
+    for (const h of sshHosts) {
+      const row = document.createElement("div");
+      row.className = "prow sshrow";
+      const nm = document.createElement("span");
+      nm.className = "nm";
+      const main = document.createElement("span");
+      main.textContent = h.alias;
+      const sub = document.createElement("span");
+      sub.className = "sub";
+      sub.textContent = h.user ? `${h.user}@${h.hostName}` : h.hostName;
+      nm.append(main, sub);
+      row.append(nm);
+      sshList.append(row);
+    }
+  }
+}
+function openSshEdit(p?: SshProfile) {
+  sshEditOriginalName = p ? p.name : null;
+  sshEditTitle.textContent = p ? "Edit SSH server" : "Add SSH server";
+  sshNameEl.value = p?.name ?? "";
+  sshHostEl.value = p?.host ?? "";
+  sshPortEl.value = p ? String(p.port) : "";
+  sshUserEl.value = p?.user ?? "";
+  sshIdentityEl.value = p?.identityFile ?? "";
+  sshEdit.hidden = false;
+  sshNameEl.focus();
+}
+function closeSshEdit() {
+  sshEdit.hidden = true;
+}
+async function saveSshProfile() {
+  const name = sshNameEl.value.trim();
+  const host = sshHostEl.value.trim();
+  const user = sshUserEl.value.trim();
+  if (!name || !host || !user) {
+    alert("Name, host, and user are required.");
+    return;
+  }
+  const renaming = sshEditOriginalName && sshEditOriginalName !== name;
+  // Renaming onto another profile's name would silently overwrite it (save()
+  // upserts by name) — confirm rather than clobber it quietly.
+  if (renaming && sshProfiles.some((p) => p.name === name)) {
+    if (!confirm(`“${name}” already exists — replace it?`)) return;
+  }
+  // Renaming = a new record under the new name; drop the old one so it
+  // doesn't linger as a duplicate.
+  if (renaming) {
+    await fetch(`/api/ssh-profiles/${encodeURIComponent(sshEditOriginalName!)}`, { method: "DELETE" });
+  }
+  const r = await fetch("/api/ssh-profiles", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name,
+      host,
+      user,
+      port: sshPortEl.value ? Number(sshPortEl.value) : 22,
+      identityFile: sshIdentityEl.value.trim(),
+    }),
+  }).then((r) => r.json());
+  if (r?.error) {
+    alert("Couldn't save: " + r.error);
+    return;
+  }
+  closeSshEdit();
+  await loadSshProfiles(); // also arrives via the "ssh-profiles" broadcast, but don't wait on it
+}
+async function deleteSshProfile(name: string) {
+  if (!confirm(`Delete saved server “${name}”?`)) return;
+  await fetch(`/api/ssh-profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
+  await loadSshProfiles();
+}
+
+document.getElementById("sshManageBtn")!.addEventListener("click", () => {
+  closeSettings();
+  openSshManager();
+});
+document.getElementById("sshManagerClose")!.addEventListener("click", closeSshManager);
+document.getElementById("sshAddBtn")!.addEventListener("click", () => openSshEdit());
+document.getElementById("sshEditCancel")!.addEventListener("click", closeSshEdit);
+document.getElementById("sshEditSave")!.addEventListener("click", saveSshProfile);
+sshManager.addEventListener("click", (e) => {
+  if (e.target === sshManager) closeSshManager();
+});
+sshEdit.addEventListener("click", (e) => {
+  if (e.target === sshEdit) closeSshEdit();
+});
+
 // ---- Usage (subscription limits, per account) --------------------------
 // Rows are per ACCOUNT, not per pane: every claude box draws on the same
 // 5-hour bucket, so a row per box would repeat the same number N times.
 // Reading these costs no tokens (see server/usage.js), so the server polls on
 // a timer and also takes free pushes from live panes.
-type UsageWindow = { label: string; percent: number; resetsAt: number | null };
-type UsageRow = {
-  id: string;
-  label: string;
-  plan: string | null;
-  available: boolean;
-  primary: UsageWindow | null;
-  secondary: UsageWindow | null;
-  error: string | null;
-};
 
 const usageListEl = document.getElementById("usageList")!;
 const usageRefreshEl = document.getElementById("usageRefresh") as HTMLButtonElement;
 let usageRows: UsageRow[] = [];
 
 /** Colour by headroom, so a row that's about to bite reads as urgent. */
+// ONE ramp, shared with the usage rings in each chat pane's tools row
+// (usageLevel in agent-chat.ts). If these two ever disagree the same account
+// reads green on a ring and amber in this panel.
 function usageLevel(pct: number): string {
   if (pct >= 90) return "crit";
-  if (pct >= 70) return "warn";
+  if (pct >= 75) return "warn";
   return "ok";
 }
 
@@ -1405,6 +2094,11 @@ const volRow = document.getElementById("volRow")!;
 const notifyEl = document.getElementById("setNotify") as HTMLInputElement;
 const notifyNote = document.getElementById("notifyNote")!;
 const confirmCloseEl = document.getElementById("setConfirmClose") as HTMLInputElement;
+const pushDeviceEl = document.getElementById("setPushDevice") as HTMLInputElement;
+const pushNote = document.getElementById("pushNote")!;
+const pushCats = document.getElementById("pushCats")!;
+const pushQuestionEl = document.getElementById("setPushQuestion") as HTMLInputElement;
+const pushDoneEl = document.getElementById("setPushDone") as HTMLInputElement;
 
 /** Mark the selected button in a segmented control. */
 function seg(id: string, value: string) {
@@ -1446,6 +2140,12 @@ function applySettings() {
   volRow.classList.toggle("off", !s.sound);
   notifyEl.checked = s.notify;
   confirmCloseEl.checked = s.confirmClose;
+  pushQuestionEl.checked = s.pushQuestion;
+  pushDoneEl.checked = s.pushDone;
+  // The device switch is NOT a pref — it reflects whether this device actually
+  // holds a push subscription, which only push.ts knows.
+  pushDeviceEl.checked = pushActive();
+  pushCats.setAttribute("aria-disabled", pushActive() ? "false" : "true");
 
   renderQueue(); // favicon colours come from CSS vars — repaint after a theme flip
 }
@@ -1504,11 +2204,68 @@ confirmCloseEl.addEventListener("change", () => {
   applySettings();
 });
 
+// Push, per device. This handler IS the user gesture that iOS requires before
+// Notification.requestPermission() will resolve to anything but "denied", which
+// is why enabling can't happen at boot or from a settings reconcile.
+pushDeviceEl.addEventListener("change", async () => {
+  pushNote.hidden = true;
+  if (!pushDeviceEl.checked) {
+    await disablePush();
+    applySettings();
+    return;
+  }
+  const res = await enablePush();
+  if (!res.ok) {
+    // Say what went wrong rather than letting the checkbox silently spring
+    // back — on iPhone the reason is almost always the fixable "add it to your
+    // Home Screen first", which is worth spelling out.
+    pushNote.textContent = res.reason || "Couldn't enable push on this device.";
+    pushNote.hidden = false;
+  }
+  applySettings();
+});
+pushQuestionEl.addEventListener("change", () => {
+  patchSettings({ pushQuestion: pushQuestionEl.checked });
+  applySettings();
+});
+pushDoneEl.addEventListener("change", () => {
+  patchSettings({ pushDone: pushDoneEl.checked });
+  applySettings();
+});
+
 // ---- Boot -------------------------------------------------------------
 applySettings(); // instant, from the localStorage mirror; loadPrefs() reconciles with the server
 connectControl();
+// Before anything reads machine.accounts: the picker's options, the agent
+// whitelist and the badge image all come from it.
+void loadMachine();
 loadLayouts();
+loadSshProfiles();
+loadSshHosts();
 loadPrefs();
 setCurrentLayout(currentLayout); // restore the indicator after a refresh
 renderQueue(); // draw the idle favicon / base title before any attention arrives
 initTasks(); // task-list sidebar (tree arrives via the control socket)
+// Register the service worker and re-validate an existing subscription. Never
+// prompts (see push.ts); applySettings() afterwards so the per-device checkbox
+// reflects the subscription we just confirmed rather than defaulting to off.
+void initPush(SESSION).then(applySettings);
+loadIdentity(); // name this machine in the top bar + tab title
+
+/**
+ * Ask the server which machine this is (see server/identity.js). One workspace
+ * = one machine, so with two of these open — a laptop's and a box's — the bar
+ * and tab strip need to say which host's shells you're looking at. Best-effort:
+ * on failure the UI just keeps the generic "FleetView" branding.
+ */
+async function loadIdentity() {
+  try {
+    const { label } = await fetch("/api/identity").then((r) => r.json());
+    if (!label) return;
+    brandEl.textContent = `▦ ${label}`;
+    brandEl.title = `FleetView on ${label}`;
+    setAppLabel(label);
+  } catch {
+    /* keep the default branding */
+  }
+}

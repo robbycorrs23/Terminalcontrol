@@ -35,6 +35,36 @@ function accountConfigDirFor(cmd, provider) {
   return String(cmd || "").endsWith("-work") ? join(homedir(), `.${provider}-work`) : null;
 }
 
+/**
+ * The REMOTE counterpart of accountConfigDirFor: a `$HOME`-relative shell
+ * env-var assignment instead of a local homedir()-joined path, since a
+ * remote pane's account isolation has to be set on the far end of the ssh
+ * connection (baked into the command line — see ssh-remote-agent.js), not
+ * via a local spawn() env option that never crosses the connection.
+ */
+function remoteEnvPrefix(cmd, provider) {
+  if (!String(cmd || "").endsWith("-work")) return "";
+  const v = provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
+  return `${v}="$HOME/.${provider}-work" `;
+}
+
+/**
+ * Validates/whitelists a client-supplied `remote` descriptor before it's
+ * stored on a pane or shelled out to — same trust model as ssh-profiles.js's
+ * save(): this is a local-only, unauthenticated tool, so the goal is
+ * catching mistakes, not defending against a hostile caller.
+ */
+function sanitizeRemote(r) {
+  if (!r || typeof r !== "object") return null;
+  const target = String(r.target || "").trim().slice(0, 256);
+  if (!target) return null;
+  const out = { target };
+  const port = parseInt(r.port, 10);
+  if (Number.isFinite(port) && port > 0 && port <= 65535) out.port = port;
+  if (r.identityFile) out.identityFile = String(r.identityFile).trim().slice(0, 512);
+  return out;
+}
+
 export class AgentManager {
   /**
    * @param {string} stateFile
@@ -64,6 +94,7 @@ export class AgentManager {
         // Recomputed, never read back from the record — see accountConfigDirFor.
         accountConfigDir: accountConfigDirFor(r.cmd, provider),
         mode: r.mode || "default", // older records predate mode-switching — default is what they always ran as
+        remote: sanitizeRemote(r.remote), // re-validated, not trusted verbatim off disk
         driver: null,
         events: [],
         clients: new Set(),
@@ -89,6 +120,8 @@ export class AgentManager {
       name: p.name,
       createdAt: p.createdAt,
       mode: p.mode,
+      model: p.model || null,
+      remote: p.remote || null,
     }));
     writeFileSync(this.stateFile, JSON.stringify(records, null, 2));
   }
@@ -127,7 +160,11 @@ export class AgentManager {
    */
   _resumableSessionId(pane) {
     const sid = pane.sdkSessionId;
-    if (!sid || pane.provider === "codex") return sid || undefined;
+    // codex ids are never verified (see the comment above), and neither is a
+    // remote pane's — the local ~/.claude/projects scan below can only see
+    // THIS machine's transcripts, which is meaningless for a session running
+    // against a remote account. Trust the persisted id in both cases.
+    if (!sid || pane.provider === "codex" || pane.remote) return sid || undefined;
     const projects = join(pane.accountConfigDir || join(homedir(), ".claude"), "projects");
     try {
       for (const proj of readdirSync(projects)) {
@@ -148,12 +185,22 @@ export class AgentManager {
       resume: this._resumableSessionId(pane),
       mode: pane.mode || "default",
       env: this._buildEnv(pane),
+      remote: pane.remote ? { ...pane.remote, envPrefix: remoteEnvPrefix(pane.cmd, pane.provider) } : null,
       onEvent: (ev) => this._handleEvent(pane, ev),
       onSessionId: (sid) => {
         if (pane.sdkSessionId !== sid) {
           pane.sdkSessionId = sid;
           this._persist();
         }
+      },
+      // Which model this session actually resolved to. Persisted so a restored
+      // pane can label itself before its driver has started, and broadcast so
+      // the badge updates without waiting for the next pane-list refresh.
+      onModel: (model) => {
+        if (!model || pane.model === model) return;
+        pane.model = model;
+        this._persist();
+        this.broadcast(pane.session, { t: "model", pane: pane.id, model });
       },
       // Limits are per-ACCOUNT, so this is keyed by cmd ("claude" / "claude-work"
       // / "codex" / "codex-work") — the same string accountConfigDirFor() reads —
@@ -164,8 +211,17 @@ export class AgentManager {
   }
 
   _handleEvent(pane, ev) {
-    pane.events.push(ev);
-    if (pane.events.length > RING_BUFFER_SIZE) pane.events.shift();
+    // Deltas are LIVE-ONLY, never stored: codex streams one assistant message
+    // as hundreds of assistant_delta events, so ringing them would evict the
+    // entire 300-event replay history on a single long reply — a reattached
+    // codex pane would come back showing the tail of one message and nothing
+    // else. The assistant_done that follows carries the full text, so replay
+    // loses nothing. Tradeoff: a message interrupted before item/completed
+    // fires isn't in the replay (it stays on screen for connected clients).
+    if (ev.t !== "assistant_delta") {
+      pane.events.push(ev);
+      if (pane.events.length > RING_BUFFER_SIZE) pane.events.shift();
+    }
 
     if (ev.t === "permission_request" || ev.t === "question") {
       this.setAttention(pane.id, "question");
@@ -177,6 +233,11 @@ export class AgentManager {
       if (wasWorking !== (ev.state === "working"))
         this.broadcast(pane.session, { t: "work", pane: pane.id, on: ev.state === "working" });
       if (ev.state === "idle") this.setAttention(pane.id, "done");
+      // Cut off (interrupt/restart/rate-limit/API hiccup), not a genuine
+      // finish — see claude-driver.js/codex-driver.js. Its own attention
+      // kind, not "done": the pane does need a look, but for a different
+      // reason than "here's your answer."
+      else if (ev.state === "aborted") this.setAttention(pane.id, "aborted");
     } else if (ev.t === "mode" && pane.mode !== ev.mode) {
       pane.mode = ev.mode;
       this._persist();
@@ -192,7 +253,7 @@ export class AgentManager {
 
   // ---- Creation / lifecycle, mirrors PtyManager's surface ---------------
 
-  create({ cwd, cmd, session }) {
+  create({ cwd, cmd, session, remote, order, sdkSessionId, mode }) {
     const provider = cmd.startsWith("codex") ? "codex" : "claude";
     const id = randomUUID().slice(0, 8);
     const home = homedir();
@@ -204,9 +265,19 @@ export class AgentManager {
       cmd,
       provider,
       accountConfigDir: accountConfigDirFor(cmd, provider),
+      // Set only when this pane's claude/codex runs over ssh on another
+      // host instead of locally — see ssh-remote-agent.js / the plan.
+      remote: sanitizeRemote(remote),
       session: session || null,
-      order: this.seq++,
-      sdkSessionId: null,
+      order: order ?? this.seq++,
+      // Normally null — the driver reports its own id on first connect. A value
+      // here means this pane was flipped over from a terminal pane
+      // (pane-registry.js `flip`) and should RESUME that conversation rather
+      // than open a blank one; _ensureDriver picks it up via
+      // _resumableSessionId, which also validates it against this account's
+      // transcripts and quietly drops it if it isn't there.
+      //
+      sdkSessionId: sdkSessionId || null,
       driver: null,
       events: [],
       clients: new Set(),
@@ -217,7 +288,14 @@ export class AgentManager {
       name: "",
       createdAt: Date.now(),
       status: "idle",
-      mode: "default",
+      // NEW PANES START IN AUTO, not the CLI's "ask for everything" default —
+      // that is what this fleet always switches to by hand, and the selector is
+      // right there to change it per pane. An explicit `mode` (a view flip
+      // carrying the mode across) always wins: losing it on a switch silently
+      // downgrades a pane, which is exactly the quiet regression a "view"
+      // toggle must not cause. Codex has its own vocabulary but happens to
+      // spell this the same way.
+      mode: mode || "auto",
     };
     this.panes.set(id, pane);
     this._persist();
@@ -251,6 +329,7 @@ export class AgentManager {
     if (pane._hydrated || pane.events.length || !pane.sdkSessionId) return;
     pane._hydrated = true;
     if (pane.provider === "codex") return; // different on-disk layout — see transcript.js
+    if (pane.remote) return; // transcript lives on the REMOTE disk — same "comes back empty" precedent as codex above
     try {
       const configDir = pane.accountConfigDir || join(homedir(), ".claude");
       const events = restoreEvents(configDir, pane.sdkSessionId, RING_BUFFER_SIZE - 10);
@@ -378,6 +457,10 @@ export class AgentManager {
 
   // ---- Generic pane metadata, same method names/shapes as PtyManager ----
 
+  sdkSessionIdOf(id) {
+    return this.panes.get(id)?.sdkSessionId || null;
+  }
+
   info(id) {
     const p = this.panes.get(id);
     if (!p) return null;
@@ -387,6 +470,8 @@ export class AgentManager {
       cwd: p.cwd,
       cmd: p.cmd,
       session: p.session,
+      // See PtyManager.info — needed for registry.list()'s cross-manager sort.
+      order: p.order,
       attention: p.attention,
       working: p.status === "working",
       followUp: p.followUp,
@@ -395,6 +480,8 @@ export class AgentManager {
       name: p.name || "",
       createdAt: p.createdAt,
       mode: p.mode || "default",
+      model: p.model || null,
+      remote: p.remote || null,
     };
   }
 
@@ -414,19 +501,35 @@ export class AgentManager {
     return this.panes.get(id)?.session ?? null;
   }
 
-  idsOf(session) {
-    return [...this.panes.values()].filter((p) => p.session === session).map((p) => p.id);
+  // `session` ignored — one workspace per machine (see pane-registry.js).
+  idsOf() {
+    return [...this.panes.values()].map((p) => p.id);
   }
 
   // Mirrors PtyManager.reorder's per-manager-local sequential numbering
   // exactly (increments only on a match) — see pane-registry.js for the
   // known limitation this produces when a drag-reorder mixes pty and agent
   // panes in the same window.
-  reorder(session, ids) {
+  reorder(_session, ids) {
     let i = 0;
     for (const id of ids) {
       const p = this.panes.get(id);
-      if (p && p.session === session) p.order = i++;
+      if (p) p.order = i++;
+    }
+    this._persist();
+  }
+
+  /**
+   * Assign order from an id -> position map computed ACROSS both managers.
+   * `reorder` above can't do that job: it numbers only the ids it owns, 0..n,
+   * so a grid holding both kinds ends up with two independent sequences and
+   * every position collides with its opposite number. That was survivable when
+   * kinds rarely mixed; flipping a pane's view mixes them constantly.
+   */
+  applyOrder(orderById) {
+    for (const [id, n] of orderById) {
+      const p = this.panes.get(id);
+      if (p) p.order = n;
     }
     this._persist();
   }

@@ -2,12 +2,13 @@ import express from "express";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
-import { dirname, join, extname, resolve } from "node:path";
-import { mkdtempSync, writeFileSync, mkdirSync, statSync, existsSync, unlinkSync, chmodSync } from "node:fs";
+import { basename, dirname, join, extname, resolve } from "node:path";
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, statSync, existsSync, unlinkSync, chmodSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { PtyManager } from "./pty-manager.js";
 import { AgentManager } from "./agent-manager.js";
 import { createRegistry } from "./pane-registry.js";
+import * as machine from "./machine-config.js";
 import { SecretVault } from "./secret-vault.js";
 import { gateConfigured, verifyStepUpToken } from "./step-up-token.js";
 import { collectSnapshot, saveSnapshot, SNAPSHOT_DIR } from "./snapshot.js";
@@ -15,6 +16,13 @@ import { openInEditor, openFolder } from "./open-file.js";
 import { findPathLinks } from "./path-links.js";
 import { LayoutStore } from "./layout-store.js";
 import { TaskStore } from "./task-store.js";
+import { PushStore } from "./push-store.js";
+import { VapidKeys } from "./push-vapid.js";
+import { createSender } from "./push-send.js";
+import { createPushNotifier } from "./push-notifier.js";
+import { createIdentity, ICON_COLORS } from "./identity.js";
+import { SshProfileStore } from "./ssh-profiles.js";
+import { listSshConfigHosts } from "./ssh-hosts.js";
 import { UsageMonitor } from "./usage-monitor.js";
 import { normalizeCodexSnapshot, normalizeClaudeEvent } from "./usage.js";
 import { ensureHooks } from "./setup-hooks.js";
@@ -93,20 +101,55 @@ agents.onRateLimit = (accountId, data) => {
 };
 const layouts = new LayoutStore(join(ROOT, "layouts.json"));
 const tasks = new TaskStore(join(ROOT, "tasks.json"));
+// User-added SSH server profiles (key/agent auth only — see ssh-profiles.js).
+// Never contains password/secret material, so unlike pane-secrets.json this
+// is safe to keep as a plain JSON file alongside layouts/tasks.
+const sshProfiles = new SshProfileStore(join(ROOT, "ssh-profiles.json"));
+// Web Push state lives in ~/.fleetview/ at 0600, not here in the repo root: a
+// push endpoint is a capability URL and the VAPID private key can mint messages
+// to your devices, so both belong with passkeys.json rather than layouts.json.
+const FLEET_DIR = join(homedir(), ".fleetview");
+const pushStore = new PushStore(join(FLEET_DIR, "push-subscriptions.json"));
+const vapid = new VapidKeys(join(FLEET_DIR, "vapid.json"));
+// Which machine this is, for the app name / icon colour / in-app label. Reads
+// from DIST because that's where vite copies client/public/icons/.
+const identity = createIdentity(DIST);
 // The loud "tmux missing" warning is handled by preflight() above; here we just
 // confirm the durable path when it IS available.
 if (ptys.tmux) console.log("[fleetview] tmux-backed terminals — they survive server restarts.");
 
-// Grid-level events are scoped to a session (= one browser window). Each control
-// socket carries its window's session id; events only reach that window.
+// Grid events go to EVERY open window — see the "one workspace per machine"
+// note in pane-registry.js. The `session` argument is kept because callers all
+// have one to hand and it still identifies the pane's owner for secret release,
+// but it no longer selects an audience: a phone and a laptop looking at the
+// same FleetView are looking at the same fleet, so they must see the same
+// events. (broadcastAll below is now equivalent; it's kept for the handful of
+// call sites that never had a session to pass.)
 const controlClients = new Set();
+// Assigned just below, once broadcast/broadcastAll are defined. Declared here
+// (rather than constructed inline) so that broadcast() — which is hoisted and
+// handed to AgentManager well above this line — can never hit a temporal dead
+// zone if something ever broadcasts during startup.
+let pushes = null;
 function broadcast(session, msg) {
   const s = JSON.stringify(msg);
   for (const ws of controlClients) {
-    if (ws.fleetSession !== session) continue;
     try {
       ws.send(s);
     } catch {}
+  }
+  // Web Push piggybacks here, and this spot is deliberate: it is the ONLY
+  // choke point that sees attention from both pane kinds. PTY panes arrive via
+  // ptys.on("attention") below, but agent/chat panes call broadcast() directly
+  // from agent-manager.js, so hooking the emitter would miss every chat pane.
+  // Fire-and-forget — never await, this function is hot for `work` events on a
+  // pane streaming megabytes.
+  if (msg && msg.t === "attention") {
+    try {
+      pushes?.onAttention(msg.pane, msg.kind, session);
+    } catch (e) {
+      console.warn(`[fleetview] push notify failed: ${e.message}`);
+    }
   }
 }
 // Layouts are global (shared across windows), so their changes go to everyone.
@@ -118,6 +161,48 @@ function broadcastAll(msg) {
     } catch {}
   }
 }
+// "Only while I'm here" (see secret-vault.js) has to survive the client
+// deliberately dropping its own control socket: main.ts re-opens it on wake
+// from sleep, on `online`, on bfcache restore, and whenever a hidden tab's
+// throttled heartbeat looks like a suspend. A close is therefore NOT proof the
+// window is gone — so hold injected secrets for a grace period and only expire
+// them if no control socket for that session comes back. Anything shorter
+// silently ate 15-minute secrets seconds after they were set.
+const SESSION_GRACE_MS = 45_000;
+const pendingSecretRelease = new Map(); // session -> timer
+
+function sessionIsConnected(session) {
+  for (const ws of controlClients) if (ws.fleetSession === session) return true;
+  return false;
+}
+function cancelSecretRelease(session) {
+  const t = pendingSecretRelease.get(session);
+  if (t) clearTimeout(t);
+  pendingSecretRelease.delete(session);
+}
+function scheduleSecretRelease(session) {
+  if (session == null) return;
+  cancelSecretRelease(session);
+  // Another socket for this window is still open (two tabs sharing a
+  // ?session=, or a reconnect that raced ahead of this close) — nothing to do.
+  if (sessionIsConnected(session)) return;
+  const t = setTimeout(() => {
+    pendingSecretRelease.delete(session);
+    if (sessionIsConnected(session)) return; // it came back
+    secrets.releaseAllForSession(session);
+  }, SESSION_GRACE_MS);
+  t.unref?.();
+  pendingSecretRelease.set(session, t);
+}
+
+// Web Push fan-out, now that broadcast() and the stores all exist.
+pushes = createPushNotifier({
+  registry,
+  prefs: () => layouts.prefs(),
+  store: pushStore,
+  send: createSender(vapid),
+});
+
 ptys.on("attention", (pane, kind) => broadcast(registry.sessionOf(pane), { t: "attention", pane, kind }));
 // A pane started/stopped working (see PtyManager's work-detection notes). Edge-
 // triggered, so this is cheap even while a pane is streaming output.
@@ -233,10 +318,13 @@ app.delete("/api/dormant/:id", (req, res) => {
 });
 
 app.post("/api/panes", (req, res) => {
-  const { cwd, cmd, session, kind } = req.body || {};
+  // `remote` is only meaningful for kind:"agent" (a chat-view session
+  // running claude/codex over ssh — see ssh-remote-agent.js); PtyManager.create
+  // ignores the extra field harmlessly for kind:"pty".
+  const { cwd, cmd, session, kind, remote } = req.body || {};
   let pane;
   try {
-    pane = registry.create({ cwd, cmd, session, kind });
+    pane = registry.create({ cwd, cmd, session, kind, remote });
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -244,6 +332,45 @@ app.post("/api/panes", (req, res) => {
   layouts.addRecent(info.cwd);
   broadcast(info.session, { t: "created", pane: info });
   res.json(info);
+});
+
+/**
+ * Flip ONE pane between terminal view and chat view.
+ *
+ * Per-pane on purpose: the two views are genuinely different processes (see
+ * pane-registry.js `flip`), so this is destroy-and-recreate-resuming-the-same-
+ * conversation, and that is a decision worth making one box at a time rather
+ * than sweeping the whole grid.
+ *
+ * Refuses rather than guessing — mid-turn, plain shell, raw ssh box, remote
+ * chat pane, or a terminal whose agent hasn't reported a session id yet. The
+ * reason goes back to the client so it can say why instead of doing nothing
+ * visible.
+ */
+app.post("/api/panes/:id/flip", (req, res) => {
+  const before = registry.info(req.params.id);
+  if (!before) return res.status(404).json({ error: "no such pane" });
+
+  // Captured BEFORE the flip: afterwards the old pane is gone and its grid
+  // position is unrecoverable. The new pane is created at the end of its
+  // manager's sequence, so without this the box jumps to the back of the grid.
+  const order = registry.list(before.session).map((p) => p.id);
+
+  const r = registry.flip(req.params.id);
+  if (!r.ok) return res.status(409).json({ ok: false, reason: r.reason });
+
+  // `replaces` tells the client this is the SAME box in a different view, so it
+  // reclaims the old one's grid slot instead of being appended at the end.
+  broadcast(before.session, { t: "closed", pane: r.id });
+  broadcast(r.info.session, { t: "created", pane: r.info, replaces: r.id });
+
+  const at = order.indexOf(r.id);
+  if (at !== -1) {
+    order[at] = r.info.id;
+    registry.reorder(before.session, order);
+  }
+
+  res.json({ ok: true, info: r.info, resumed: r.resumed });
 });
 
 // --- Filesystem browsing (for the folder picker) ---
@@ -265,8 +392,83 @@ app.post("/api/mkdir", async (req, res) => {
   }
 });
 
+// --- Per-machine settings (server/machine-config.js) ----------------------
+// Which accounts THIS machine offers, what its work badge looks like, what it
+// calls itself. Deliberately not in the repo: the same checkout runs on several
+// machines and they want different answers, which is exactly what went wrong
+// when the account list was hardcoded.
+app.get("/api/machine", (_req, res) => {
+  const cfg = machine.ensureSeeded();
+  res.json({
+    ...cfg,
+    profiles: machine.ALL_PROFILES, // the catalogue, for the settings checkboxes
+    installed: machine.installedProfiles(), // which are actually logged in here
+    iconColors: ICON_COLORS,
+    logoUrl: machine.badgeLogoPath() ? "/api/machine/logo?v=" + Date.now() : null,
+  });
+});
+
+app.put("/api/machine", (req, res) => {
+  const cfg = machine.update(req.body || {});
+  res.json(cfg);
+});
+
+// Same base64 data-URL shape as the pane file drop, so the client needs no new
+// upload plumbing. Extension-allowlisted and size-capped: this is written to
+// disk and then served back, so it must never be an arbitrary file.
+const LOGO_TYPES = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/svg+xml": ".svg" };
+app.post("/api/machine/logo", (req, res) => {
+  const m = /^data:([^;]*);base64,(.+)$/s.exec(req.body?.dataUrl || "");
+  if (!m) return res.status(400).json({ error: "expected a base64 data URL" });
+  const ext = LOGO_TYPES[m[1]];
+  if (!ext) return res.status(400).json({ error: "use a PNG, JPEG, WebP or SVG image" });
+  const buf = Buffer.from(m[2], "base64");
+  if (buf.length > 512 * 1024) return res.status(400).json({ error: "image must be under 512 KB" });
+  machine.saveBadgeLogo(buf, ext);
+  res.json({ ok: true, logoUrl: "/api/machine/logo?v=" + Date.now() });
+});
+
+app.delete("/api/machine/logo", (_req, res) => {
+  machine.clearBadgeLogo();
+  res.status(204).end();
+});
+
+app.get("/api/machine/logo", (_req, res) => {
+  const file = machine.badgeLogoPath();
+  if (!file) return res.status(404).end();
+  // Same lockdown as /api/file: this is user-supplied bytes being served back,
+  // and an SVG is a script host unless it is sandboxed.
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.sendFile(file);
+});
+
+// Machine identity for the running UI (top bar + tab title). Separate from
+// /api/prefs on purpose: prefs are YOUR settings and sync across devices,
+// this is a property of the machine you happen to be connected to.
+app.get("/api/identity", (_req, res) => res.json({ label: identity.label, color: identity.color }));
+
 app.get("/api/prefs", (_req, res) => res.json(layouts.prefs()));
 app.put("/api/prefs", (req, res) => res.json(layouts.setPrefs(req.body || {})));
+
+// --- Web Push -----------------------------------------------------------
+// Sits behind the same sameOrigin() guard and express.json() as everything
+// above, so these inherit the CSRF/DNS-rebinding protection for free.
+//
+// Note there is no "enabled" flag to toggle: a device is subscribed if it has a
+// row here, and unsubscribed if it doesn't.
+app.get("/api/push/key", (_req, res) =>
+  res.json({ key: vapid.publicKeyB64(), devices: pushStore.count() })
+);
+app.post("/api/push/subscribe", (req, res) => {
+  const row = pushStore.upsert(req.body || {});
+  if (!row) return res.status(400).json({ error: "not a valid push subscription" });
+  res.json({ ok: true, devices: pushStore.count() });
+});
+app.post("/api/push/unsubscribe", (req, res) => {
+  pushStore.remove(req.body?.endpoint);
+  res.status(204).end();
+});
 
 app.delete("/api/panes/:id", (req, res) => {
   const session = registry.sessionOf(req.params.id);
@@ -332,6 +534,78 @@ function mimeExt(mime) {
   );
 }
 
+// --- Local media -----------------------------------------------------------
+// The chat view renders `![shot](/tmp/plot.png)` and bare links to video/audio
+// as real embedded media (see client/src/markdown.ts). Those files live on this
+// machine's disk, not under `dist/`, so the browser needs one route that can
+// hand them back.
+//
+// This is deliberately an EXTENSION allowlist, not a directory allowlist: the
+// whole point is that an agent writes a chart to `/tmp`, a screenshot to its
+// own cwd, or a diagram wherever it likes, and the user sees it inline. Scoping
+// it to a directory would miss the common case. That is not the security
+// give-away it looks like — this server already spawns unauthenticated shells,
+// so anything that can reach the port can `cat` any file anyway (see the
+// Security note in CLAUDE.md); reading a .png through here grants nothing new.
+// The allowlist exists to keep the route boring, not to contain it: it can't be
+// pointed at `~/.ssh/id_rsa` and get text back.
+const MEDIA_TYPES = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+  ".svg": "image/svg+xml",
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".ogv": "video/ogg",
+  ".mov": "video/quicktime",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".wav": "audio/wav",
+  ".oga": "audio/ogg",
+  ".ogg": "audio/ogg",
+  ".flac": "audio/flac",
+};
+app.get("/api/file", (req, res) => {
+  const raw = String(req.query.path || "");
+  if (!raw) return res.status(400).end("missing path");
+  const file = resolve(raw);
+  const type = MEDIA_TYPES[extname(file).toLowerCase()];
+  // Unknown extension → 415, never a fallback to octet-stream. The client only
+  // ever points this route at media it already decided was media.
+  if (!type) return res.status(415).end("not a supported media type");
+  let st;
+  try {
+    st = statSync(file);
+  } catch {
+    return res.status(404).end("no such file");
+  }
+  if (!st.isFile()) return res.status(404).end("not a file");
+  res.type(type);
+  // An SVG is the one allowlisted type that can carry <script>. As an <img>
+  // source that script is inert, but pasting the URL into the address bar would
+  // run it on this origin — so every media response is served under a CSP that
+  // permits nothing and a sandbox with no allow-* tokens (a unique opaque
+  // origin, scripting disabled). Belt-and-braces with nosniff, which stops a
+  // mislabelled .png from being re-interpreted as anything executable.
+  res.set("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.set("X-Content-Type-Options", "nosniff");
+  // Local files change under us (an agent re-runs a script and rewrites
+  // plot.png), and the URL carries no content hash to bust — so revalidate
+  // every time rather than serving a stale frame from the memory cache.
+  res.set("Cache-Control", "no-cache");
+  // sendFile (not readFileSync) so <video> range requests work: seeking a
+  // multi-hundred-MB screen recording must not buffer the whole file first.
+  res.sendFile(file, (err) => {
+    if (err && !res.headersSent) res.status(500).end("read failed");
+  });
+});
+
 app.post("/api/panes/:id/clear", (req, res) => {
   const session = registry.sessionOf(req.params.id);
   registry.clearAttention(req.params.id);
@@ -391,13 +665,21 @@ app.get("/api/panes/:id/secret-status", (req, res) => {
 
 app.post("/api/panes/:id/secret", (req, res) => {
   const id = req.params.id;
-  const paneSession = registry.sessionOf(id);
-  if (!paneSession) return res.status(404).json({ error: "no such (live) pane" });
+  if (!registry.info(id)) return res.status(404).json({ error: "no such (live) pane" });
   const { name, value, ttlMs, session, stepUpToken } = req.body || {};
-  // Ownership: only the browser window that currently has this pane can
-  // inject into it — a paneId can't be replayed from an unrelated tab/window.
-  if (!session || session !== paneSession) {
-    return res.status(403).json({ error: "this window doesn't own that pane" });
+  // NOT gated on `session` matching the pane's original CREATOR session
+  // (registry.sessionOf(id)) — that was a holdover from before "one workspace
+  // per machine" (pane-registry.js) and added no real access control, since
+  // every window can already read/type into every pane once it's on the
+  // fleet. It only ever succeeded in blocking injection from any window OTHER
+  // than the one that happened to create the pane — which broke it entirely
+  // for a PWA-only setup, since an iOS cold launch mints a fresh session every
+  // time (main.ts) and can never equal an old pane's creator session. `session`
+  // is still required, just not compared to anything: it's what secrets.inject()
+  // records below so the secret auto-releases when THIS window disconnects
+  // (see SESSION_GRACE_MS) — it identifies the injecting window, not a permission.
+  if (!session) {
+    return res.status(400).json({ error: "missing session" });
   }
   // Step-up is OPTIONAL, not required: if the gate was never set up, or this
   // request bypassed it entirely (reaching FleetView's port directly is
@@ -476,6 +758,32 @@ app.delete("/api/layouts/:name", (req, res) => {
   res.status(204).end();
 });
 
+// --- SSH profiles ----------------------------------------------------------
+// Key/agent-auth-only server profiles the picker can open a pane against (see
+// ssh-profiles.js). `/api/ssh-hosts` is a SEPARATE, read-only surface: it just
+// reflects whatever's already in ~/.ssh/config so it can be offered alongside
+// FleetView-managed profiles — FleetView never writes to that file.
+app.get("/api/ssh-profiles", (_req, res) => res.json(sshProfiles.list()));
+
+app.post("/api/ssh-profiles", (req, res) => {
+  let saved;
+  try {
+    saved = sshProfiles.save(req.body);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+  broadcastAll({ t: "ssh-profiles" });
+  res.json(saved);
+});
+
+app.delete("/api/ssh-profiles/:name", (req, res) => {
+  sshProfiles.remove(req.params.name);
+  broadcastAll({ t: "ssh-profiles" });
+  res.status(204).end();
+});
+
+app.get("/api/ssh-hosts", (_req, res) => res.json(listSshConfigHosts()));
+
 app.post("/api/layouts/:name/open", (req, res) => {
   const layout = layouts.get(req.params.name);
   if (!layout) return res.status(404).json({ error: "no such layout" });
@@ -497,7 +805,7 @@ app.post("/api/layouts/:name/open", (req, res) => {
 
   const created = [];
   for (const slot of layout.slots || []) {
-    const cmd = slot.cmd ?? layout.cmd ?? "claude";
+    const cmd = slot.cmd ?? layout.cmd ?? machine.defaultAgentCmd();
     const kind = slot.kind ?? "pty";
     const pane = registry.create({ cwd: slot.cwd, cmd, session, kind });
     const info = registry.info(pane.id);
@@ -524,17 +832,42 @@ app.put("/api/tasks", (req, res) => {
 });
 
 // --- Hook endpoint (Claude Code / Codex phone home here) -----------------
+// Two shapes are accepted on purpose. The CURRENT hook (setup-hooks.js) puts
+// pane+kind in the query string and forwards the agent's own hook JSON as the
+// body, which is how we learn `session_id`. The OLDER hook put pane+kind in the
+// body and sent nothing else; a `claude` that is still running with that
+// version installed must keep working, so both are read.
 app.post("/hook", (req, res) => {
-  const { pane, kind } = req.body || {};
-  if (pane) registry.setAttention(pane, kind || "question");
+  const body = req.body || {};
+  const pane = req.query.pane || body.pane;
+  const kind = req.query.kind || body.kind;
+  if (pane) {
+    registry.setAttention(pane, kind || "question");
+    rememberSdkSession(pane, body);
+  }
   res.status(204).end();
 });
+
+/**
+ * Pin the Claude session id a PTY pane's agent is running under, so the pane can
+ * later be flipped into a chat pane that RESUMES that same conversation instead
+ * of starting a blank one (see pane-registry.js `flip`). Agent panes learn their
+ * id from the SDK driver directly and don't need this.
+ *
+ * Best-effort by nature: it only lands once the agent inside the shell has fired
+ * at least one hook, so a terminal pane opened and never prompted has no id yet.
+ */
+function rememberSdkSession(pane, body) {
+  const sid = body && typeof body.session_id === "string" ? body.session_id : "";
+  if (sid) ptys.setSdkSessionId(pane, sid);
+}
 
 // UserPromptSubmit hook forwards the agent's raw hook JSON here (the prompt is in
 // `.prompt`); we pin it as this window's "last input".
 app.post("/hook/prompt", (req, res) => {
   const id = req.query.pane;
   const prompt = req.body && typeof req.body.prompt === "string" ? req.body.prompt : "";
+  if (id) rememberSdkSession(id, req.body);
   if (id && prompt) {
     registry.setLastInput(id, prompt);
     broadcast(registry.sessionOf(id), { t: "input", pane: id, text: registry.lastInputOf(id) });
@@ -559,9 +892,85 @@ app.post("/hook/prompt", (req, res) => {
 // filenames anyway.
 const noStoreIndexHtml = (res, path) => {
   if (path.endsWith("index.html")) res.setHeader("Cache-Control", "no-store");
+  // The service worker script is fetched out-of-band by the browser, not via a
+  // content-hashed filename, so it needs to revalidate rather than sit in the
+  // HTTP cache. (Browsers already cap SW script caching at 24h, but be explicit.)
+  if (path.endsWith("sw.js")) res.setHeader("Cache-Control", "no-cache");
 };
-app.use(express.static(DIST, { setHeaders: noStoreIndexHtml }));
-app.get("*", (_req, res) => res.sendFile(join(DIST, "index.html"), { headers: { "Cache-Control": "no-store" } }));
+// --- Per-machine identity: manifest + icons ------------------------------
+// Registered BEFORE express.static so these win over any file of the same
+// name, which is what lets the colour be a server-side choice while the URLs
+// stay constant (see server/identity.js).
+app.get("/manifest.webmanifest", (_req, res) => {
+  res.type("application/manifest+json").set("Cache-Control", "no-cache").json(identity.manifest());
+});
+
+// Colour-agnostic ALIASES, kept only for client/public/sw.js, which is a static
+// file and so can't know this machine's colour when it names a notification
+// icon. The URLs a platform CACHES (the manifest's icons and the
+// apple-touch-icon link) are colour-scoped instead — see identity.js's
+// iconHref. Don't move those back here: a stable URL is what made iOS keep
+// showing a stale Home Screen icon after the colour changed.
+for (const file of ["icon-192.png", "badge-96.png", "apple-touch-icon.png"]) {
+  app.get(`/${file}`, (_req, res, next) => {
+    const p = file === "badge-96.png" ? join(DIST, file) : identity.iconPath(file);
+    res.set("Cache-Control", "no-cache").sendFile(p, (err) => {
+      if (err && !res.headersSent) next();
+    });
+  });
+}
+
+/**
+ * index.html, with this machine's apple-touch-icon patched in.
+ *
+ * iOS reads `<link rel="apple-touch-icon">` from the markup when you Add to
+ * Home Screen, and it is NOT part of the manifest — so it's the one icon
+ * reference that can't be expressed as server-side data. Rewriting it here
+ * keeps the built HTML colour-agnostic (nothing in the bundle knows about
+ * palettes) while still handing iOS a colour-scoped, cache-proof URL.
+ *
+ * Cached in memory against the file's mtime so this isn't a read per request,
+ * but still picks up a rebuild without a restart.
+ */
+let indexCache = { mtime: 0, html: "" };
+function sendIndexHtml(res) {
+  const file = join(DIST, "index.html");
+  res.setHeader("Cache-Control", "no-store"); // see noStoreIndexHtml's comment
+  try {
+    const mtime = statSync(file).mtimeMs;
+    if (mtime !== indexCache.mtime) {
+      const html = readFileSync(file, "utf8").replace(
+        /(<link\s+rel="apple-touch-icon"\s+href=")[^"]*(")/,
+        `$1${identity.iconHref("apple-touch-icon.png")}$2`
+      );
+      indexCache = { mtime, html };
+    }
+    res.type("html").send(indexCache.html);
+  } catch {
+    // Unbuilt dist: fall back to the plain file so the error the user sees is
+    // express's own "ENOENT", not a confusing empty 200.
+    res.sendFile(file);
+  }
+}
+
+// Ahead of express.static, and static's own index serving is disabled below, so
+// every route to the app document goes through sendIndexHtml.
+app.get(["/", "/index.html"], (_req, res) => sendIndexHtml(res));
+
+app.use(express.static(DIST, { index: false, setHeaders: noStoreIndexHtml }));
+
+// sw.js is a FILE, not an SPA route. Without this, an unbuilt or missing sw.js
+// falls through to the catch-all below and comes back as index.html with
+// Content-Type: text/html — which surfaces as a baffling MIME type error at
+// registration ("the script has an unsupported MIME type") instead of an
+// obvious 404. Costs nothing and turns a confusing failure into a clear one.
+app.get("/sw.js", (_req, res) =>
+  res.status(404).type("text/plain").end("not found — run `npm run build`")
+);
+
+// SPA catch-all. Goes through sendIndexHtml so a deep link (e.g. the #pane=
+// URL a tapped notification opens) gets the same patched document as "/".
+app.get("*", (_req, res) => sendIndexHtml(res));
 
 // --- HTTP + WebSocket wiring ---------------------------------------------
 const server = createServer(app);
@@ -579,11 +988,16 @@ function handleUpgrade(req, socket, head) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.fleetSession = session;
       controlClients.add(ws);
+      // This window is back (first load, refresh, or a reconnect after
+      // sleep/blip) — call off any pending expiry of the secrets it injected.
+      cancelSecretRelease(session);
       ws.on("close", () => {
         controlClients.delete(ws);
-        // "Only while I'm here": this window is gone, so any secret it
-        // injected expires now instead of riding out its full TTL unwatched.
-        secrets.releaseAllForSession(session);
+        // "Only while I'm here": if this window really is gone, the secrets it
+        // injected expire early instead of riding out their TTL unwatched —
+        // but only after a grace period, since the client re-opens this socket
+        // on its own (see scheduleSecretRelease).
+        scheduleSecretRelease(session);
       });
       ws.on("message", (raw) => {
         try {

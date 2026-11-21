@@ -27,6 +27,12 @@ export interface Settings {
   sound: boolean;
   volume: number; // 0-100
   notify: boolean;
+  /** Web Push category toggles. These are what to push, NOT whether this device
+   *  gets pushes — that's per-device and lives server-side as the presence of a
+   *  subscription row (see push.ts / server/push-store.js). Being prefs, they
+   *  follow you across devices like every other setting here. */
+  pushQuestion: boolean;
+  pushDone: boolean;
   confirmClose: boolean;
 }
 
@@ -37,6 +43,8 @@ const DEFAULTS: Settings = {
   sound: true,
   volume: 70,
   notify: false,
+  pushQuestion: true,
+  pushDone: false,
   confirmClose: false,
 };
 
@@ -53,6 +61,13 @@ function coerce(raw: any): Settings {
     sound: r.sound === undefined ? DEFAULTS.sound : !!r.sound,
     volume: Number.isFinite(num) ? Math.min(100, Math.max(0, num)) : DEFAULTS.volume,
     notify: !!r.notify,
+    // NOTE the `=== undefined` guard, copied from `sound` above and NOT from
+    // `notify`. These default to true/false respectively, and a bare
+    // `!!r.pushQuestion` would read a prefs file written before these keys
+    // existed as an explicit `false` — silently turning the feature off for
+    // everyone who upgrades. Any default-true field needs this form.
+    pushQuestion: r.pushQuestion === undefined ? DEFAULTS.pushQuestion : !!r.pushQuestion,
+    pushDone: r.pushDone === undefined ? DEFAULTS.pushDone : !!r.pushDone,
     confirmClose: !!r.confirmClose,
   };
 }

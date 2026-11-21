@@ -3,8 +3,17 @@
   --panel: #161b22;
   --line: #30363d;
   --accent: #58a6ff;
+  /* Usage status ramp. Deliberately NOT themed per light/dark and deliberately
+     NOT reusing --waiting (which means "needs you" — one hue must not carry two
+     meanings). Validated for CVD separation and for contrast against --panel in
+     both modes; on the light surface the amber step is sub-3:1 by design, which
+     is why every ring and bar always shows its percentage as text. */
+  --use-ok: #0ca30c;
+  --use-warn: #fab219;
+  --use-crit: #d03b3b;
   --waiting: #f0a35e; /* needs you */
   --done: #f5d142; /* finished a turn */
+  --aborted: #f85149; /* cut off mid-turn — interrupt/restart/rate limit/API error, not a clean finish */
   --flag: #a371f7;
   /* "Working" is one green family, deliberately: --busy paints the travelling
      border light, --rain the falling glyphs, --rain-head the hot leading edge
@@ -18,6 +27,21 @@
   --text-dim: #8b949e;
   --btn: #21262d;
   --term-bg: #000000;
+  /* Categorical chart slots, assigned in this fixed order and never cycled
+     (see charts.ts). Both modes are SELECTED — the light block below is the
+     same eight hues re-stepped for a light surface, not an automatic flip.
+     The order is the colour-vision-deficiency safety mechanism, not taste:
+     validated as a set against this mode's chart surface (--panel), worst
+     adjacent pair CVD ΔE 8.4 and normal-vision ΔE 19.3. Re-run the check
+     before touching any value or the order. */
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #c98500;
+  --viz-5: #d55181;
+  --viz-6: #008300;
+  --viz-7: #9085e9;
+  --viz-8: #e66767;
 }
 body.light {
   --term-bg: #ffffff;
@@ -27,6 +51,7 @@ body.light {
   --accent: #0969da;
   --waiting: #bc4c00;
   --done: #8a6a00;
+  --aborted: #cf222e;
   --flag: #8250df;
   /* On a white terminal the working green has to go DARKER, not brighter — a
      bright leading glyph is simply invisible there. Still green, just deep. */
@@ -36,6 +61,18 @@ body.light {
   --text: #1f2328;
   --text-dim: #57606a;
   --btn: #eaeef2;
+  /* Light-mode steps of the same eight hues, validated against the light
+     chart surface. Three slots (aqua, yellow, magenta) sit below 3:1 contrast
+     there, which obligates relief — that's why every chart ships a Table
+     toggle rather than treating it as optional chrome. */
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-6: #008300;
+  --viz-7: #4a3aa7;
+  --viz-8: #e34948;
 }
 /* Large-text mode bumps UI chrome; xterm font size is handled in JS. */
 body.big {
@@ -308,24 +345,25 @@ body {
   display: block;
   height: 100%;
   border-radius: 3px;
-  background: var(--accent);
+  background: var(--use-ok);
   transition: width 0.3s ease;
 }
-/* Colour by headroom so a bucket about to bite reads as urgent at a glance. */
+/* Colour by headroom so a bucket about to bite reads as urgent at a glance.
+   Same thresholds as the chat panes' rings — see usageLevel() in main.ts. */
 .use-bar.warn i,
 .use-pct.warn {
-  color: var(--waiting);
-  background: var(--waiting);
+  color: var(--use-warn);
+  background: var(--use-warn);
 }
 .use-bar.crit i,
 .use-pct.crit {
-  color: #f85149;
-  background: #f85149;
+  color: var(--use-crit);
+  background: var(--use-crit);
 }
 .use-pct {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  color: var(--accent);
+  color: var(--use-ok);
   background: none !important; /* .warn/.crit above set both; text wants colour only */
 }
 .use-meta {
@@ -465,10 +503,78 @@ body {
   max-width: 160px;
   accent-color: var(--accent);
 }
+.set-text {
+  flex: 1;
+  min-width: 0;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+.set-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mc-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mc-missing {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.8;
+}
+.mc-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mc-logo-preview {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background-image: var(--work-logo, none);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+.mc-btn {
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mc-btn:hover {
+  border-color: var(--accent);
+}
 .set-note {
   font-size: 12px;
   line-height: 1.35;
   color: var(--waiting);
+}
+
+/* Sub-options that only make sense while their parent toggle is on (the push
+   categories under "Push to this device"). Indented and dimmed rather than
+   hidden, so you can see what you'd be turning on before you turn it on. */
+.set-sub {
+  margin-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.set-sub[aria-disabled="true"] {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 @media (max-width: 640px) {
@@ -550,6 +656,10 @@ body {
 }
 .qchip.done {
   background: var(--done);
+}
+.qchip.aborted {
+  background: var(--aborted);
+  color: #fff;
 }
 
 /* ---- Follow-up chips ---- */
@@ -928,6 +1038,20 @@ body.big .task .tedit {
 .term.work .title {
   background: color-mix(in srgb, #00adec 55%, var(--panel));
 }
+/* The badge image is a per-machine setting, injected as --work-logo. With no
+   image configured there is nothing to show, so both badge elements collapse —
+   a machine that never asked for branding gets none. */
+body:not(.has-logo) .work-logo,
+body:not(.has-logo) .work-badge {
+  display: none !important;
+}
+.term.work .work-logo,
+.term.work .work-badge {
+  background-image: var(--work-logo, none);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
 .term.work .work-logo {
   position: absolute;
   top: 50%;
@@ -950,6 +1074,26 @@ body.big .task .tedit {
   height: 18px;
   object-fit: contain;
   flex: none;
+}
+/* AgentChat's remote (ssh) marker (see agent-chat.ts): same slot/sizing
+   family as .work-badge, but a text pill — there's no logo for an arbitrary
+   hostname. Sits in the same spot .work-badge would (left of the mode
+   selector); a pane is never both work AND remote-badged at once visually
+   crowded since each is its own opt-in dimension, but truncates gracefully
+   either way. */
+.term .remote-badge {
+  flex: none;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--btn);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
 }
 /* Color-code: tint the title bar (the interior header), NOT the border — the
    border is reserved for the needs-you / done / flagged / zoomed alert glows.
@@ -1012,6 +1156,10 @@ body.big .task .tedit {
 }
 
 /* Ephemeral-secret popover (🔒) */
+/* Anchored under the title bar for terminal panes. Chat panes moved the 🔒 to
+   the tools row at the BOTTOM of the box, so .spop.up flips it to open upward
+   from there — otherwise the popover renders at the top of the pane, nowhere
+   near the button that opened it. */
 .term .spop {
   position: absolute;
   top: 23px;
@@ -1027,6 +1175,15 @@ body.big .task .tedit {
   border-radius: 9px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   font-size: 11px;
+}
+.term .spop.up {
+  top: auto;
+  bottom: 96px;
+  /* .term is overflow:hidden, so a popover taller than the space above the
+     tools row would be silently clipped at the top — in an unzoomed grid box
+     that is most of it. Shrink and scroll instead of disappearing. */
+  max-height: calc(100% - 104px);
+  overflow-y: auto;
 }
 .term .spop input,
 .term .spop select {
@@ -1133,10 +1290,21 @@ body.big .task .tedit {
 .term .title .badge-slot {
   display: flex;
 }
+/* Work-account / remote-host badges. Deliberately NOT .badge-slot — that one
+   is emptied by setWaiting() on every attention change. */
+.term .title .acct-slot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.term .title .acct-slot:empty {
+  display: none;
+}
 /* Permission-mode selector (agent-chat.ts only — see AgentChat's constructor
    and setModeUI()). Dressed like a small chip rather than #bar's full-size
    selects — the title bar is already tight, especially on mobile. */
-.term .title .mode-sel {
+.term .mode-sel {
   flex: none;
   background: var(--btn);
   color: var(--text-dim);
@@ -1148,17 +1316,41 @@ body.big .task .tedit {
   cursor: pointer;
   max-width: 88px;
 }
-.term .title .mode-sel:hover {
+.term .mode-sel:hover {
   border-color: var(--accent);
   color: var(--text);
 }
 /* bypassPermissions skips every approval prompt, unlike the other three
    modes — flagged distinctly so it's never mistaken for one of the "still
    asks before anything destructive" modes at a glance. */
-.term .title .mode-sel.bypass {
+.term .mode-sel.bypass {
   border-color: var(--waiting);
   color: var(--waiting);
 }
+/* Inline SVG control icons (client/src/icons.ts). Stroked and sized from the
+   button's own colour, so hover/disabled/theme states need no icon-specific
+   rules. vector-effect keeps the 2px stroke honest at any box size. */
+.ico-svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ico-svg.fill {
+  fill: currentColor;
+  stroke: none;
+}
+.chatview .ico-svg,
+.plist .ico .ico-svg {
+  width: 14px;
+  height: 14px;
+}
+
 /* Window controls */
 .term .ctl {
   flex: none;
@@ -1372,11 +1564,502 @@ body.big .term .pinned {
   border-top: 1px solid var(--line);
   margin: 12px 0;
 }
+/* ---- Readability -------------------------------------------------------
+   The complaint this answers: agent replies arrive as long unbroken runs of
+   lines that are hard to track across. A longer line-height so the eye finds
+   the next line, and enough space between blocks that structure is visible
+   before you start reading.
+
+   NOTE: there is deliberately NO max-width on the text. A measure cap (~74
+   characters) was tried and removed: prose was capped while tables, code
+   blocks, and charts stayed full-width, so on a wide pane the text filled a
+   third of the box beside a full-width table and the message read as broken
+   alignment rather than as careful typography. If you reintroduce a cap, it
+   has to apply to EVERY block so the message stays one aligned column. */
+.term .msg.assistant {
+  font-size: 13px;
+  line-height: 1.62;
+}
+.term .msg.assistant p {
+  margin: 0 0 10px;
+}
+.term .msg.assistant li {
+  margin: 4px 0;
+}
+/* Headings need to win against the body text around them, and a run of ##
+   sections needs a visible seam — otherwise every heading reads as just
+   another bold line in the wall. */
+.term .msg.assistant .md-h {
+  margin: 16px 0 7px;
+  letter-spacing: -0.01em;
+}
+.term .msg.assistant .md-h1 {
+  font-size: 18px;
+}
+.term .msg.assistant .md-h2 {
+  font-size: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+/* …except the very first block, which has the title bar right above it. */
+.term .msg.assistant > .md-h2:first-child {
+  padding-top: 0;
+  border-top: 0;
+  margin-top: 4px;
+}
+.term .msg.assistant .md-h3 {
+  font-size: 14px;
+  color: var(--text);
+}
+.term .msg.assistant > :first-child {
+  margin-top: 0;
+}
+
+/* ---- Task lists ----
+   The checkbox IS the marker, so the list's own bullet is redundant — an item
+   reading "• ☑ done" has two of them. Only the items that are tasks lose their
+   marker; a mixed list keeps its bullets on the plain items. */
+.term .msg.assistant li:has(> .md-task) {
+  list-style: none;
+  margin-left: -18px;
+}
+.term .msg.assistant .md-task {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+.term .msg.assistant .md-task input {
+  margin: 4px 0 0;
+  accent-color: var(--accent);
+  flex: none;
+}
+.term .msg.assistant .md-task.done > span {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+/* ---- Tables ------------------------------------------------------------
+   The wrapper is what scrolls. Without it a wide table stretches the flex
+   column and drags the whole conversation sideways. */
+.term .md-table-wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.term .md-figure .md-table-wrap {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.term .md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+  /* Columns of numbers only line up with fixed-width digits. */
+  font-variant-numeric: tabular-nums;
+}
+.term .md-table th,
+.term .md-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.term .md-table thead th {
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--line) 30%, var(--panel));
+  position: sticky;
+  top: 0;
+}
+.term .md-table tbody tr:last-child th,
+.term .md-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.term .md-table tbody tr:hover td,
+.term .md-table tbody tr:hover th {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+/* A figure is a table plus its chart view; only one is shown at a time. */
+.term .md-figure {
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.term .md-figure-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.term .md-chartbtn,
+.term .viz-toggle {
+  background: var(--btn);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.term .md-chartbtn:hover,
+.term .viz-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.term .md-figure-chart {
+  padding: 4px;
+}
+
+/* ---- Media -------------------------------------------------------------
+   Capped by height as well as width: an agent's full-page screenshot is
+   often 3000px tall, and unconstrained it would bury the rest of the turn.
+   Click opens the original at full size. */
+.term .md-media-link {
+  display: block;
+  margin: 10px 0;
+  width: fit-content;
+  max-width: 100%;
+}
+.term .md-img {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  width: auto;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.term .md-media-link:hover .md-img {
+  border-color: var(--accent);
+}
+.term .md-video {
+  display: block;
+  margin: 10px 0;
+  max-width: 100%;
+  max-height: 420px;
+  border-radius: 8px;
+  background: #000;
+}
+.term .md-audio {
+  display: block;
+  margin: 10px 0;
+  width: 100%;
+  max-width: 340px;
+}
+.term .md-media-missing {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.term .md-media-missing::before {
+  content: "⃠ ";
+}
+
+/* ---- Code blocks ---- */
+.term .md-codeblock {
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.term .md-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 6px 3px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.term .md-code-lang {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.term .md-copy {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.term .md-copy:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+.term .md-codeblock pre.md-code {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+/* ---- Charts ------------------------------------------------------------
+   Marks carry the series colour; every piece of TEXT here wears a text token,
+   because a light categorical hue (yellow, aqua) is illegible as type on the
+   surface. Identity comes from the swatch beside the label, never from
+   colouring the label itself. */
+.term .viz {
+  position: relative;
+  margin: 10px 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.term .md-figure-chart .viz,
+.term .viz.bare {
+  margin: 0;
+  border: 0;
+}
+.term .viz-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.term .viz-title {
+  flex: 1;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.term .viz-head .viz-toggle {
+  margin-left: auto;
+}
+.term .viz-plot {
+  min-width: 0;
+}
+.term .viz-svg {
+  display: block;
+  max-width: 100%;
+  /* Clip to the viewport (the SVG default). A chart must never paint outside
+     its own card and over the conversation — if a scale bug ever puts a mark
+     out of bounds, that has to show up as a clipped chart, not as a line drawn
+     across the message above it. */
+  overflow: hidden;
+}
+/* Gridlines and axes: solid hairlines one step off the surface, never dashed
+   — a dashed grid reads as a threshold or a projection when it's just a grid. */
+.term .viz-grid,
+.term .viz-axis-line {
+  stroke: var(--line);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.term .viz-axis {
+  fill: var(--text-dim);
+  font-size: 10px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.term .viz-mark {
+  transition: opacity 0.12s;
+}
+.term .viz-mark:hover {
+  opacity: 0.82;
+}
+.term .viz-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+/* A wash, never a saturated block. */
+.term .viz-area {
+  stroke: none;
+  fill-opacity: 0.1;
+}
+/* The 2px ring is surface-coloured so a dot stays legible where it crosses a
+   line or another dot — spacing, not a border drawn around the mark. */
+.term .viz-dot {
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+.term .viz-donut-total {
+  fill: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+.term .viz-donut-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.term .viz-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 8px;
+}
+.term .viz-donut-wrap .viz-legend {
+  margin-top: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.term .viz-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.term .viz-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+}
+.term .viz-key-label {
+  white-space: nowrap;
+}
+.term .viz-tip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11.5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+}
+.term .viz-tip-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+}
+.term .viz-tip-value {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
+}
+.term .viz-table-wrap {
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.term .viz-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.term .viz-table th,
+.term .viz-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+.term .viz-table th[scope="row"],
+.term .viz-table thead th:first-child {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.term .viz-table thead th {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.term .viz-empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 12px;
+}
+/* Stat tile: the form for when the data is one number. A one-bar bar chart
+   is not a chart — this is. */
+.term .viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.term .viz-stat-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.term .viz-stat-value {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text);
+  /* Proportional figures: tabular-nums gives every digit a `0`'s width, which
+     reads loose at display size. Tabular is for COLUMNS, not headline numbers. */
+}
+.term .viz-stat-delta {
+  font-size: 12px;
+  font-weight: 600;
+}
+/* Direction is in the ▲/▼ glyph and the sign, so this never depends on colour
+   alone. */
+.term .viz-stat-delta.good {
+  color: #3fb950;
+}
+.term .viz-stat-delta.bad {
+  color: #f85149;
+}
+.term .viz-spark {
+  margin-top: 4px;
+}
+body.light .term .viz-tip {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
 .term .msg.error {
   align-self: stretch;
   background: color-mix(in srgb, #f85149 18%, var(--panel));
   border: 1px solid #f85149;
   color: var(--text);
+}
+/* Whole-turn "this was interrupted" notice (appendBubble("aborted", …), see
+   setStatus()) — same shape as .msg.error since both are a standalone
+   notice, not a spoken line, but its own color so the two read as distinct
+   situations ("something's wrong" vs "this just didn't finish"). */
+.term .msg.aborted {
+  align-self: stretch;
+  background: color-mix(in srgb, var(--aborted) 14%, var(--panel));
+  border: 1px solid var(--aborted);
+  color: var(--text);
+}
+/* Per-message marker on a truncated assistant reply itself (see
+   agent-chat.ts's assistant_done handling) — .msg.assistant is deliberately
+   plain/chromeless (see the comment above), so this stays a subtle left
+   accent + trailing caption rather than a full bubble treatment. */
+.term .msg.assistant.aborted {
+  border-left: 3px solid var(--aborted);
+  padding-left: 9px;
+}
+.term .msg.assistant.aborted::after {
+  content: "⚠ cut off — response may be incomplete";
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--aborted);
 }
 .term .tool-card {
   align-self: flex-start;
@@ -1685,9 +2368,206 @@ body.big .term .pinned {
 .term .chat-send:hover {
   filter: brightness(1.08);
 }
+
+/* ---- Chat tools row -----------------------------------------------------
+   Sits between the log and the composer and holds every pane-level control:
+   actions left (attach / view flip / secret / permission mode), live state
+   right (model, jump-to-latest, stop, usage rings). Same flex:0 0 auto contract
+   as .status-line and .chat-input so it never steals height from .chat-log. */
+.term .chat-tools {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  min-height: 40px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+.term .chat-tools .spacer {
+  flex: 1;
+}
+/* ---- One sizing scale for everything in this row ----------------------
+   Left to itself the row is a jumble: .ctl is 20x18, the mode chip ~28,
+   the ring group ~35, and the emoji glyphs (📎 🔒) render heavier than a
+   geometric one (▤). Every control here is therefore pinned to the same
+   28px box, the same 6px radius and the same optical glyph size, and the
+   rings are trimmed to sit within a couple of px of that. */
+.term .chat-tools .ctl {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+/* Geometric glyphs read smaller than emoji at the same font-size, so they
+   get a nudge to match optically rather than numerically. */
+.term .chat-tools .ctl.view,
+.term .chat-tools .ctl.stop,
+.term .chat-tools .ctl.jump {
+  font-size: 15px;
+}
+.term .chat-tools .mode-sel {
+  height: 28px;
+  border-radius: 6px;
+  padding: 0 6px;
+  font-size: 11px;
+  max-width: 104px;
+}
+.term .chat-tools .model-badge {
+  display: grid;
+  place-items: center;
+  height: 28px;
+  border-radius: 6px;
+  padding: 0 8px;
+}
+/* The interrupt. Tinted so it reads as the one destructive control here, but
+   it only exists while a turn is actually running (setBusy in agent-chat.ts). */
+.term .ctl.stop {
+  color: var(--use-crit);
+}
+.term .ctl.stop:hover {
+  background: var(--use-crit);
+  color: #fff;
+}
+/* Desktop: the tools row is always open, so the hamburger has no job. */
+.term .chat-menu {
+  display: none;
+}
+.term .model-badge {
+  flex: none;
+  font-size: 10px;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+/* ---- Usage rings --------------------------------------------------------
+   A single ratio against a limit, so: a meter, not a pie. The percentage is
+   always drawn as text in normal ink — colour is the glanceable secondary cue,
+   never the only one (the amber step is intentionally low-contrast on light). */
+.term .use-rings {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Each window is its own bordered pill — same 28px box, 6px radius and
+   --line border as the model badge, so the row reads as one set of chips
+   rather than two floating graphics. The label sits BESIDE the ring, which
+   is also what keeps identity off colour alone with two windows showing. */
+.term .ring {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.term .ring-face {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.term .ring-face svg {
+  display: block;
+}
+.term .ring-num {
+  position: absolute;
+  font-size: 8px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--text);
+}
+.term .ring-tag {
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1;
+  color: var(--text-dim);
+}
+/* --btn on --panel is nearly invisible, which made a low-usage ring look
+   broken rather than empty. --line is the app's "there is a thing here" tone. */
+.term .ring-track {
+  stroke: var(--line);
+}
+.term .ring.ok .ring-fill {
+  stroke: var(--use-ok);
+}
+.term .ring.warn .ring-fill {
+  stroke: var(--use-warn);
+}
+.term .ring.crit .ring-fill {
+  stroke: var(--use-crit);
+}
 @media (max-width: 640px) {
   .term .chat-input textarea {
     font-size: 16px; /* keeps iOS Safari from zooming the page in on focus */
+  }
+  /* ---- Tools row collapses behind ☰ -----------------------------------
+     Nine controls plus two usage rings do not fit beside a composer on a
+     390px screen, and .term .ctl is 44x40 here (touch targets), so the row
+     would be taller than the input it sits above. Hidden by default, opened
+     as a WRAPPED row above the input — not a floating popover, which .term's
+     overflow:hidden would clip. */
+  .term .chat-menu {
+    display: grid;
+    place-items: center;
+    flex: none;
+    min-height: 36px;
+    min-width: 40px;
+    padding: 0;
+    background: var(--btn);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  .term .chat-tools {
+    display: none;
+  }
+  .term.tools-open .chat-tools {
+    display: flex;
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  /* The one exception: while a turn is running, the interrupt stays reachable
+     in one tap. A control you need URGENTLY must not be behind a menu. */
+  .term.busy:not(.tools-open) .chat-tools {
+    display: flex;
+    justify-content: flex-end;
+    min-height: 0;
+    padding: 2px 8px;
+  }
+  .term.busy:not(.tools-open) .chat-tools > *:not(.stop) {
+    display: none;
+  }
+  /* The spacer would otherwise eat a whole row once the controls wrap. */
+  .term.tools-open .chat-tools .spacer {
+    display: none;
+  }
+  /* Real touch targets in the opened menu.
+     NOTE: there is already a `.term .ctl { width:44px; height:40px }` intended
+     for mobile up at ~line 950, but it is DEAD — it sits before the base
+     `.term .ctl` rule (~line 1252) at identical specificity, and a media query
+     adds none, so source order silently overrides it and every icon button on
+     mobile renders 20x18. Only `.ctl.attach` survives, by accident of carrying
+     a second class in that selector. These selectors are specific enough to
+     win; fixing the general case is a separate call, since it changes the
+     height of every title bar on mobile. */
+  .term.tools-open .chat-tools .ctl,
+  .term.busy .chat-tools .ctl.stop {
+    width: 44px;
+    height: 40px;
+  }
+  .term.tools-open .chat-tools .mode-sel {
+    font-size: 13px;
+    padding: 5px 9px;
+    min-height: 36px;
+    max-width: 130px;
   }
   /* A phone pane is barely taller than the desktop cap, so 320px of output
      would fill the whole box and hide the conversation around it. */
@@ -1752,6 +2632,18 @@ body.big .term .pinned {
 }
 .term.waiting.done .badge {
   background: var(--done);
+}
+/* Cut off mid-turn (interrupt/restart/rate limit/API error) — deliberately
+   distinct from .done: the pane needs a look, but "here's an incomplete
+   answer" is a different situation than "here's your answer." */
+.term.waiting.aborted {
+  border-color: var(--aborted);
+  color: var(--aborted);
+  box-shadow: 0 0 0 2px var(--aborted), 0 0 18px 2px var(--aborted);
+}
+.term.waiting.aborted .badge {
+  background: var(--aborted);
+  color: #fff;
 }
 /* Follow-up flag: a steady, non-animated purple marker. Distinct from the
    pulsing attention glow, and left intact when a box is also waiting. */
@@ -2055,6 +2947,10 @@ body.fx-full .term.idle:hover .chat {
   border-color: var(--done);
   box-shadow: 0 0 0 1px var(--done);
 }
+.tchip.waiting.aborted {
+  border-color: var(--aborted);
+  box-shadow: 0 0 0 1px var(--aborted);
+}
 
 /* ---- Open-layout chooser modal ---- */
 /* Task view/edit modal */
@@ -2095,7 +2991,9 @@ body.fx-full .term.idle:hover .chat {
   outline: none;
 }
 
-#openmode {
+#openmode,
+#sshManager,
+#sshEdit {
   position: fixed;
   inset: 0;
   z-index: 72;
@@ -2103,13 +3001,84 @@ body.fx-full .term.idle:hover .chat {
   place-items: center;
   background: rgba(0, 0, 0, 0.55);
 }
-#openmode .panel.small {
+#openmode .panel.small,
+#sshManager .panel.small,
+#sshEdit .panel.small {
   width: min(460px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: 0 24px 90px rgba(0, 0, 0, 0.6);
   overflow: hidden;
+}
+
+/* SSH server add/edit form: stacked label+input rows, same weight as .set-row. */
+.sshform {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  overflow-y: auto;
+}
+.sshform label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+.sshform label .hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.sshform input {
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+}
+.sshform input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* SSH server list rows (#sshList): reuse .prow, add trailing edit/delete icons. */
+.prow.sshrow {
+  cursor: default;
+}
+.prow.sshrow .nm {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.prow.sshrow .nm .sub {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.ssh-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.ssh-actions button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 4px;
+  font: inherit;
+}
+.ssh-actions button:hover {
+  color: var(--text);
+}
+.ssh-actions button.ssh-del:hover {
+  color: var(--danger, #f85149);
 }
 .omsg {
   padding: 16px 14px;
@@ -2274,15 +3243,57 @@ body.fx-full .term.idle:hover .chat {
 }
 .pfoot {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
   padding: 12px 14px;
   border-top: 1px solid var(--line);
+}
+/* Options wrap as whole fields; the actions keep their own row so a narrow
+   panel can never squeeze "Open here" against a half-wrapped label. */
+.popts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+}
+.pacts {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.popt-lbl {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+/* Same dressing as the picker's own toolbar selects (.ptools) — this one was
+   left native, so it rendered as a white slab on the dark panel. */
+.pfoot select {
+  min-height: 30px;
+  max-width: 260px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.pfoot select:hover {
+  border-color: var(--accent);
+}
+.pfoot select:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 .runclaude {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  white-space: nowrap; /* the mid-phrase wrapping was the whole problem */
   color: var(--text-dim);
   cursor: pointer;
 }
@@ -2290,6 +3301,7 @@ body.fx-full .term.idle:hover .chat {
   color: var(--accent);
 }
 .chatview {
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 4px;

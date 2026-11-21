@@ -6,6 +6,7 @@ import { installFileLinks } from "./links";
 import "@xterm/xterm/css/xterm.css";
 import { xtermTheme, xtermFontSize } from "./settings";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
+import { iconSvg } from "./icons";
 import { attachSecretPopover } from "./secret-popover";
 
 export interface PaneInfo {
@@ -13,7 +14,7 @@ export interface PaneInfo {
   kind: "pty" | "agent";
   cwd: string;
   cmd: string;
-  attention?: { waiting: boolean; kind: "question" | "done" | null };
+  attention?: { waiting: boolean; kind: "question" | "done" | "aborted" | null };
   /** Is something running in this pane right now? (see PtyManager's work detection) */
   working?: boolean;
   followUp?: boolean;
@@ -21,8 +22,14 @@ export interface PaneInfo {
   color?: string;
   name?: string; // user-chosen display name; ""/absent = show the cwd basename
   createdAt: number;
+  /** Grid position, numbered across BOTH pane kinds (server/pane-registry.js). */
+  order?: number;
+  /** Which model an agent pane resolved to; null until its driver reports one. */
+  model?: string | null;
   /** Claude Agent SDK permission mode (agent panes only — see agent-chat.ts's mode selector). */
   mode?: "default" | "acceptEdits" | "auto" | "plan" | "bypassPermissions";
+  /** Set only for an agent pane whose claude/codex runs over ssh on another host (see agent-chat.ts). */
+  remote?: { target: string; port?: number; identityFile?: string } | null;
 }
 
 /** What to call this pane everywhere it's shown: custom name, else folder name. */
@@ -43,14 +50,18 @@ export interface PaneView {
   el: HTMLElement; // the .term box (this is what zooms/drags)
   titleBar: HTMLElement; // drag handle
   isWaiting(): boolean;
-  waitingKind(): "question" | "done";
-  setWaiting(on: boolean, kind?: "question" | "done"): void;
+  waitingKind(): "question" | "done" | "aborted";
+  setWaiting(on: boolean, kind?: "question" | "done" | "aborted"): void;
   setBusy(on: boolean): void;
   isFlagged(): boolean;
   setFollowUp(on: boolean): void;
   setColor(color: string): void;
   setName(name: string): void;
   setAppearance(theme: object, fontSize: number): void;
+  /** Account usage for this pane's account (null = unknown/not applicable). */
+  setUsage(row: UsageRow | null): void;
+  /** Which model this pane resolved to. */
+  setModel(model: string): void;
   setLastInput(text: string): void;
   refit(): void;
   focusTerm(): void;
@@ -58,15 +69,34 @@ export interface PaneView {
   dispose(): void;
 }
 
+/** One rate-limit window as server/usage.js reports it. */
+export type UsageWindow = { label: string; percent: number; resetsAt: number | null };
+
+/** One account's usage, keyed by `id` — which equals an agent pane's `cmd`. */
+export type UsageRow = {
+  id: string;
+  label: string;
+  plan: string | null;
+  available: boolean;
+  primary: UsageWindow | null;
+  secondary: UsageWindow | null;
+  error: string | null;
+};
+
 export interface TermHost {
   onOpen(t: PaneView): void; // user clicked the box → zoom it
   onBack(t: PaneView): void; // ‹ (mobile, zoomed only) → unzoom, unambiguously
   onClose(t: PaneView): void; // × → kill it
   onMinimize(t: PaneView): void; // – → send to tray
-  onToggleFollowUp(t: PaneView): void; // 🚩 → toggle the follow-up flag
+  onToggleFollowUp(t: PaneView): void; // ⚑ → toggle the follow-up flag
+  // ❝ / ▤ → switch THIS box between chat view and terminal view. Not a
+  // re-render: the pane is destroyed and re-created in the other kind, resuming
+  // the same conversation by session id (server/pane-registry.js `flip`), so it
+  // can be refused (mid-turn, plain shell, no conversation captured yet).
+  onFlipView(t: PaneView): void;
   onSetColor(t: PaneView, color: string): void; // ● → tint the border ("" = clear)
   onRename(t: PaneView, name: string): void; // title text edited ("" = revert to folder)
-  // 🔒 → push a value into this pane's env for a bounded time. Never becomes
+  // ⚿ → push a value into this pane's env for a bounded time. Never becomes
   // chat text (see server/secret-vault.js); the promise resolves once the
   // server has actually injected it (or rejects with a reason to show).
   onInjectSecret(
@@ -132,10 +162,11 @@ export class Term implements PaneView {
       `<span class="path"></span>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
-      `<button class="ctl attach" title="Add file(s) to prompt">📎</button>` +
-      `<button class="ctl secret" title="Give this terminal a secret (never saved to chat memory)">🔒</button>` +
+      `<button class="ctl view" title="Switch this box to chat view">${iconSvg("chat")}</button>` +
+      `<button class="ctl attach" title="Add file(s) to prompt">${iconSvg("attach")}</button>` +
+      `<button class="ctl secret" title="Give this terminal a secret (never saved to chat memory)">${iconSvg("secret")}</button>` +
       `<button class="ctl color" title="Color-code this terminal"></button>` +
-      `<button class="ctl flag" title="Mark for follow-up">🚩</button>` +
+      `<button class="ctl flag" title="Mark for follow-up">${iconSvg("flag")}</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
       `<button class="ctl close" title="Close">✕</button>`;
     (this.titleBar.querySelector(".path") as HTMLElement).textContent =
@@ -172,12 +203,13 @@ export class Term implements PaneView {
     // terminal, so they're visually distinct from personal-account boxes
     // without getting in the way of reading the actual output. No manual
     // step — `cmd` persists across respawns, so the tag survives them too.
-    if (info.cmd === "claude-work" || info.cmd === "codex-work") {
+    if (info.cmd.endsWith("-work")) {
       this.el.classList.add("work");
-      const logo = el("img", "work-logo") as HTMLImageElement;
-      logo.src = "/didit-logo-white.png";
-      logo.alt = "";
-      this.xtEl.append(logo);
+      // The image is a MACHINE setting (~/.fleetview/machine.json), not a
+      // bundled asset — it comes in via the --work-logo custom property, so a
+      // machine with no badge configured shows none and one that changes it
+      // updates every pane at once. See applyMachineBadge() in main.ts.
+      this.xtEl.append(el("span", "work-logo"));
     }
 
     this.term = new Xterm({
@@ -239,9 +271,13 @@ export class Term implements PaneView {
       e.stopPropagation();
       host.onToggleFollowUp(this);
     });
+    this.titleBar.querySelector(".view")!.addEventListener("click", (e) => {
+      e.stopPropagation();
+      host.onFlipView(this);
+    });
     this.buildColorPopover(host);
     this.buildSecretPopover(host);
-    // 📎 opens a file picker — the same path-injection flow as drag-and-drop.
+    // ⊕ opens a file picker — the same path-injection flow as drag-and-drop.
     wireFilePicker(this.titleBar.querySelector(".attach")!, this.el, (files) => void this.dropFiles(files));
 
     // Click the box (outside the controls) opens/zooms it.
@@ -374,7 +410,7 @@ export class Term implements PaneView {
     });
   }
 
-  // The 🔒 control: paste a value, give it a name Claude can reference, pick
+  // The ⚿ control: paste a value, give it a name Claude can reference, pick
   // how long it lives, then it's gone — see server/secret-vault.js for what
   // actually happens to it (never chat text, never on disk as plaintext).
   // Shared with AgentChat (chat panes get the identical popover), see
@@ -498,7 +534,7 @@ export class Term implements PaneView {
   }
 
   /**
-   * Let users drop (or 📎-pick) files onto the box: upload each via
+   * Let users drop (or ⊕-pick) files onto the box: upload each via
    * attach.ts's `uploadFiles` and type the returned absolute path into the
    * prompt — the same thing dragging a file into a native terminal does,
    * which is how Claude picks up images and documents.
@@ -627,17 +663,20 @@ export class Term implements PaneView {
   isWaiting() {
     return this.el.classList.contains("waiting");
   }
-  waitingKind(): "question" | "done" {
-    return this.el.classList.contains("done") ? "done" : "question";
+  waitingKind(): "question" | "done" | "aborted" {
+    if (this.el.classList.contains("done")) return "done";
+    if (this.el.classList.contains("aborted")) return "aborted";
+    return "question";
   }
 
-  setWaiting(on: boolean, kind: "question" | "done" = "question") {
+  setWaiting(on: boolean, kind: "question" | "done" | "aborted" = "question") {
     this.el.classList.toggle("waiting", on);
     this.el.classList.toggle("done", on && kind === "done");
+    this.el.classList.toggle("aborted", on && kind === "aborted");
     this.badgeSlot.innerHTML = "";
     if (on) {
       const badge = el("span", "badge");
-      badge.textContent = kind === "done" ? "done" : "needs you";
+      badge.textContent = kind === "done" ? "done" : kind === "aborted" ? "cut off" : "needs you";
       this.badgeSlot.append(badge);
     }
   }
@@ -645,6 +684,9 @@ export class Term implements PaneView {
   setBusy(on: boolean) {
     setBusyClass(this.el, on);
   }
+  /** No-op: usage rings and the model badge live in the chat pane's tools row. */
+  setUsage(_row: UsageRow | null) {}
+  setModel(_model: string) {}
 
   isFlagged() {
     return this.el.classList.contains("flagged");

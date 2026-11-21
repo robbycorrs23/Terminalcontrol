@@ -265,6 +265,46 @@ on `cmd` and isolated by config dir.
 `.work-badge`, and `accountConfigDirFor`, and hardcode `accountConfigDir = null`. Nothing
 else in the chat path depends on it. The `_buildEnv` deletions are worth keeping regardless.
 
+> **Update — this fork now runs the WORK accounts only.** The personal `claude`/`codex`
+> options were removed from both picker selects, from `isAgentProfile()`, from
+> `remoteAgentCmd()`'s runner map, and from `usage.js`'s `knownAccounts()`; the defaults
+> in `pty-manager.create`, `index.js`'s layout restore and the picker's `selected` option
+> moved to `claude-work`. The *mechanism* is untouched — the account is still chosen
+> purely by the `-work` suffix — so this is a list edit, not a redesign, and re-adding a
+> personal account means re-adding those entries. Note that a TERMINAL pane running
+> `claude-work`/`codex-work` needs a matching `PATH` wrapper (`~/.local/bin/*-work`),
+> since FleetView sets no env for PTY panes; chat panes don't.
+
+### 9b. Per-pane view flip (added after this spec)
+
+`POST /api/panes/:id/flip` + a `💬`/`▤` button in each box's title bar switch one box
+between the two views.
+§2's "kind is decided at creation and never changes" is still true underneath — the flip
+**destroys and re-creates** each pane in the other kind (`registry.flip()` in
+`pane-registry.js`), and what makes it read as a view switch is that both halves resume
+the same Claude conversation by session id.
+
+That closes the gap noted in §4/§10: a PTY pane now *does* get an `sdkSessionId`. It comes
+from the hook payload — `setup-hooks.js`'s Notification/Stop hooks moved pane+kind into the
+query string and forward Claude's hook JSON as the body, so `/hook` (and `/hook/prompt`,
+which already had it) can read `session_id`. `PtyManager` persists it alongside the pane
+and `AgentManager.create` accepts one to resume from.
+
+Two things must survive the round trip, not one. The session id is the obvious half; the
+PERMISSION MODE is the half that is easy to miss, and dropping it means a
+chat→terminal→chat flip quietly downgrades an Auto pane to Ask. `PtyManager` stashes it in
+`agentMode` and puts it on the command line as `--permission-mode`; note the chat view's
+"default" (Ask) has no CLI spelling and must be omitted, and unrecognised values are
+dropped rather than forwarded (an invalid one makes `claude` exit at startup).
+
+Deliberate refusals, all reported back to the UI rather than silently skipped: a pane
+mid-turn (a flip kills the process, so an in-flight turn would be cut off), a plain shell
+or raw `ssh` box (no chat equivalent), a remote chat pane (its agent isn't local), and a
+terminal pane whose agent hasn't fired a hook yet (no id ⇒ flipping it would open a blank
+conversation). Codex flips but starts fresh (`resumed:false`) — its resume path here is
+unverified, and attaching to the wrong conversation is worse than visibly starting a new
+one.
+
 Also present in this fork but strictly separate: a WebAuthn/passkey gate (`server/gate*.js`,
 `9b03d52`, pre-dates chat). It matters to chat only in that `proxy.ws` must be enabled and
 unauthenticated upgrades are socket-destroyed. There is one uncommitted change in

@@ -5,6 +5,7 @@ sessions.json
 agent-sessions.json
 tasks.json
 pane-secrets.json
+ssh-profiles.json
 *.log
 .DS_Store
 

@@ -38,10 +38,12 @@ function beep(c: AudioContext, freq: number, at: number, dur: number, gain = 0.0
  *   below stay the *relative* mix (the "done" tone is deliberately softer than
  *   the "needs you" pair); this scales the whole thing.
  */
-export function play(kind: "question" | "done", scale = 1) {
+export function play(kind: "question" | "done" | "aborted", scale = 1) {
   if (scale <= 0) return;
   const c = audio();
   const now = c.currentTime;
+  // "aborted" has no distinct tone yet — falls back to the "needs you" pair,
+  // same as "question". Fine for now; a dedicated tone is easy to add later.
   if (kind === "done") {
     beep(c, 430, now, 0.26, 0.04 * scale);
   } else {

@@ -4,7 +4,33 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>▦ FleetView</title>
-    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- PWA shell. Installing to the iOS Home Screen isn't cosmetic: the Push
+         API is available ONLY to home-screen web apps on iOS (16.4+), so this
+         manifest is a hard prerequisite for the phone notifications, not a
+         nice-to-have.
+
+         crossorigin="use-credentials" is REQUIRED here, not optional. Browsers
+         fetch a same-origin manifest with credentials OMITTED by default —
+         behind server/gate.js that arrives with no session cookie, gets a 401,
+         and the app silently becomes non-installable (which on iOS means no
+         push at all). The gate also allowlists this path; both halves are
+         needed. Absolute paths throughout, because vite's base:"./" resolves
+         relative URLs against the document, and server/index.js's SPA
+         catch-all answers a wrong path with index.html instead of a 404 — so a
+         relative slip fails as "manifest is invalid", not as a missing file. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#0d1117" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- black-translucent puts our own bar under the status bar, which is why
+         the viewport above is viewport-fit=cover and #bar pads itself with
+         env(safe-area-inset-*) (see styles.css). -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="FleetView" />
+
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
@@ -12,18 +38,26 @@
       <div id="barRow">
         <span class="brand">▦ FleetView</span>
         <span id="current" class="current" hidden></span>
-        <!-- Status, plus the one action that's only useful the moment it appears:
-             "Jump to next" is contextual (hidden unless something is waiting), so
-             it stays out here next to the chips it belongs to rather than behind ⚙. -->
-        <div class="bar-chips">
-          <div id="queue" title="Terminals waiting on you"></div>
-          <span id="followups"></span>
-          <span id="recovery" title="Terminals that died or were set aside — click to bring back"></span>
-          <button id="nextBtn" hidden>Jump to next ⏎</button>
-        </div>
         <span class="spacer"></span>
         <button id="settingsBtn" class="icon" title="Settings">⚙</button>
         <button id="addBtn">+ Terminal</button>
+      </div>
+
+      <!-- Attention chips live on their OWN row under #barRow, not inside it.
+           Inline, they competed with ⚙ / "+ Terminal" for a phone's worth of
+           width: one waiting terminal was enough to squeeze those buttons into
+           unreadable, barely-tappable slivers. On their own row they wrap
+           instead of squeezing, and the controls above keep a fixed size no
+           matter how many terminals are shouting. Collapses to nothing when
+           empty (CSS :has, see styles.css) so an idle fleet costs no height. -->
+      <div id="barChips">
+        <div id="queue" title="Terminals waiting on you"></div>
+        <span id="followups"></span>
+        <span id="recovery" title="Terminals that died or were set aside — click to bring back"></span>
+        <!-- Why a per-box view flip (the ❝ / ▤ button in a title bar) was
+             refused — mid-turn, plain shell, no conversation captured yet.
+             Transient; see flipView() in main.ts. -->
+        <span id="viewNote" class="current" hidden></span>
       </div>
 
       <!-- Settings: everything that isn't "+ Terminal". One dropdown on every
@@ -52,7 +86,19 @@
         </section>
 
         <section class="set-sec">
+          <h3 class="set-h">SSH Servers</h3>
+          <div class="set-btns">
+            <button id="sshManageBtn">Manage…</button>
+          </div>
+        </section>
+
+        <section class="set-sec">
           <h3 class="set-h">View</h3>
+          <!-- Contextual: stays hidden unless something is actually waiting.
+               It used to sit in the bar next to the chips, but it's a
+               rarely-used shortcut that was costing permanent bar width on the
+               screen that can least afford it. -->
+          <button id="nextBtn" hidden>Jump to next ⏎</button>
           <button id="tasksBtn" title="Show / hide the task list">✓ Tasks</button>
           <div class="set-row">
             <span class="set-label">Theme</span>
@@ -93,6 +139,52 @@
             Notify me when this tab is in the background
           </label>
           <div class="set-note" id="notifyNote" hidden></div>
+
+          <!-- Push: reaches you when FleetView ISN'T open, unlike the option
+               above which needs a live tab. The device checkbox is per-device
+               (it creates/removes a subscription server-side); the two category
+               checkboxes are ordinary prefs and so follow you everywhere. -->
+          <label class="set-check">
+            <input type="checkbox" id="setPushDevice" />
+            Push to this device even when FleetView is closed
+          </label>
+          <div class="set-note" id="pushNote" hidden></div>
+          <div class="set-sub" id="pushCats">
+            <label class="set-check">
+              <input type="checkbox" id="setPushQuestion" />
+              …when a terminal needs an answer
+            </label>
+            <label class="set-check">
+              <input type="checkbox" id="setPushDone" />
+              …when a turn finishes or is cut off
+            </label>
+          </div>
+        </section>
+
+        <!-- Properties of THIS machine, not of you: the same checkout runs on
+             several machines and they want different answers. Stored in
+             ~/.fleetview/machine.json, outside the repo (server/machine-config.js).
+             Your own preferences (theme, sound, picker defaults) stay above. -->
+        <section class="set-sec">
+          <h3 class="set-h">This machine</h3>
+          <div class="set-row">
+            <span class="set-label">Name</span>
+            <input type="text" id="mcLabel" class="set-text" maxlength="40" placeholder="hostname" />
+          </div>
+          <div class="set-row">
+            <span class="set-label">Icon colour</span>
+            <select id="mcColor"></select>
+          </div>
+          <div class="set-sub">Accounts this machine offers</div>
+          <div id="mcAccounts" class="mc-accounts"></div>
+          <div class="set-sub">Pane badge</div>
+          <div class="mc-logo">
+            <span id="mcLogoPreview" class="mc-logo-preview" hidden></span>
+            <button id="mcLogoPick" class="mc-btn">Choose image…</button>
+            <button id="mcLogoClear" class="mc-btn" hidden>Remove</button>
+            <input type="file" id="mcLogoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden />
+          </div>
+          <div id="mcNote" class="set-note"></div>
         </section>
 
         <section class="set-sec">
@@ -159,25 +251,76 @@
         </div>
         <div class="plist" id="plist"></div>
         <div class="precent" id="precent"></div>
+        <!-- Two rows on purpose. As one flex row the controls were phrased as
+             running sentences ("run [select] on open", "and run [select]
+             there") and there was never enough width, so the connecting words
+             wrapped mid-phrase — "on / open", "Chat / view" — next to the
+             buttons. Fields now carry a short label of their own and never
+             wrap; the actions get their own right-aligned row. -->
         <div class="pfoot">
-          <label class="runclaude">
-            run
-            <select id="agentSelect">
-              <option value="claude" selected>claude</option>
-              <option value="claude-work">claude (work)</option>
-              <option value="codex">codex</option>
-              <option value="codex-work">codex (work)</option>
-              <option value="">plain shell</option>
-            </select>
-            on open
-          </label>
-          <label class="chatview" title="Chat UI instead of a terminal — no xterm, native scrolling, tap-to-approve.">
-            <input type="checkbox" id="chatView" checked />
-            💬 Chat view
-          </label>
+          <div class="popts">
+            <label class="runclaude">
+              <span class="popt-lbl">Run on open</span>
+              <select id="agentSelect">
+                <option value="claude-work" selected>claude (work)</option>
+                <option value="codex-work">codex (work)</option>
+                <option value="">plain shell</option>
+                <optgroup label="SSH" id="sshOptGroup"></optgroup>
+              </select>
+            </label>
+            <label class="runclaude" id="sshRunRow" hidden>
+              <span class="popt-lbl">Then run there</span>
+              <select id="sshAgentSelect">
+                <option value="" selected>plain shell</option>
+                <option value="claude-work">claude (work)</option>
+                <option value="codex-work">codex (work)</option>
+              </select>
+            </label>
+            <label class="chatview" title="Chat UI instead of a terminal — no xterm, native scrolling, tap-to-approve.">
+              <input type="checkbox" id="chatView" checked />
+              <svg class="ico-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <span>Chat view</span>
+            </label>
+          </div>
+          <div class="pacts">
+            <button id="pcancel">Cancel</button>
+            <button id="popen" class="primary">Open here</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SSH server manager modal -->
+    <div id="sshManager" hidden>
+      <div class="panel small">
+        <div class="phead"><span class="ptitle">SSH Servers</span></div>
+        <div class="plist" id="sshList"></div>
+        <div class="pfoot">
+          <button id="sshAddBtn">+ Add server</button>
           <span class="spacer"></span>
-          <button id="pcancel">Cancel</button>
-          <button id="popen" class="primary">Open here</button>
+          <button id="sshManagerClose" class="primary">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SSH server add/edit modal -->
+    <div id="sshEdit" hidden>
+      <div class="panel small">
+        <div class="phead"><span class="ptitle" id="sshEditTitle">Add SSH server</span></div>
+        <div class="sshform">
+          <label>Name<input id="sshName" type="text" placeholder="my-server" /></label>
+          <label>Host<input id="sshHost" type="text" placeholder="203.0.113.5" /></label>
+          <label>Port<input id="sshPort" type="number" min="1" max="65535" placeholder="22" /></label>
+          <label>User<input id="sshUser" type="text" placeholder="root" /></label>
+          <label>
+            Identity file <span class="hint">(optional — blank uses ssh-agent / default keys)</span>
+            <input id="sshIdentity" type="text" placeholder="~/.ssh/id_ed25519" />
+          </label>
+        </div>
+        <div class="pfoot">
+          <span class="spacer"></span>
+          <button id="sshEditCancel">Cancel</button>
+          <button id="sshEditSave" class="primary">Save</button>
         </div>
       </div>
     </div>

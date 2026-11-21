@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { spawnOverSsh } from "../ssh-remote-agent.js";
 
 // Client → server decision values are our own "allow"|"deny"|"always"
 // vocabulary (same as claude-driver.js, so agent-chat.ts's UI never needs to
@@ -39,6 +40,67 @@ function toolResultFromItem(item) {
 }
 
 /**
+ * Codex's permission model is TWO orthogonal axes (approvalPolicy ×
+ * sandboxPolicy), not Claude Code's single permissionMode enum, so FleetView
+ * gives codex panes their own three modes named the way Codex names them
+ * rather than mapping them onto Claude's words. Pairs below are the ones the
+ * Codex CLI's own flags document (`-a/--ask-for-approval`, `-s/--sandbox`).
+ *
+ * The two shapes are NOT interchangeable, verified against
+ * `codex app-server generate-ts`:
+ *   - `ThreadStartParams.sandbox` / `ThreadResumeParams.sandbox` take a plain
+ *     `SandboxMode` STRING ("read-only" | "workspace-write" | ...).
+ *   - `TurnStartParams.sandboxPolicy` takes a tagged `SandboxPolicy` OBJECT
+ *     ({type:"readOnly", networkAccess} | {type:"workspaceWrite", ...} | ...).
+ * Hence `sandbox` and `policy` per entry — passing one where the other
+ * belongs is silently ignored rather than rejected.
+ */
+const CODEX_MODES = {
+  "read-only": {
+    approvalPolicy: "on-request",
+    sandbox: "read-only",
+    policy: () => ({ type: "readOnly", networkAccess: false }),
+  },
+  auto: {
+    approvalPolicy: "on-request",
+    sandbox: "workspace-write",
+    policy: (cwd) => ({
+      type: "workspaceWrite",
+      // The pane's own cwd, stated explicitly rather than relying on an
+      // implicit workspace root — this object REPLACES the resolved policy,
+      // so an empty list would be a silent downgrade to "nothing writable".
+      writableRoots: [cwd],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    }),
+  },
+  "full-access": {
+    approvalPolicy: "never",
+    sandbox: "danger-full-access",
+    policy: () => ({ type: "dangerFullAccess" }),
+  },
+};
+
+/**
+ * Name the mode from the settings the server RESOLVED (thread/start's response
+ * and `thread/settings/updated` both report approvalPolicy + sandbox), so the
+ * UI shows what the session is actually running under — including whatever
+ * config.toml defaulted to — instead of echoing back what we asked for.
+ * Keyed off the sandbox axis, which is the one that decides what can happen.
+ */
+function modeFromSettings(sandbox) {
+  switch (sandbox?.type) {
+    case "dangerFullAccess":
+      return "full-access";
+    case "readOnly":
+      return "read-only";
+    default:
+      return "auto";
+  }
+}
+
+/**
  * Wraps one `codex app-server --stdio` subprocess as a long-lived session,
  * mirroring claude-driver.js's external contract exactly (`send`/`approve`/
  * `interrupt`/`dispose`, same normalized `AgentEvent`s out) so agent-manager.js
@@ -56,16 +118,23 @@ function toolResultFromItem(item) {
  *   cwd: string,
  *   resume?: string,
  *   env?: Record<string,string|undefined>,
+ *   remote?: { target: string, port?: number, identityFile?: string, envPrefix?: string },
  *   onEvent: (ev: import("./event-schema.js").AgentEvent) => void,
  *   onSessionId: (id: string) => void,
  * }} opts
  */
-export function startCodexSession({ cwd, resume, env, onEvent, onSessionId, onRateLimit }) {
-  const proc = spawn("codex", ["app-server", "--stdio"], {
-    cwd,
-    env: env || process.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+export function startCodexSession({ cwd, resume, mode, env, remote, onEvent, onSessionId, onRateLimit }) {
+  // `remote` runs the exact same "app-server --stdio" invocation over ssh on
+  // another host instead of locally (see ssh-remote-agent.js) — every line
+  // below this only ever touches proc.stdin/proc.stdout, so nothing else in
+  // this file needs to know which case it is.
+  const proc = remote
+    ? spawnOverSsh(remote, remote.envPrefix, ["codex", "app-server", "--stdio"])
+    : spawn("codex", ["app-server", "--stdio"], {
+        cwd,
+        env: env || process.env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
 
   let nextId = 0;
   const pending = new Map(); // our request id -> {resolve, reject}
@@ -73,6 +142,15 @@ export function startCodexSession({ cwd, resume, env, onEvent, onSessionId, onRa
   const itemsById = new Map(); // itemId -> latest known ThreadItem (fileChange approvals don't carry path/diff inline — see handleServerRequest)
   let threadId = null;
   let currentTurnId = null;
+  // The mode we last told the UI. Starts as the requested one and is
+  // corrected to the server-resolved value once the thread exists.
+  let currentMode = CODEX_MODES[mode] ? mode : null;
+  // Set by setMode(): there is no thread/setSettings request in the
+  // protocol (verified — ClientRequest has no settings mutator), so a live
+  // switch can only ride along on the next turn/start, where
+  // approvalPolicy/sandboxPolicy are documented as applying "for this turn
+  // and subsequent turns".
+  let pendingModeOverride = null;
   let disposed = false;
   let buf = "";
 
@@ -123,16 +201,38 @@ export function startCodexSession({ cwd, resume, env, onEvent, onSessionId, onRa
         currentTurnId = params.turn.id;
         onEvent({ t: "status", state: "working" });
         break;
-      case "turn/completed":
+      case "turn/completed": {
+        // Turn.status (verified via `codex app-server generate-ts`, ground
+        // truth per this file's own rule — not guessed): "completed" |
+        // "interrupted" | "failed" | "inProgress". "interrupted" is a real,
+        // distinct value — a restart/manual interrupt ends a turn this way,
+        // not as "failed" and not as a normal "completed" finish, so without
+        // this branch it looked identical to a clean completion (same "idle"
+        // status, same "done" attention) even though the last visible
+        // agentMessage may be cut off mid-word. `Turn.error` is only
+        // populated when status is "failed" (per the generated type's own
+        // doc comment), so it's naturally absent here.
+        const { status } = params.turn;
         onEvent({
           t: "status",
-          state: params.turn.status === "failed" ? "error" : "idle",
-          detail: params.turn.error?.message,
+          state: status === "failed" ? "error" : status === "interrupted" ? "aborted" : "idle",
+          detail: params.turn.error?.message ?? (status === "interrupted" ? "Turn was interrupted" : undefined),
         });
         break;
+      }
       case "error":
         onEvent({ t: "status", state: "error", detail: params.error?.message });
         break;
+      case "thread/settings/updated": {
+        // Settings can change without us asking (a turn override elsewhere, a
+        // permission profile). Re-derive rather than assume ours stuck.
+        const resolved = modeFromSettings(params?.threadSettings?.sandboxPolicy);
+        if (resolved !== currentMode) {
+          currentMode = resolved;
+          onEvent({ t: "mode", mode: resolved });
+        }
+        break;
+      }
       case "account/rateLimits/updated":
         // Account-level limit snapshot, pushed for free during normal turns.
         // Like claude's rate_limit_event this is NOT an AgentEvent — limits are
@@ -226,11 +326,22 @@ export function startCodexSession({ cwd, resume, env, onEvent, onSessionId, onRa
         capabilities: { experimentalApi: false, requestAttestation: false },
       });
       rpcSend("initialized", undefined, false);
+      // Only send policy overrides when a mode was explicitly chosen; with no
+      // mode we stay silent so the account's config.toml default wins rather
+      // than being clobbered by a FleetView opinion.
+      const init = CODEX_MODES[currentMode]
+        ? { approvalPolicy: CODEX_MODES[currentMode].approvalPolicy, sandbox: CODEX_MODES[currentMode].sandbox }
+        : {};
       const threadRes = resume
-        ? await rpcSend("thread/resume", { threadId: resume, cwd })
-        : await rpcSend("thread/start", { cwd });
+        ? await rpcSend("thread/resume", { threadId: resume, cwd, ...init })
+        : await rpcSend("thread/start", { cwd, ...init });
       threadId = threadRes.thread.id;
       onSessionId(threadId);
+      // thread/start|resume answer with the RESOLVED settings — report those,
+      // so a pane that never set a mode still shows the truth (and the UI has
+      // something to display before the first message, same as claude-driver).
+      currentMode = modeFromSettings(threadRes.sandbox);
+      onEvent({ t: "mode", mode: currentMode });
       resolveReady();
     } catch (err) {
       rejectReady(err);
@@ -244,14 +355,38 @@ export function startCodexSession({ cwd, resume, env, onEvent, onSessionId, onRa
       onEvent({ t: "status", state: "working" });
       try {
         await ready;
+        // Apply a queued mode switch on this turn (and, per the protocol docs,
+        // every subsequent one) — then clear it, so we don't keep overriding
+        // settings the user may later change elsewhere.
+        const override = CODEX_MODES[pendingModeOverride]
+          ? {
+              approvalPolicy: CODEX_MODES[pendingModeOverride].approvalPolicy,
+              sandboxPolicy: CODEX_MODES[pendingModeOverride].policy(cwd),
+            }
+          : {};
+        pendingModeOverride = null;
         const res = await rpcSend("turn/start", {
           threadId,
           input: [{ type: "text", text, text_elements: [] }],
+          ...override,
         });
         currentTurnId = res.turn.id;
       } catch (err) {
         onEvent({ t: "status", state: "error", detail: err?.message || String(err) });
       }
+    },
+    /**
+     * Queue a permission-mode change. Unlike claude-driver.js's setMode this
+     * canNOT take effect immediately — the protocol has no thread-settings
+     * mutator — so it lands on the NEXT message. Told to the UI right away
+     * regardless, since that's the state the next turn will run under, and
+     * agent-manager.js persists it off this same `mode` event.
+     */
+    async setMode(next) {
+      if (!CODEX_MODES[next]) return;
+      pendingModeOverride = next;
+      currentMode = next;
+      onEvent({ t: "mode", mode: next });
     },
     /** @returns {boolean} whether a pending request with that id was found */
     approve(requestId, decision) {
