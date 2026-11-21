@@ -32,6 +32,8 @@ const DEFAULT_PREFS = {
   pushDone: false, // a turn finished, or was cut off — off by default, it's noisy on a busy fleet
   // Safety
   confirmClose: false, // ask before ✕ kills a terminal
+  // Sessions
+  autoTitle: true, // name a new session from its first message (server/auto-title.js)
 };
 
 /**

@@ -28,6 +28,7 @@ import { normalizeCodexSnapshot, normalizeClaudeEvent } from "./usage.js";
 import { ensureHooks } from "./setup-hooks.js";
 import { ensureCodexHooks } from "./setup-codex-hooks.js";
 import { listDirs, makeDir } from "./fs-browse.js";
+import { generateTitle } from "./auto-title.js";
 import { preflight } from "../scripts/preflight.js";
 
 // Check for tmux / curl / claude / codex FIRST, so any missing-dependency warning is the
@@ -52,6 +53,9 @@ ensureHooks(PORT);
 // that directory already exists, so machines that never set up a work account
 // don't get a ~/.claude-work directory created out of nowhere.
 const workConfigDir = join(homedir(), ".claude-work");
+// Panes created by this process that may still get an auto title — see
+// maybeAutoTitle(). Declared before anything that can call broadcast().
+const freshPanes = new Set();
 if (existsSync(workConfigDir)) ensureHooks(PORT, workConfigDir);
 ensureCodexHooks(PORT);
 // Same idea for a second Codex account (the "codex (work)" picker option):
@@ -132,6 +136,9 @@ const controlClients = new Set();
 // zone if something ever broadcasts during startup.
 let pushes = null;
 function broadcast(session, msg) {
+  // Every prompt — chat pane or a terminal pane's hook — passes through here
+  // as an `input` event, so this is the one place to name new sessions.
+  if (msg && msg.t === "input" && msg.pane) maybeAutoTitle(msg.pane, msg.text);
   const s = JSON.stringify(msg);
   for (const ws of controlClients) {
     try {
@@ -330,9 +337,43 @@ app.post("/api/panes", (req, res) => {
   }
   const info = registry.info(pane.id);
   layouts.addRecent(info.cwd);
+  freshPanes.add(pane.id); // eligible for an auto title on its first real prompt
   broadcast(info.session, { t: "created", pane: info });
+  // Optional first message (the phone's new-session sheet): a chat pane gets
+  // it straight away, so you land in a conversation that's already started.
+  const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
+  if (prompt && info.kind === "agent") agents.sendMessage(pane.id, prompt.slice(0, 20000));
   res.json(info);
 });
+
+// ---- Session titles ----------------------------------------------------------
+// A NEW session is named from its first real prompt ("Fix push notifications")
+// instead of its folder, as the Claude app does — see auto-title.js. Only panes
+// created by this process qualify: renaming an existing, folder-named pane after
+// whatever you typed next would be worse than no title. Never overrides a name
+// you set, before or during the request. (`freshPanes` is declared up top, before
+// the managers that call broadcast() exist.)
+function maybeAutoTitle(id, text) {
+  if (!freshPanes.has(id) || layouts.prefs().autoTitle === false) return;
+  const info = registry.info(id);
+  if (!info || info.name) return void freshPanes.delete(id);
+  const prompt = String(text || "").trim();
+  if (prompt.length < 12 || prompt.split(/\s+/).length < 3) return; // "yes", "go on" — wait for a real one
+  freshPanes.delete(id); // one attempt per session
+  const profile = String(info.cmd || "").trim().split(/\s+/)[0];
+  const env = { ...process.env, ...(profile.endsWith("-work") ? { CLAUDE_CONFIG_DIR: workConfigDir } : {}) };
+  delete env.ANTHROPIC_API_KEY; // subscription billing, same rule as chat panes
+  delete env.FLEET_PANE_ID; // never look like a FleetView pane to the hooks
+  generateTitle(prompt, { env, cwd: tmpdir() }).then(
+    (title) => {
+      const now = registry.info(id);
+      if (!title || !now || now.name) return; // closed, or you named it meanwhile
+      registry.setName(id, title);
+      broadcast(registry.sessionOf(id), { t: "renamed", pane: id, name: title });
+    },
+    () => {}
+  );
+}
 
 /**
  * Flip ONE pane between terminal view and chat view.

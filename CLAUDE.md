@@ -78,6 +78,7 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/markdown.ts` | Markdown → safe HTML for chat bubbles (tables, media, task lists) |
 | `client/src/rich.ts` | post-render pass: charts, table→chart toggle, copy buttons, clipping |
 | `client/src/chat-steps.ts` / `chat-dock.ts` / `chat-commands.ts` / `lightbox.ts` / `highlight.ts` | chat view: step rendering / approval dock / "/" menu / image viewer / code highlighting |
+| `client/src/new-session.ts` / `server/auto-title.js` | phone new-session sheet / auto session titles |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
 | `client/src/push.ts` / `client/public/sw.js` | Web Push subscribe/badge / the service worker that shows notifications |
 | `server/gate.js` | optional passkey-auth reverse proxy (`fleetview-gate` service) that `tailscale serve` fronts instead of the app directly — a SEPARATE process from `server/index.js`, own port (`FLEET_GATE_PORT`, default 4290), own launchd/systemd unit (`com.fleetview.gate`). See Gotchas. |
@@ -385,6 +386,20 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   with Done on a phone. The redesign appended overrides rather than deleting
   the older `#settings` rules — when editing, look at the later block first.
   All ids are unchanged and wired in main.ts.
+- **Phone "+" opens the new-session sheet** (`new-session.ts`): recent folder,
+  agent, Chat/Terminal (remembered in localStorage), optional first message.
+  `POST /api/panes` accepts `prompt`, sent straight to a new CHAT pane via
+  `agents.sendMessage`; the client then zooms the pane once `created` lands.
+  "Browse…" falls back to the desktop picker, which desktop still uses.
+- **Auto session titles** (`server/auto-title.js`, `maybeAutoTitle()` in
+  index.js): hooked in `broadcast()` on `input` events, so chat panes AND
+  terminal panes (via the UserPromptSubmit hook) are covered. Only panes
+  created by THIS process (`freshPanes`) qualify — existing folder-named panes
+  are never renamed — on their first prompt of ≥3 words, once, never over a
+  name you set. One Haiku call: `tools: []`, `settingSources: []`,
+  `persistSession: false` (no junk session in Claude Code's history), work
+  account via CLAUDE_CONFIG_DIR, FLEET_PANE_ID stripped; falls back to a
+  text heuristic. Off switch: the `autoTitle` pref (Settings → Workspace).
 - **Settings outside-click uses `settingsBtn.contains(target)`** — the button
   holds an SVG, so `target === settingsBtn` closed the panel as it opened.
 - **Account badges use `.acct-slot`, not `.badge-slot`.** They sit in the

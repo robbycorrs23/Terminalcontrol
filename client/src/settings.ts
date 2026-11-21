@@ -34,6 +34,8 @@ export interface Settings {
   pushQuestion: boolean;
   pushDone: boolean;
   confirmClose: boolean;
+  /** Name new sessions from their first message (server/auto-title.js). */
+  autoTitle: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -46,6 +48,7 @@ const DEFAULTS: Settings = {
   pushQuestion: true,
   pushDone: false,
   confirmClose: false,
+  autoTitle: true,
 };
 
 /** Coerce anything (server JSON, a stale mirror, a hand-edited file) into a
@@ -69,6 +72,8 @@ function coerce(raw: any): Settings {
     pushQuestion: r.pushQuestion === undefined ? DEFAULTS.pushQuestion : !!r.pushQuestion,
     pushDone: r.pushDone === undefined ? DEFAULTS.pushDone : !!r.pushDone,
     confirmClose: !!r.confirmClose,
+    // Default-true: needs the `=== undefined` form (see pushQuestion above).
+    autoTitle: r.autoTitle === undefined ? DEFAULTS.autoTitle : !!r.autoTitle,
   };
 }
 
