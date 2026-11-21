@@ -1,10 +1,10 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, copyFileSync, statSync, unlinkSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { startClaudeSession } from "./agents/claude-driver.js";
 import { startCodexSession } from "./agents/codex-driver.js";
-import { restoreEvents, olderEvents } from "./transcript.js";
+import { restoreEvents, olderEvents, findTranscript, transcriptEntries, isHumanPrompt, eventsFromTranscript } from "./transcript.js";
 
 const RING_BUFFER_SIZE = 300; // replayed to a client that attaches/reconnects
 // Never ringed. Deltas would evict real history (see _handleEvent); progress
@@ -136,6 +136,10 @@ export class AgentManager {
       mode: p.mode,
       model: p.model || null,
       remote: p.remote || null,
+      // Rewind state: a one-shot fork point for the next driver start, and
+      // what "Undo rewind" needs (the pre-rewind session + file backups).
+      resumeAt: p.resumeAt || null,
+      rewindUndo: p.rewindUndo || null,
     }));
     writeFileSync(this.stateFile, JSON.stringify(records, null, 2));
   }
@@ -197,12 +201,17 @@ export class AgentManager {
     pane.driver = start({
       cwd: pane.cwd,
       resume: this._resumableSessionId(pane),
+      resumeAt: pane.resumeAt || undefined,
       mode: pane.mode || "default",
       env: this._buildEnv(pane),
       remote: pane.remote ? { ...pane.remote, envPrefix: remoteEnvPrefix(pane.cmd, pane.provider) } : null,
       onEvent: (ev) => this._handleEvent(pane, ev),
       onSessionId: (sid) => {
-        if (pane.sdkSessionId !== sid) {
+        // A fork point is one-shot: once the forked session exists, later
+        // driver starts just resume it.
+        const forked = !!pane.resumeAt;
+        pane.resumeAt = null;
+        if (pane.sdkSessionId !== sid || forked) {
           pane.sdkSessionId = sid;
           this._persist();
         }
@@ -417,6 +426,21 @@ export class AgentManager {
         this.setMode(id, m.mode);
       } else if (m.t === "setModel" && typeof m.model === "string" && m.model) {
         this.setModel(id, m.model);
+      } else if (m.t === "rewindPreview" && typeof m.messageId === "string") {
+        this.rewindPreview(id, m.messageId).then(
+          (r) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "rewindPreview", messageId: m.messageId, ...r })),
+          () => {}
+        );
+      } else if (m.t === "rewind" && typeof m.messageId === "string" && typeof m.text === "string") {
+        this.rewind(id, m.messageId, m.text.slice(0, 20000), !!m.restoreFiles).then(
+          (r) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "rewindResult", ...r })),
+          (e) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "rewindResult", ok: false, reason: e.message }))
+        );
+      } else if (m.t === "undoRewind") {
+        this.undoRewind(id).then(
+          (r) => ws.readyState === 1 && ws.send(JSON.stringify({ t: "undoResult", ...r })),
+          () => {}
+        );
       } else if (m.t === "stopTask" && typeof m.id === "string") {
         pane.driver?.stopTask?.(m.id);
       } else if (m.t === "history" && Array.isArray(m.anchors)) {
@@ -506,6 +530,173 @@ export class AgentManager {
       this.broadcast(pane.session, { t: "cleared", pane: id });
     }
     return ok;
+  }
+
+  // ---- Rewind: edit an earlier message and resend from there ------------------
+  // The conversation is restarted at that point as a FORK (new session id, the
+  // original transcript untouched — so it can be undone). Files are optionally
+  // put back with the SDK's file checkpoints (only edits made by Claude's file
+  // tools, in sessions that had checkpointing on); whatever a restore would
+  // overwrite is copied aside first, so "Undo rewind" can put it back too.
+
+  _rewindable(pane) {
+    if (!pane) return "No such pane.";
+    if (pane.provider !== "claude") return "Rewind is only available for Claude sessions.";
+    if (pane.remote) return "This session runs on another machine.";
+    if (!pane.sdkSessionId) return "This session has no saved history yet.";
+    if (pane.status === "working" || pane.status === "waiting_permission") return "Wait for the current turn to finish (or stop it) first.";
+    return null;
+  }
+
+  /** The message's transcript entry and everything a rewind needs to know about it. */
+  _rewindTarget(pane, messageId) {
+    const configDir = pane.accountConfigDir || join(homedir(), ".claude");
+    const file = findTranscript(configDir, pane.sdkSessionId);
+    if (!file) return { error: "This session's saved history couldn't be found." };
+    const entries = transcriptEntries(file);
+    const idx = entries.findIndex((e) => e.uuid === messageId && isHumanPrompt(e));
+    if (idx < 0)
+      return {
+        error:
+          "That message isn't in this session's saved history — it was sent before rewind support, or the conversation was compacted past it.",
+      };
+    const laterTurns = entries.slice(idx + 1).filter(isHumanPrompt).length;
+    return { file, configDir, entry: entries[idx], laterTurns };
+  }
+
+  /** What a rewind to `messageId` would do — shown before you confirm. */
+  async rewindPreview(id, messageId) {
+    const pane = this.panes.get(id);
+    const why = this._rewindable(pane);
+    if (why) return { ok: false, reason: why };
+    const t = this._rewindTarget(pane, messageId);
+    if (t.error) return { ok: false, reason: t.error };
+    let files = { available: false, list: [], note: "" };
+    try {
+      const r = await this._ensureDriver(pane).rewindFiles(messageId, true);
+      files = r?.canRewind
+        ? { available: true, list: r.filesChanged || [], insertions: r.insertions || 0, deletions: r.deletions || 0 }
+        : { available: false, list: [], note: r?.error || "No file backups for this session (it started before they were turned on)." };
+    } catch (e) {
+      files = { available: false, list: [], note: "File backups aren't available for this session." };
+    }
+    return { ok: true, laterTurns: t.laterTurns, files };
+  }
+
+  /** Copy what a file restore is about to overwrite, so Undo can put it back. */
+  _backupFiles(pane, paths) {
+    const dir = join(homedir(), ".fleetview", "rewind-backups", `${pane.id}-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const files = paths.map((path, i) => {
+      try {
+        if (statSync(path).isFile()) {
+          copyFileSync(path, join(dir, String(i)));
+          return { path, existed: true, copy: String(i) };
+        }
+      } catch {}
+      return { path, existed: false };
+    });
+    return { dir, files };
+  }
+
+  _restoreBackup(backup) {
+    for (const f of backup.files) {
+      try {
+        if (f.existed) {
+          mkdirSync(dirname(f.path), { recursive: true });
+          copyFileSync(join(backup.dir, f.copy), f.path);
+        } else if (existsSync(f.path)) {
+          unlinkSync(f.path); // the rewind brought it back; before, it didn't exist
+        }
+      } catch {}
+    }
+  }
+
+  _dropBackup(undo) {
+    if (undo?.backup?.dir) rmSync(undo.backup.dir, { recursive: true, force: true });
+  }
+
+  /** Replace every attached window's log with `events` (after a rewind or undo). */
+  _replayAll(pane, events) {
+    pane.events = events.slice(-(RING_BUFFER_SIZE - 10));
+    pane._hydrated = true;
+    pane.suggestions = [];
+    const msg = JSON.stringify({ t: "replay", events: pane.events });
+    for (const ws of pane.clients) {
+      try {
+        ws.send(msg);
+      } catch {}
+    }
+  }
+
+  /**
+   * Edit message `messageId` to `text` and resend from there. Returns
+   * `{ ok, reason?, restored? }`.
+   */
+  async rewind(id, messageId, text, restoreFiles) {
+    const pane = this.panes.get(id);
+    const why = this._rewindable(pane);
+    if (why) return { ok: false, reason: why };
+    const body = String(text || "").trim();
+    if (!body) return { ok: false, reason: "The edited message is empty." };
+    const t = this._rewindTarget(pane, messageId);
+    if (t.error) return { ok: false, reason: t.error };
+
+    let backup = null;
+    if (restoreFiles) {
+      const driver = this._ensureDriver(pane);
+      const dry = await driver.rewindFiles(messageId, true).catch((e) => ({ canRewind: false, error: e.message }));
+      if (!dry?.canRewind) return { ok: false, reason: dry?.error || "Files can't be restored for this session." };
+      backup = this._backupFiles(pane, dry.filesChanged || []);
+      const done = await driver.rewindFiles(messageId, false).catch((e) => ({ canRewind: false, error: e.message }));
+      if (!done?.canRewind) {
+        this._restoreBackup(backup); // undo any partial restore
+        this._dropBackup({ backup });
+        return { ok: false, reason: done?.error || "Restoring files failed; nothing was changed." };
+      }
+    }
+
+    // Keep exactly one level of undo: a new rewind retires the previous one.
+    this._dropBackup(pane.rewindUndo);
+    pane.rewindUndo = { sdkSessionId: pane.sdkSessionId, backup };
+
+    // Restart the conversation as a fork, just before the edited message.
+    pane.driver?.dispose();
+    pane.driver = null;
+    const parent = t.entry.parentUuid || null;
+    if (parent) pane.resumeAt = { at: parent };
+    else {
+      pane.sdkSessionId = null; // editing the very first message: a fresh session
+      pane.resumeAt = null;
+    }
+
+    // Everything the chat showed before that message, then the new message.
+    const all = eventsFromTranscript(t.file, Infinity).filter((e) => e.t !== "status");
+    const cut = all.findIndex((e) => e.t === "user" && e.id === messageId);
+    this._replayAll(pane, cut >= 0 ? all.slice(0, cut) : []);
+    this._persist();
+    this.sendMessage(id, body);
+    return { ok: true, restored: backup ? backup.files.length : 0, removedTurns: t.laterTurns + 1 };
+  }
+
+  /** Put the conversation (and any restored files) back as they were before the last rewind. */
+  async undoRewind(id) {
+    const pane = this.panes.get(id);
+    const undo = pane?.rewindUndo;
+    if (!undo) return { ok: false, reason: "Nothing to undo." };
+    if (pane.status === "working" || pane.status === "waiting_permission")
+      return { ok: false, reason: "Wait for the current turn to finish (or stop it) first." };
+    pane.driver?.dispose();
+    pane.driver = null;
+    if (undo.backup) this._restoreBackup(undo.backup);
+    this._dropBackup(undo);
+    pane.rewindUndo = null;
+    pane.resumeAt = null;
+    pane.sdkSessionId = undo.sdkSessionId;
+    const configDir = pane.accountConfigDir || join(homedir(), ".claude");
+    this._replayAll(pane, restoreEvents(configDir, pane.sdkSessionId, RING_BUFFER_SIZE - 10));
+    this._persist();
+    return { ok: true };
   }
 
   /** Answer an AskUserQuestion prompt (see claude-driver.js's `answer`). */

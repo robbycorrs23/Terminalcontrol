@@ -201,3 +201,29 @@ function parsedAll(file) {
 export function allTranscriptEvents(file) {
   return parsedAll(file);
 }
+
+/**
+ * Raw transcript lines (uuid / parentUuid / type) — what a rewind needs to
+ * find a message and the entry it was chained onto.
+ */
+export function transcriptEntries(file) {
+  let raw;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {}
+  }
+  return out;
+}
+
+/** A user line that is a real typed prompt (not a tool result, not meta/synthetic). */
+export function isHumanPrompt(e) {
+  return e.type === "user" && !e.isSidechain && !e.isMeta && typeof e.message?.content === "string" && e.message.content.trim() !== "";
+}

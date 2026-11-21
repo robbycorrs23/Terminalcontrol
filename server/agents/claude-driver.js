@@ -50,7 +50,7 @@ function stringifyBlockContent(content) {
  *   onModel?: (model: string) => void,
  * }} opts
  */
-export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, onSessionId, onModel, onRateLimit }) {
+export function startClaudeSession({ cwd, resume, resumeAt, env, mode, remote, onEvent, onSessionId, onModel, onRateLimit }) {
   const promptQueue = new PushQueue();
   const pendingPermissions = new Map(); // requestId -> (decision: "allow"|"deny"|"always", message?: string) => void
   const pendingQuestions = new Map(); // requestId -> (answers|null) => void
@@ -135,6 +135,21 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
     options: {
       cwd,
       resume,
+      // Rewind (agent-manager.js rewind()): restart the conversation at an
+      // earlier point as a FORK — a new session id, the original transcript
+      // left untouched, so the rewind itself can be undone. `dropsTurn` arms
+      // the CLI's guard when exactly one turn is being discarded.
+      ...(resume && resumeAt?.at
+        ? {
+            resumeSessionAt: resumeAt.at,
+            forkSession: true,
+            ...(resumeAt.dropsTurn ? { resumeDropsTurn: resumeAt.dropsTurn } : {}),
+          }
+        : {}),
+      // Back up files before Claude's file tools change them, so a rewind can
+      // put them back (Query.rewindFiles). Edits made through Bash are not
+      // tracked — the UI says so.
+      enableFileCheckpointing: true,
       permissionMode: mode || "default",
       canUseTool,
       // Live text + thinking as they generate (the Claude app streams; a reply
@@ -437,9 +452,20 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
 
   return {
     send(text) {
-      onEvent({ t: "user", id: randomUUID(), text });
+      // OUR id goes into the SDK message too, so the transcript records it
+      // under the same uuid the chat shows — that's what a rewind targets.
+      const id = randomUUID();
+      onEvent({ t: "user", id, text });
       onEvent({ t: "status", state: "working" });
-      promptQueue.push({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null });
+      promptQueue.push({ type: "user", message: { role: "user", content: text }, parent_tool_use_id: null, uuid: id });
+    },
+    /**
+     * Put files back the way they were when user message `messageId` was sent
+     * (only edits made by Claude's file tools, in sessions with checkpointing).
+     * `dryRun` previews without touching anything.
+     */
+    async rewindFiles(messageId, dryRun) {
+      return q.rewindFiles(messageId, dryRun ? { dryRun: true } : undefined);
     },
     /**
      * Answer an AskUserQuestion prompt. `answers` is the tool's own shape:

@@ -5848,3 +5848,222 @@ body.light .ns-seg button.on {
   color: var(--text);
   border-color: var(--accent);
 }
+
+/* ---- Edit & resend (rewind-editor.ts) ------------------------------------ */
+.term .msg.user.editable {
+  position: relative;
+}
+.term .msg-edit {
+  position: absolute;
+  right: 4px;
+  bottom: -22px;
+  padding: 1px 8px;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.term .msg.user.editable:hover .msg-edit,
+.term .msg.user.editable.show-edit .msg-edit,
+.term .msg-edit:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.term .msg-edit:hover {
+  color: var(--accent);
+}
+.term .msg.user.editable:hover,
+.term .msg.user.editable.show-edit {
+  margin-bottom: 18px; /* room for the Edit link under the bubble */
+}
+@media (hover: none) {
+  .term .msg.user.editable:hover:not(.show-edit) {
+    margin-bottom: 0;
+  }
+  .term .msg.user.editable:hover:not(.show-edit) .msg-edit {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+.term .rw-card {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  font-size: 13px;
+}
+.term .rw-title {
+  font-weight: 700;
+  color: var(--text);
+}
+.term .rw-text {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.term .rw-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.term .rw-info {
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.term .rw-info.bad,
+.term .rw-error {
+  color: var(--aborted);
+}
+.term .rw-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+}
+.term .rw-switch[hidden] {
+  display: none;
+}
+.term .rw-switch-label {
+  color: var(--text);
+}
+.term .rw-switch input {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 24px;
+  margin: 0;
+  border-radius: 12px;
+  background: var(--line);
+  cursor: pointer;
+  transition: background 0.18s;
+}
+.term .rw-switch input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.18s;
+}
+.term .rw-switch input:checked {
+  background: #34c759;
+}
+.term .rw-switch input:checked::after {
+  transform: translateX(16px);
+}
+.term .rw-switch input:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.term .rw-files {
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.term .rw-files[hidden],
+.term .rw-error[hidden] {
+  display: none;
+}
+.term .rw-btns {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.term .rw-cancel,
+.term .rw-send {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 9px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.term .rw-cancel {
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+.term .rw-send {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+}
+.term .rw-send:disabled,
+.term .rw-cancel:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* "Rewound · Undo" above the composer */
+.term .rw-undo {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 8px 4px;
+  padding: 6px 6px 6px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+}
+.term .rw-undo[hidden] {
+  display: none;
+}
+.term .rw-undo-text {
+  flex: 1;
+  color: var(--text);
+}
+.term .rw-undo-btn {
+  min-height: 30px;
+  padding: 0 12px;
+  background: var(--btn);
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.term .rw-undo-x {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: none;
+  color: var(--text-dim);
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+@media (max-width: 640px) {
+  .term .rw-text {
+    font-size: 16px; /* no iOS focus-zoom */
+  }
+}
