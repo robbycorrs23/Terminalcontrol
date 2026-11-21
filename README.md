@@ -65,8 +65,8 @@ npm run go       # build the client, then start the server
 ```
 
 Open **http://localhost:4280**. Click **+ Terminal**, pick a folder, and a box opens
-there running `claude` — as a **chat pane** by default, or as a classic terminal if you
-untick "💬 Chat view". The "run on open" select also offers `codex` and a plain shell.
+there running `claude` — as a classic **terminal** by default, or as a chat pane if you
+tick "💬 Chat view". The "run on open" select also offers `codex` and a plain shell.
 The `💬`/`▤` button in the top bar flips **every** box between the two views at once,
 carrying each conversation across.
 
