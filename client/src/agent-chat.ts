@@ -18,6 +18,7 @@ import { ApprovalDock, DockAnswer, PermissionEvent } from "./chat-dock";
 import { CommandMenu } from "./chat-commands";
 import { wireLightbox } from "./lightbox";
 import { openChanges } from "./changes-panel";
+import { createRewindEditor, RewindEditor, RewindPreview } from "./rewind-editor";
 import { mediaSrc } from "./markdown";
 import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown } from "./markdown";
@@ -251,6 +252,8 @@ export class AgentChat implements PaneView {
   private turnStart: number | null = null; // ts of the user message that opened the current turn
   private turnEls: HTMLElement[] = []; // assistant text blocks of the current turn (for Copy)
   private turnFiles = new Set<string>(); // files edited this turn → "N files changed" under it
+  private rewind: { messageId: string; editor: RewindEditor; bubble: HTMLElement } | null = null;
+  private undoBar!: HTMLElement; // "Rewound · Undo" above the composer
   private attachRow!: HTMLElement;
   private attachments: { path: string; name: string; uploading?: boolean }[] = [];
   private lastTs: number | undefined;
@@ -529,6 +532,8 @@ export class AgentChat implements PaneView {
     const logWrap = el("div", "log-wrap");
     logWrap.append(this.logEl, this.jumpBtn);
     wireLightbox(chat);
+    this.undoBar = el("div", "rw-undo");
+    this.undoBar.hidden = true;
     this.taskTray = el("div", "task-tray");
     this.taskTray.hidden = true;
     this.connEl = el("div", "conn-banner");
@@ -540,6 +545,7 @@ export class AgentChat implements PaneView {
       this.statusEl,
       this.plusMenu,
       this.cmdMenu.el,
+      this.undoBar,
       this.taskTray,
       this.suggestEl,
       this.queueEl,
@@ -669,7 +675,7 @@ export class AgentChat implements PaneView {
     // Click the box (outside controls/input) opens/zooms it, same as Term.
     this.el.addEventListener("click", (e) => {
       const tgt = e.target as HTMLElement;
-      if (tgt.closest(".ctl, .chat-input, .plus-menu, .jump-pill, .chat-dock, .chat-suggest, .cmd-menu, .turn-meta")) return;
+      if (tgt.closest(".ctl, .chat-input, .plus-menu, .jump-pill, .chat-dock, .chat-suggest, .cmd-menu, .turn-meta, .rw-card, .rw-undo, .msg-edit")) return;
       host.onOpen(this);
     });
 
@@ -750,7 +756,7 @@ export class AgentChat implements PaneView {
       if (this.ws === ws) this.setConnected(true);
     };
     ws.onmessage = (e) => {
-      let m: { t: string; events?: AgentEvent[]; ev?: AgentEvent; more?: boolean };
+      let m: { t: string; events?: AgentEvent[]; ev?: AgentEvent; more?: boolean; [k: string]: unknown };
       try {
         m = JSON.parse(e.data);
       } catch {
@@ -764,6 +770,17 @@ export class AgentChat implements PaneView {
         this.historyLoading = false;
         this.renderHistoryTop();
         this.scrollToBottom(true);
+      } else if (m.t === "rewindPreview") {
+        if (this.rewind && this.rewind.messageId === m.messageId) this.rewind.editor.apply(m as unknown as RewindPreview);
+      } else if (m.t === "rewindResult") {
+        if (m.ok) {
+          this.rewind = null; // the replay already replaced the log, editor included
+          const n = Number(m.restored || 0);
+          this.showUndoBar(n ? `Rewound · ${n} file${n === 1 ? "" : "s"} restored` : "Rewound");
+        } else this.rewind?.editor.fail(String(m.reason || "Couldn't rewind."));
+      } else if (m.t === "undoResult") {
+        this.undoBar.hidden = true;
+        this.flashNote(m.ok ? "Rewind undone" : String(m.reason || "Couldn't undo."));
       } else if (m.t === "history" && m.events) {
         this.prependHistory(m.events, !!m.more);
       } else if (m.t === "ev" && m.ev) {
@@ -955,6 +972,7 @@ export class AgentChat implements PaneView {
     this.setSuggestion("");
     this.tasks.clear();
     this.renderTasks();
+    this.rewind = null;
   }
 
   private applyEvent(ev: AgentEvent) {
@@ -972,7 +990,7 @@ export class AgentChat implements PaneView {
         // Older pages carry no per-turn status events; close each turn
         // (Copy + time) when the next prompt starts instead.
         if (this.prepending && this.turnEls.length) this.appendTurnMeta(this.turnStart && ev.ts ? ev.ts - this.turnStart : undefined);
-        this.appendBubble("user", ev.text);
+        this.addEditAction(this.appendBubble("user", ev.text), ev.id, ev.text);
         this.turnStart = ev.ts ?? Date.now();
         this.turnEls = [];
         this.turnFiles = new Set();
@@ -1635,6 +1653,86 @@ export class AgentChat implements PaneView {
       card.append(foot);
     }
     foot.textContent = "✓ " + Object.values(answers).join(" · ");
+  }
+
+  // ---- Edit & resend (rewind) -------------------------------------------------
+
+  /**
+   * "Edit" on your own messages: hover on desktop, tap the message on a phone.
+   * Claude chat panes only — codex has no rewind, and a remote session's
+   * files and history live on another machine.
+   */
+  private addEditAction(bubble: HTMLElement, messageId: string, text: string) {
+    if (this.isCodex || this.isRemote || !messageId) return;
+    bubble.dataset.id = messageId;
+    bubble.classList.add("editable");
+    const edit = el("button", "msg-edit") as HTMLButtonElement;
+    edit.textContent = "Edit";
+    edit.title = "Edit this message and resend from here";
+    edit.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.startRewind(bubble, messageId, text);
+    });
+    bubble.append(edit);
+    bubble.addEventListener("click", (e) => {
+      // Phone: tapping your message reveals Edit (no hover on touch). Only in
+      // an open pane — in the grid, a click still means "open this box".
+      if (!this.el.classList.contains("zoomed")) return;
+      if ((e.target as HTMLElement).closest("img, a, .msg-edit")) return;
+      e.stopPropagation();
+      bubble.classList.toggle("show-edit");
+    });
+  }
+
+  private startRewind(bubble: HTMLElement, messageId: string, text: string) {
+    if (this.busy) return this.flashNote("Wait for the current turn to finish, or stop it first.");
+    if (this.rewind) this.cancelRewind();
+    const editor = createRewindEditor(
+      text,
+      (body, restoreFiles) => this.wsSend({ t: "rewind", messageId, text: body, restoreFiles }),
+      () => this.cancelRewind()
+    );
+    bubble.hidden = true;
+    bubble.after(editor.el);
+    this.rewind = { messageId, editor, bubble };
+    editor.focus();
+    editor.el.scrollIntoView({ block: "nearest" });
+    this.wsSend({ t: "rewindPreview", messageId });
+  }
+
+  private cancelRewind() {
+    if (!this.rewind) return;
+    this.rewind.editor.el.remove();
+    this.rewind.bubble.hidden = false;
+    this.rewind.bubble.classList.remove("show-edit");
+    this.rewind = null;
+  }
+
+  /** "Rewound · Undo" — one level, until dismissed or the next rewind. */
+  private showUndoBar(text: string) {
+    this.undoBar.textContent = "";
+    const t = el("span", "rw-undo-text");
+    t.textContent = text;
+    const undo = el("button", "rw-undo-btn") as HTMLButtonElement;
+    undo.textContent = "Undo";
+    undo.title = "Put the conversation (and any restored files) back as they were";
+    undo.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (this.busy) return this.flashNote("Wait for the current turn to finish, or stop it first.");
+      undo.disabled = true;
+      this.wsSend({ t: "undoRewind" });
+    });
+    const x = el("button", "rw-undo-x") as HTMLButtonElement;
+    x.textContent = "✕";
+    x.title = "Dismiss";
+    x.setAttribute("aria-label", "Dismiss");
+    x.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.undoBar.hidden = true;
+    });
+    this.undoBar.append(t, undo, x);
+    this.undoBar.hidden = false;
+    this.scrollToBottom(true); // the bar takes height from the log; keep the new reply in view
   }
 
   /** The Changes panel over this pane's chat (changes-panel.ts). */

@@ -80,6 +80,7 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/chat-steps.ts` / `chat-dock.ts` / `chat-commands.ts` / `lightbox.ts` / `highlight.ts` | chat view: step rendering / approval dock / "/" menu / image viewer / code highlighting |
 | `client/src/new-session.ts` / `server/auto-title.js` | phone new-session sheet / auto session titles |
 | `client/src/changes-panel.ts` / `server/changes.js` | per-session Changes panel (transcript-attributed files × git diff) |
+| `client/src/rewind-editor.ts` | edit-and-resend editor (rewind logic lives in agent-manager.js) |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
 | `client/src/push.ts` / `client/public/sw.js` | Web Push subscribe/badge / the service worker that shows notifications |
 | `server/gate.js` | optional passkey-auth reverse proxy (`fleetview-gate` service) that `tailscale serve` fronts instead of the app directly — a SEPARATE process from `server/index.js`, own port (`FLEET_GATE_PORT`, default 4290), own launchd/systemd unit (`com.fleetview.gate`). See Gotchas. |
@@ -414,6 +415,26 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   execFile (argv, no shell, timeout, output cap); read-only. Opened from the
   + menu or the "N files changed" link under a turn (`turnFiles`, saved and
   restored around history pages like the other turn state).
+- **Edit & resend (rewind)** (`client/src/rewind-editor.ts`, `rewind*` /
+  `undoRewind` in agent-manager.js). Prerequisites, both load-bearing:
+  `enableFileCheckpointing: true` on every chat session (without it a session
+  can rewind the conversation but never files), and `send()` puts OUR id into
+  the SDK message (`uuid`), so the transcript records the user entry under the
+  same id the chat shows — that id is what a rewind targets. The conversation
+  is restarted as a FORK at the message's `parentUuid` (`resumeAt` → driver
+  `resumeSessionAt` + `forkSession`; one-shot, cleared on the next init): new
+  session id, original transcript untouched, so Undo just switches back.
+  Editing the very first message = a fresh session. The CLI's
+  `resumeDropsTurn` guard is deliberately NOT used — its only safe recovery is
+  to stop, which would turn an ordinary edit into an error; we count the turns
+  being removed and say so up front instead. File restore is opt-in, uses
+  `rewindFiles` (dry-run preview first), covers only Claude's file-tool edits
+  (not Bash — the UI says so), and copies whatever it would overwrite to
+  `~/.fleetview/rewind-backups/` first so Undo can put it back; one level of
+  undo, persisted with the pane, old backups dropped when replaced. Refused
+  mid-turn, for codex, and for remote panes. Verified against the real SDK:
+  rewindFiles works on a resumed session before any new message, and inside a
+  fork. The replay after a rewind/undo goes to every attached window.
 - **Settings outside-click uses `settingsBtn.contains(target)`** — the button
   holds an SVG, so `target === settingsBtn` closed the panel as it opened.
 - **Account badges use `.acct-slot`, not `.badge-slot`.** They sit in the
