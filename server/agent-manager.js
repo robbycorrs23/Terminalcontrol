@@ -4,9 +4,23 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { startClaudeSession } from "./agents/claude-driver.js";
 import { startCodexSession } from "./agents/codex-driver.js";
-import { restoreEvents } from "./transcript.js";
+import { restoreEvents, olderEvents } from "./transcript.js";
 
 const RING_BUFFER_SIZE = 300; // replayed to a client that attaches/reconnects
+// Never ringed. Deltas would evict real history (see _handleEvent); progress
+// ticks are stale the moment they land; the session-level ones are re-sent as
+// current state on attach instead.
+const LIVE_ONLY = new Set([
+  "assistant_delta",
+  "thinking_delta",
+  "tool_progress",
+  "commands",
+  "models",
+  "suggestion",
+  "retry",
+  "context",
+  "task",
+]);
 const LAST_INPUT_CAP = 2000; // matches PtyManager's UserPromptSubmit cap
 
 /**
@@ -218,7 +232,22 @@ export class AgentManager {
     // else. The assistant_done that follows carries the full text, so replay
     // loses nothing. Tradeoff: a message interrupted before item/completed
     // fires isn't in the replay (it stays on screen for connected clients).
-    if (ev.t !== "assistant_delta") {
+    // When it happened — drives "Thought for 8s" and similar in the client.
+    if (ev.ts == null) ev.ts = Date.now();
+    // Session-level facts, not log entries: kept as the pane's CURRENT value
+    // and sent once after the replay (see attach), so a long commands list
+    // can't evict history and a stale suggestion can't resurface on reload.
+    if (ev.t === "commands") pane.commands = ev.commands;
+    else if (ev.t === "models") pane.models = ev.models;
+    else if (ev.t === "suggestion") (pane.suggestions ||= []).push(ev.text);
+    else if (ev.t === "context") pane.context = ev;
+    else if (ev.t === "task") {
+      pane.tasks ||= new Map();
+      if (ev.task.status === "running" || ev.task.status === "pending" || ev.task.status === "paused") pane.tasks.set(ev.task.id, ev.task);
+      else pane.tasks.delete(ev.task.id);
+    }
+    else if (ev.t === "user" || (ev.t === "status" && ev.state === "working")) pane.suggestions = [];
+    if (!LIVE_ONLY.has(ev.t)) {
       pane.events.push(ev);
       if (pane.events.length > RING_BUFFER_SIZE) pane.events.shift();
     }
@@ -361,6 +390,13 @@ export class AgentManager {
     pane.clients.add(ws);
     try {
       ws.send(JSON.stringify({ t: "replay", events: pane.events }));
+      const state = [];
+      if (pane.commands) state.push({ t: "commands", commands: pane.commands });
+      if (pane.models) state.push({ t: "models", models: pane.models });
+      if (pane.context) state.push(pane.context);
+      for (const task of pane.tasks?.values() || []) state.push({ t: "task", task });
+      if (pane.status !== "working") for (const text of pane.suggestions || []) state.push({ t: "suggestion", text });
+      for (const ev of state) ws.send(JSON.stringify({ t: "ev", ev }));
     } catch {}
     ws.on("message", (raw) => {
       let m;
@@ -372,13 +408,29 @@ export class AgentManager {
       if (m.t === "send" && typeof m.text === "string" && m.text.trim()) {
         this.sendMessage(id, m.text);
       } else if (m.t === "approve" && m.requestId) {
-        this.approve(id, m.requestId, m.decision);
+        this.approve(id, m.requestId, m.decision, typeof m.message === "string" ? m.message.slice(0, 4000) : undefined);
       } else if (m.t === "answer" && m.requestId && m.answers && typeof m.answers === "object") {
         this.answer(id, m.requestId, m.answers);
       } else if (m.t === "interrupt") {
         pane.driver?.interrupt();
       } else if (m.t === "setMode" && typeof m.mode === "string") {
         this.setMode(id, m.mode);
+      } else if (m.t === "setModel" && typeof m.model === "string" && m.model) {
+        this.setModel(id, m.model);
+      } else if (m.t === "stopTask" && typeof m.id === "string") {
+        pane.driver?.stopTask?.(m.id);
+      } else if (m.t === "history" && Array.isArray(m.anchors)) {
+        // Older messages than the replay ring holds, read from the transcript.
+        let page = { events: [], more: false };
+        if (pane.provider !== "codex" && !pane.remote && pane.sdkSessionId) {
+          try {
+            const configDir = pane.accountConfigDir || join(homedir(), ".claude");
+            page = olderEvents(configDir, pane.sdkSessionId, m.anchors.slice(0, 60).map(String));
+          } catch {}
+        }
+        try {
+          ws.send(JSON.stringify({ t: "history", events: page.events, more: page.more }));
+        } catch {}
       }
     });
     ws.on("close", () => pane.clients.delete(ws));
@@ -432,10 +484,23 @@ export class AgentManager {
     return true;
   }
 
-  approve(id, requestId, decision) {
+  /** Switch a live session's model (claude only; codex reports no model). */
+  async setModel(id, model) {
+    const pane = this.panes.get(id);
+    if (!pane?.driver?.setModel) return false;
+    try {
+      await pane.driver.setModel(model);
+    } catch (err) {
+      this._handleEvent(pane, { t: "status", state: "error", detail: err.message });
+      return false;
+    }
+    return true;
+  }
+
+  approve(id, requestId, decision, message) {
     const pane = this.panes.get(id);
     if (!pane?.driver) return false;
-    const ok = pane.driver.approve(requestId, decision);
+    const ok = pane.driver.approve(requestId, decision, message);
     if (ok) {
       this.clearAttention(id);
       this.broadcast(pane.session, { t: "cleared", pane: id });

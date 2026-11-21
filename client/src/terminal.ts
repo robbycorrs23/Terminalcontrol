@@ -72,7 +72,17 @@ export interface PaneView {
 /** One rate-limit window as server/usage.js reports it. */
 export type UsageWindow = { label: string; percent: number; resetsAt: number | null };
 
-/** One account's usage, keyed by `id` — which equals an agent pane's `cmd`. */
+/**
+ * The account profile a pane runs ("claude-work", "codex-work", …): the first
+ * token of its `cmd`. Not `cmd` itself — a terminal pane flipped back from chat
+ * carries resume flags ("claude-work --resume <id> --permission-mode auto"),
+ * and matching the whole string silently dropped its work tint and usage rings.
+ */
+export function profileOf(cmd: string): string {
+  return String(cmd || "").trim().split(/\s+/)[0];
+}
+
+/** One account's usage, keyed by `id` — which equals an agent pane's profile (see profileOf). */
 export type UsageRow = {
   id: string;
   label: string;
@@ -203,7 +213,7 @@ export class Term implements PaneView {
     // terminal, so they're visually distinct from personal-account boxes
     // without getting in the way of reading the actual output. No manual
     // step — `cmd` persists across respawns, so the tag survives them too.
-    if (info.cmd.endsWith("-work")) {
+    if (profileOf(info.cmd).endsWith("-work")) {
       this.el.classList.add("work");
       // The image is a MACHINE setting (~/.fleetview/machine.json), not a
       // bundled asset — it comes in via the --work-logo custom property, so a

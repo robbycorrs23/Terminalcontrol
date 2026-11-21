@@ -52,7 +52,7 @@ function stringifyBlockContent(content) {
  */
 export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, onSessionId, onModel, onRateLimit }) {
   const promptQueue = new PushQueue();
-  const pendingPermissions = new Map(); // requestId -> (decision: "allow"|"deny"|"always") => void
+  const pendingPermissions = new Map(); // requestId -> (decision: "allow"|"deny"|"always", message?: string) => void
   const pendingQuestions = new Map(); // requestId -> (answers|null) => void
   const abortController = new AbortController();
   let disposed = false;
@@ -99,12 +99,26 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
       input,
       title: opts.title,
       description: opts.description,
+      // Ties the prompt to its tool row, so the client can mark that row
+      // instead of guessing. `canAlways` = the SDK offered a rule to persist;
+      // without one "don't ask again" would silently behave like plain Allow,
+      // so the client only offers that option when this is true.
+      toolUseId: opts.toolUseID,
+      canAlways: !!opts.suggestions?.length && !opts.suppressAlwaysAllowRule,
+      ...(opts.blockedPath ? { blockedPath: opts.blockedPath } : {}),
     });
     onEvent({ t: "status", state: "waiting_permission" });
     return new Promise((resolve) => {
-      pendingPermissions.set(opts.requestId, (decision) => {
+      pendingPermissions.set(opts.requestId, (decision, message) => {
         if (decision === "deny") {
-          resolve({ behavior: "deny", message: "Denied by user" });
+          // The CLI's "No, and tell Claude what to do differently": the typed
+          // text goes back as the denial reason, so the model can change
+          // course in the same turn instead of just stopping.
+          const why = typeof message === "string" && message.trim() ? message.trim() : "";
+          resolve({
+            behavior: "deny",
+            message: why ? `The user denied this tool call and said: ${why}` : "Denied by user",
+          });
         } else if (decision === "always" && opts.suggestions?.length) {
           // "Always allow" persists via the SDK's own suggested permission-rule
           // update (session-scoped) — we don't invent our own always-allow list.
@@ -123,6 +137,21 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
       resume,
       permissionMode: mode || "default",
       canUseTool,
+      // Live text + thinking as they generate (the Claude app streams; a reply
+      // appearing all at once after a minute of nothing reads as a hang).
+      // The complete assistant message still follows each block, so replay
+      // and the transcript keep working off assistant_done alone.
+      includePartialMessages: true,
+      // The follow-up chips the app shows after a turn ("Run the tests", …).
+      promptSuggestions: true,
+      // Thinking stays adaptive (the default — the model decides when and how
+      // much); this only asks for the readable summaries the app shows in its
+      // collapsible "Thinking" rows. Without it the SDK omits thinking text.
+      thinking: { type: "adaptive", display: "summarized" },
+      // We render a per-task stop control (the background-task tray), so the
+      // SDK lets the turn's Stop spare background agents/shells instead of
+      // killing them along with the turn.
+      perTaskStopAffordance: true,
       abortController,
       // `env` REPLACES the subprocess env entirely per the SDK's own docs —
       // omit it to inherit process.env untouched (the common case); the
@@ -152,6 +181,74 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
   // show otherwise until the first user message.
   onEvent({ t: "mode", mode: mode || "default" });
 
+  // Streaming bookkeeping. The SDK streams raw Messages-API events and then
+  // ALSO sends each finished block as its own `assistant` message, with no id
+  // linking the two. Blocks finish in the order they started, so a FIFO per
+  // block type pairs them: each text stream gets a fresh id, and the matching
+  // assistant_done reuses it so the client finalizes the streamed bubble
+  // instead of appending a duplicate.
+  const streamIds = new Map(); // content-block index -> { id, kind }
+  const pendingText = []; // stream ids awaiting their assistant_done, oldest first
+  const pendingThinking = [];
+
+  function handleStream(msg) {
+    if (msg.parent_tool_use_id) return; // subagent internals: not streamed into the main log
+    const ev = msg.event;
+    if (!ev) return;
+    if (ev.type === "content_block_start") {
+      const kind = ev.content_block?.type;
+      if (kind !== "text" && kind !== "thinking") return;
+      const id = randomUUID();
+      streamIds.set(ev.index, { id, kind });
+      (kind === "text" ? pendingText : pendingThinking).push(id);
+    } else if (ev.type === "content_block_delta") {
+      const s = streamIds.get(ev.index);
+      if (!s) return;
+      if (ev.delta?.type === "text_delta" && ev.delta.text) {
+        onEvent({ t: "assistant_delta", id: s.id, delta: ev.delta.text });
+      } else if (ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
+        onEvent({ t: "thinking_delta", id: s.id, delta: ev.delta.thinking });
+      }
+    } else if (ev.type === "message_start") {
+      streamIds.clear();
+    }
+  }
+
+  // Slash commands for the composer's "/" menu. The init frame only has bare
+  // names; supportedCommands() adds descriptions + argument hints. Commands
+  // bound to the local terminal (exit, statusline, …) are dropped, as the SDK
+  // asks phone/remote UIs to do.
+  let terminalOnly = new Set();
+  let models = []; // from supportedModels(); maps a picked alias to its wire id
+
+  // Background tasks (subagents, background shells) by task id — so a
+  // progress/update frame can be merged into what we already know and the
+  // client always gets the whole record.
+  const tasks = new Map();
+  function emitTask(id) {
+    const t = tasks.get(id);
+    if (t) onEvent({ t: "task", task: { ...t } });
+  }
+
+  // How full the context window is — the app shows it; nothing else here
+  // knew. "summary" answers from the last response's usage, no extra API
+  // calls. Best effort: an older CLI without the control request just
+  // never reports.
+  function reportContext() {
+    q.getContextUsage({ detail: "summary" }).then(
+      (u) => {
+        if (u && u.maxTokens) onEvent({ t: "context", percent: Math.round(u.percentage), used: u.totalTokens, max: u.maxTokens });
+      },
+      () => {}
+    );
+  }
+  function emitCommands(list) {
+    const commands = (list || [])
+      .filter((c) => c && c.name && !terminalOnly.has(c.name))
+      .map((c) => ({ name: c.name, description: c.description || "", argumentHint: c.argumentHint || "" }));
+    onEvent({ t: "commands", commands });
+  }
+
   function handleMessage(msg) {
     switch (msg.type) {
       case "system":
@@ -161,17 +258,107 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
           // is the one chance to learn it — there is no "which model am I"
           // query. Optional so a driver wired without it still works.
           if (msg.model) onModel?.(msg.model);
+          terminalOnly = new Set(msg.terminal_slash_commands || []);
+          // Bare names first so the menu works immediately, then the richer list.
+          emitCommands((msg.slash_commands || []).map((name) => ({ name })));
+          q.supportedCommands().then(emitCommands, () => {});
+          q.supportedModels().then((list) => {
+            models = (list || []).map((m) => ({
+              value: m.value,
+              label: m.displayName || m.value,
+              description: m.description || "",
+              ...(m.resolvedModel ? { resolved: m.resolvedModel } : {}),
+            }));
+            onEvent({ t: "models", models });
+          }, () => {});
+        } else if (msg.subtype === "commands_changed") {
+          emitCommands(msg.commands);
+        } else if (msg.subtype === "api_retry") {
+          // Without this an overloaded API just looks like a hang.
+          onEvent({
+            t: "retry",
+            attempt: msg.attempt,
+            max: msg.max_retries,
+            delayMs: msg.retry_delay_ms,
+            status: msg.error_status ?? null,
+          });
+        } else if (msg.subtype === "compact_boundary") {
+          const m = msg.compact_metadata || {};
+          onEvent({ t: "compact", trigger: m.trigger || "auto", preTokens: m.pre_tokens, postTokens: m.post_tokens });
+          reportContext();
+        } else if (msg.subtype === "task_started") {
+          tasks.set(msg.task_id, {
+            id: msg.task_id,
+            description: msg.description || "",
+            status: "running",
+            backgrounded: !!msg.is_backgrounded,
+            toolUseId: msg.tool_use_id,
+            kind: msg.subagent_type || msg.task_type || "",
+          });
+          emitTask(msg.task_id);
+        } else if (msg.subtype === "task_progress") {
+          const t = tasks.get(msg.task_id);
+          if (t) {
+            t.lastTool = msg.last_tool_name;
+            t.summary = msg.summary || t.summary;
+            t.toolUses = msg.usage?.tool_uses;
+            t.durationMs = msg.usage?.duration_ms;
+            emitTask(msg.task_id);
+          }
+        } else if (msg.subtype === "task_updated") {
+          const t = tasks.get(msg.task_id);
+          if (t && msg.patch) {
+            if (msg.patch.status) t.status = msg.patch.status === "killed" ? "stopped" : msg.patch.status;
+            if (msg.patch.description) t.description = msg.patch.description;
+            if (msg.patch.is_backgrounded != null) t.backgrounded = !!msg.patch.is_backgrounded;
+            emitTask(msg.task_id);
+          }
+        } else if (msg.subtype === "task_notification") {
+          const t = tasks.get(msg.task_id) || { id: msg.task_id, description: "", toolUseId: msg.tool_use_id };
+          t.status = msg.status;
+          t.summary = msg.summary || t.summary;
+          if (msg.usage) t.durationMs = msg.usage.duration_ms;
+          tasks.set(msg.task_id, t);
+          emitTask(msg.task_id);
+          tasks.delete(msg.task_id); // finished: the client keeps it briefly, we don't
         }
+        break;
+      case "stream_event":
+        handleStream(msg);
+        break;
+      case "tool_progress":
+        // Live elapsed time for a running tool (long Bash, subagents) — the
+        // app shows it on the running step. Live-only; never ringed.
+        if (msg.tool_use_id) onEvent({ t: "tool_progress", id: msg.tool_use_id, seconds: msg.elapsed_time_seconds });
+        break;
+      case "prompt_suggestion":
+        if (msg.suggestion) onEvent({ t: "suggestion", text: msg.suggestion });
         break;
       case "assistant":
         for (const block of msg.message.content || []) {
-          if (block.type === "text" && block.text) {
+          // Subagent (Task/Agent) traffic: by default the SDK forwards only
+          // its tool_use/tool_result blocks. Tag them with the parent so the
+          // client nests them under the Agent step, as the app does, instead
+          // of interleaving them with the main conversation.
+          const parent = msg.parent_tool_use_id || undefined;
+          if (parent) {
+            if (block.type === "tool_use") onEvent({ t: "tool_call", id: block.id, name: block.name, input: block.input, parent });
+            continue;
+          }
+          if (block.type === "thinking" && block.thinking) {
+            onEvent({ t: "thinking", id: pendingThinking.shift() || randomUUID(), text: block.thinking });
+          } else if (block.type === "text" && block.text) {
             // `msg.aborted`: "true when this assistant message was truncated
             // by an interrupt/abort before the stream completed — stop_reason
             // was never received and the content may end mid-word" (SDK's own
             // doc comment). Flagged on the bubble itself, not just the pane's
             // overall status — see agent-chat.ts.
-            onEvent({ t: "assistant_done", id: msg.uuid, text: block.text, ...(msg.aborted ? { aborted: true } : {}) });
+            onEvent({
+              t: "assistant_done",
+              id: pendingText.shift() || msg.uuid,
+              text: block.text,
+              ...(msg.aborted ? { aborted: true } : {}),
+            });
           } else if (block.type === "tool_use") {
             onEvent({ t: "tool_call", id: block.id, name: block.name, input: block.input });
           }
@@ -190,6 +377,7 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
               id: block.tool_use_id,
               output: stringifyBlockContent(block.content),
               isError: !!block.is_error,
+              ...(msg.parent_tool_use_id ? { parent: msg.parent_tool_use_id } : {}),
               // Diff rendering for file-edit tools is a follow-up, not part
               // of the Phase 1 MVP acceptance bar — left undefined for now.
             });
@@ -206,11 +394,18 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
         // completion: same "idle" status, same "done" attention, even though
         // the last visible message may end mid-word (see msg.aborted above).
         const abortedReason = msg.terminal_reason && msg.terminal_reason !== "completed";
+        // Anything still queued for pairing belonged to a turn that's over.
+        pendingText.length = 0;
+        pendingThinking.length = 0;
+        streamIds.clear();
         onEvent({
           t: "status",
           state: msg.is_error ? "error" : abortedReason ? "aborted" : "idle",
           detail: msg.is_error ? msg.result : abortedReason ? `Turn ended early (${msg.terminal_reason})` : undefined,
+          // "Worked for 1m 12s" under the turn.
+          ...(typeof msg.duration_ms === "number" ? { durationMs: msg.duration_ms } : {}),
         });
+        reportContext();
         break;
       }
       case "rate_limit_event":
@@ -265,12 +460,13 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
       return true;
     },
     /** @returns {boolean} whether a pending request with that id was found */
-    approve(requestId, decision) {
+    approve(requestId, decision, message) {
       const resolve = pendingPermissions.get(requestId);
       if (!resolve) return false;
       pendingPermissions.delete(requestId);
-      onEvent({ t: "permission_resolved", requestId, decision });
-      resolve(decision);
+      const feedback = decision === "deny" && typeof message === "string" && message.trim() ? message.trim() : undefined;
+      onEvent({ t: "permission_resolved", requestId, decision, ...(feedback ? { message: feedback } : {}) });
+      resolve(decision, feedback);
       // Without this the UI's status line is stuck showing "Waiting on your
       // approval…" until the next unrelated status event happens to overwrite
       // it — resolving the promise here lets the tool call (or its denial)
@@ -295,6 +491,19 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
     async setMode(newMode) {
       await q.setPermissionMode(newMode);
       onEvent({ t: "mode", mode: newMode });
+    },
+    /** Stop one background task (the tray's ■), leaving the turn running. */
+    async stopTask(taskId) {
+      try {
+        await q.stopTask(taskId);
+      } catch {}
+    },
+    /** Switch model on the live session (the composer's model picker). */
+    async setModel(model) {
+      await q.setModel(model);
+      // Report the wire id ("claude-opus-5-5"), not the alias ("opus"), so
+      // the badge and the picker's current-value match stay consistent.
+      onModel?.(models.find((m) => m.value === model)?.resolved || model);
     },
     dispose() {
       disposed = true;

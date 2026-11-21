@@ -39,8 +39,10 @@
         <span class="brand">▦ FleetView</span>
         <span id="current" class="current" hidden></span>
         <span class="spacer"></span>
-        <button id="settingsBtn" class="icon" title="Settings">⚙</button>
-        <button id="addBtn">+ Terminal</button>
+        <button id="settingsBtn" class="icon" title="Settings" aria-label="Settings"><svg class="ico-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        <!-- "+ Terminal" on desktop; on a phone just a round "+" (the label is
+             hidden by CSS — see "Phone home bar" in styles.css). -->
+        <button id="addBtn" aria-label="New terminal"><svg class="ico-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span class="add-label">Terminal</span></button>
       </div>
 
       <!-- Attention chips live on their OWN row under #barRow, not inside it.
@@ -63,136 +65,153 @@
       <!-- Settings: everything that isn't "+ Terminal". One dropdown on every
            screen size — the old ☰-only-on-mobile menu is gone, so the bar looks
            and behaves the same on a phone and a 27" monitor. -->
-      <div id="settings" hidden>
-        <!-- Usage first: it's the thing you open ⚙ to check. One row per
+      <!-- Settings: grouped cards, iOS-Settings style — a small heading per
+           group, rows inside a rounded card, label left / control right,
+           switches for on/off. A popover on desktop, a full-screen sheet on a
+           phone (styles.css "Settings"). Every id below is wired in main.ts;
+           change the layout freely, keep the ids. -->
+      <div id="settings" hidden role="dialog" aria-label="Settings">
+        <div class="set-top">
+          <span class="set-title">Settings</span>
+          <button id="settingsDone" class="set-done">Done</button>
+        </div>
+
+        <!-- Usage first: it's the thing you open settings to check. One row per
              ACCOUNT, not per pane — every claude box shares one bucket. -->
         <section class="set-sec">
           <h3 class="set-h">
             Usage
-            <button id="usageRefresh" class="use-refresh" title="Refresh now">↻</button>
+            <button id="usageRefresh" class="use-refresh" title="Refresh now" aria-label="Refresh usage">↻</button>
           </h3>
-          <div id="usageList" class="use-list"></div>
-        </section>
-
-        <section class="set-sec">
-          <h3 class="set-h">Layouts</h3>
-          <select id="layoutSel">
-            <option value="">layouts…</option>
-          </select>
-          <div class="set-btns">
-            <button id="openBtn">Open</button>
-            <button id="saveBtn">Save layout</button>
+          <div class="set-card">
+            <div id="usageList" class="use-list"></div>
           </div>
         </section>
 
         <section class="set-sec">
-          <h3 class="set-h">SSH Servers</h3>
-          <div class="set-btns">
-            <button id="sshManageBtn">Manage…</button>
-          </div>
-        </section>
-
-        <section class="set-sec">
-          <h3 class="set-h">View</h3>
-          <!-- Contextual: stays hidden unless something is actually waiting.
-               It used to sit in the bar next to the chips, but it's a
-               rarely-used shortcut that was costing permanent bar width on the
-               screen that can least afford it. -->
-          <button id="nextBtn" hidden>Jump to next ⏎</button>
-          <button id="tasksBtn" title="Show / hide the task list">✓ Tasks</button>
-          <div class="set-row">
-            <span class="set-label">Theme</span>
-            <div class="seg" id="segTheme">
-              <button data-v="dark">Dark</button>
-              <button data-v="light">Light</button>
+          <h3 class="set-h">Workspace</h3>
+          <div class="set-card">
+            <!-- Contextual: stays hidden unless something is actually waiting. -->
+            <button id="nextBtn" class="set-link" hidden>Jump to next waiting<span class="set-chev">›</span></button>
+            <button id="tasksBtn" class="set-link" title="Show / hide the task list">Task list<span class="set-chev">›</span></button>
+            <button id="sshManageBtn" class="set-link">SSH servers<span class="set-chev">›</span></button>
+            <div class="set-row set-layouts">
+              <span class="set-label">Layout</span>
+              <select id="layoutSel">
+                <option value="">layouts…</option>
+              </select>
             </div>
-          </div>
-          <div class="set-row">
-            <span class="set-label">Text size</span>
-            <div class="seg" id="segText">
-              <button data-v="normal">Normal</button>
-              <button data-v="big">Large</button>
-            </div>
-          </div>
-          <div class="set-row">
-            <span class="set-label" title="How loudly a working terminal announces itself">Working animation</span>
-            <div class="seg" id="segFx">
-              <button data-v="full" title="Border light + Matrix rain, idle boxes dimmed">Full</button>
-              <button data-v="edge" title="Border light only">Edge</button>
-              <button data-v="off" title="No working indicator">Off</button>
+            <div class="set-btns">
+              <button id="openBtn">Open layout</button>
+              <button id="saveBtn">Save current</button>
             </div>
           </div>
         </section>
 
         <section class="set-sec">
-          <h3 class="set-h">Alerts</h3>
-          <label class="set-check">
-            <input type="checkbox" id="setSound" />
-            Play a sound when a terminal needs you
-          </label>
-          <div class="set-row" id="volRow">
-            <span class="set-label">Volume</span>
-            <input type="range" id="setVolume" min="0" max="100" step="5" />
+          <h3 class="set-h">Appearance</h3>
+          <div class="set-card">
+            <div class="set-row">
+              <span class="set-label">Theme</span>
+              <div class="seg" id="segTheme">
+                <button data-v="dark">Dark</button>
+                <button data-v="light">Light</button>
+              </div>
+            </div>
+            <div class="set-row">
+              <span class="set-label">Text size</span>
+              <div class="seg" id="segText">
+                <button data-v="normal">Normal</button>
+                <button data-v="big">Large</button>
+              </div>
+            </div>
+            <div class="set-row">
+              <span class="set-label" title="How loudly a working terminal announces itself">Working animation</span>
+              <div class="seg" id="segFx">
+                <button data-v="full" title="Border light + Matrix rain, idle boxes dimmed">Full</button>
+                <button data-v="edge" title="Border light only">Edge</button>
+                <button data-v="off" title="No working indicator">Off</button>
+              </div>
+            </div>
           </div>
-          <label class="set-check">
-            <input type="checkbox" id="setNotify" />
-            Notify me when this tab is in the background
-          </label>
-          <div class="set-note" id="notifyNote" hidden></div>
+        </section>
 
-          <!-- Push: reaches you when FleetView ISN'T open, unlike the option
-               above which needs a live tab. The device checkbox is per-device
-               (it creates/removes a subscription server-side); the two category
-               checkboxes are ordinary prefs and so follow you everywhere. -->
-          <label class="set-check">
-            <input type="checkbox" id="setPushDevice" />
-            Push to this device even when FleetView is closed
-          </label>
-          <div class="set-note" id="pushNote" hidden></div>
-          <div class="set-sub" id="pushCats">
+        <section class="set-sec">
+          <h3 class="set-h">Notifications</h3>
+          <div class="set-card">
             <label class="set-check">
-              <input type="checkbox" id="setPushQuestion" />
-              …when a terminal needs an answer
+              <input type="checkbox" id="setSound" />
+              <span>Sound when a terminal needs you</span>
             </label>
+            <div class="set-row" id="volRow">
+              <span class="set-label">Volume</span>
+              <input type="range" id="setVolume" min="0" max="100" step="5" />
+            </div>
             <label class="set-check">
-              <input type="checkbox" id="setPushDone" />
-              …when a turn finishes or is cut off
+              <input type="checkbox" id="setNotify" />
+              <span>Notify while this tab is in the background</span>
+            </label>
+            <div class="set-note" id="notifyNote" hidden></div>
+            <!-- Push: reaches you when FleetView ISN'T open. The device switch is
+                 per-device (a subscription server-side); the two categories are
+                 ordinary prefs and so follow you everywhere. -->
+            <label class="set-check">
+              <input type="checkbox" id="setPushDevice" />
+              <span>Push to this device when FleetView is closed</span>
+            </label>
+            <div class="set-note" id="pushNote" hidden></div>
+            <div class="set-sub" id="pushCats">
+              <label class="set-check">
+                <input type="checkbox" id="setPushQuestion" />
+                <span>When a terminal needs an answer</span>
+              </label>
+              <label class="set-check">
+                <input type="checkbox" id="setPushDone" />
+                <span>When a turn finishes or is cut off</span>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="set-sec">
+          <h3 class="set-h">Safety</h3>
+          <div class="set-card">
+            <label class="set-check">
+              <input type="checkbox" id="setConfirmClose" />
+              <span>Ask before ✕ closes a terminal</span>
             </label>
           </div>
         </section>
 
         <!-- Properties of THIS machine, not of you: the same checkout runs on
              several machines and they want different answers. Stored in
-             ~/.fleetview/machine.json, outside the repo (server/machine-config.js).
-             Your own preferences (theme, sound, picker defaults) stay above. -->
+             ~/.fleetview/machine.json, outside the repo (server/machine-config.js). -->
         <section class="set-sec">
           <h3 class="set-h">This machine</h3>
-          <div class="set-row">
-            <span class="set-label">Name</span>
-            <input type="text" id="mcLabel" class="set-text" maxlength="40" placeholder="hostname" />
+          <div class="set-card">
+            <div class="set-row">
+              <span class="set-label">Name</span>
+              <input type="text" id="mcLabel" class="set-text" maxlength="40" placeholder="hostname" />
+            </div>
+            <div class="set-row">
+              <span class="set-label">Icon colour</span>
+              <select id="mcColor"></select>
+            </div>
+            <div class="set-row mc-logo">
+              <span class="set-label">Pane badge</span>
+              <span class="mc-logo-ctl">
+                <span id="mcLogoPreview" class="mc-logo-preview" hidden></span>
+                <button id="mcLogoPick" class="mc-btn">Choose…</button>
+                <button id="mcLogoClear" class="mc-btn" hidden>Remove</button>
+              </span>
+              <input type="file" id="mcLogoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden />
+            </div>
           </div>
-          <div class="set-row">
-            <span class="set-label">Icon colour</span>
-            <select id="mcColor"></select>
+          <h3 class="set-h set-h-sub">Accounts this machine offers</h3>
+          <div class="set-card">
+            <div id="mcAccounts" class="mc-accounts"></div>
           </div>
-          <div class="set-sub">Accounts this machine offers</div>
-          <div id="mcAccounts" class="mc-accounts"></div>
-          <div class="set-sub">Pane badge</div>
-          <div class="mc-logo">
-            <span id="mcLogoPreview" class="mc-logo-preview" hidden></span>
-            <button id="mcLogoPick" class="mc-btn">Choose image…</button>
-            <button id="mcLogoClear" class="mc-btn" hidden>Remove</button>
-            <input type="file" id="mcLogoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden />
-          </div>
-          <div id="mcNote" class="set-note"></div>
-        </section>
-
-        <section class="set-sec">
-          <h3 class="set-h">Safety</h3>
-          <label class="set-check">
-            <input type="checkbox" id="setConfirmClose" />
-            Ask before ✕ closes a terminal
-          </label>
+          <div id="mcNote" class="set-foot"></div>
         </section>
       </div>
     </header>
@@ -277,7 +296,7 @@
               </select>
             </label>
             <label class="chatview" title="Chat UI instead of a terminal — no xterm, native scrolling, tap-to-approve.">
-              <input type="checkbox" id="chatView" checked />
+              <input type="checkbox" id="chatView" />
               <svg class="ico-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
               <span>Chat view</span>
             </label>

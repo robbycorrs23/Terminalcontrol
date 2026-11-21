@@ -22,6 +22,7 @@
  * is a smaller trust surface than two vendored libs, and it's covered by its
  * own throwaway test (see the PR).
  */
+import { highlight } from "./highlight";
 
 function esc(s: string): string {
   return s
@@ -32,7 +33,7 @@ function esc(s: string): string {
 }
 
 const SAFE_SCHEME = /^(https?:|mailto:)/i;
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)(\?[^\s]*)?$/i;
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|heic|heif)(\?[^\s]*)?$/i;
 const VIDEO_EXT = /\.(mp4|m4v|webm|ogv|mov)(\?[^\s]*)?$/i;
 const AUDIO_EXT = /\.(mp3|m4a|wav|oga|ogg|flac)(\?[^\s]*)?$/i;
 
@@ -326,7 +327,9 @@ export function renderMarkdown(src: string): string {
       i++;
       while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) body.push(lines[i++]);
       i++; // consume closing fence (or run off the end on an unclosed block)
-      const code = esc(body.join("\n"));
+      // Highlighted code is built by highlight.ts, which escapes every
+      // fragment itself; chart specs stay plain escaped text.
+      const code = lang && lang.toLowerCase() !== "chart" ? highlight(body.join("\n"), lang) : esc(body.join("\n"));
       // ```chart is a real chart, not source to read. It's emitted as a normal
       // <pre> carrying the spec as text; agent-chat.ts's enhance pass parses it
       // and swaps in the SVG. Keeping the spec in the DOM (rather than, say, an
