@@ -47,7 +47,8 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   EADDRINUSE so the service + a manual `npm start` don't fight silently.
 - `npm run build` — build the client bundle only (vite → `dist/`). Safe: does NOT
   restart the server; a running server serves the new bundle to the next page load.
-- `npm start` — start the server without rebuilding.
+- `npm start` — start the server. It rebuilds a stale client bundle itself
+  (see "Startup self-check" below), so `git pull` + restart is enough.
 - `FLEET_PORT=5000 npm run go` — different port. `FLEET_HOST=0.0.0.0` — bind beyond
   loopback (see Security).
 - **Typecheck: `npm run typecheck`** (= `tsc --noEmit`). ⚠️ `vite build` uses
@@ -81,6 +82,7 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/new-session.ts` / `server/auto-title.js` | phone new-session sheet / auto session titles |
 | `client/src/changes-panel.ts` / `server/changes.js` | per-session Changes panel (transcript-attributed files × git diff) |
 | `client/src/rewind-editor.ts` | edit-and-resend editor (rewind logic lives in agent-manager.js) |
+| `server/self-check.js` | startup: fix deps vs lockfile, rebuild a stale bundle, version info |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
 | `client/src/push.ts` / `client/public/sw.js` | Web Push subscribe/badge / the service worker that shows notifications |
 | `server/gate.js` | optional passkey-auth reverse proxy (`fleetview-gate` service) that `tailscale serve` fronts instead of the app directly — a SEPARATE process from `server/index.js`, own port (`FLEET_GATE_PORT`, default 4290), own launchd/systemd unit (`com.fleetview.gate`). See Gotchas. |
@@ -494,6 +496,31 @@ unescaped, and `charts.ts` builds every node with `createElementNS`. Keep both
 that way. The categorical palette in `styles.css` (`--viz-1..8`) is validated as
 an ordered set for colour-vision deficiency against each mode's chart surface —
 re-run the check before changing a value or the order.
+
+## Startup self-check (`server/self-check.js`)
+A `git pull` updates neither `dist/` (gitignored) nor `node_modules`, which is
+how "I pulled and restarted, nothing changed" happened on a second machine. So
+before binding, `server/index.js` runs:
+- `ensureDeps()` — top-level packages vs `package-lock.json`. On mismatch it
+  runs `npm install` via npm's own CLI script next to the running node (PATH-
+  independent: Homebrew keeps npm in its own lib dir behind a symlink — follow
+  it), then **exits 75** so launchd KeepAlive / systemd Restart=on-failure
+  restart into the new versions — Node has already loaded every module, the old
+  SDK included, before any code runs, so only a fresh process picks them up.
+  One attempt per lockfile (`~/.fleetview/deps-install-attempt`), so a failing
+  install warns instead of crash-looping. `FLEET_AUTO_DEPS=0` disables it.
+- `ensureFreshBuild()` — rebuilds `dist/` (vite run with this node) if it's
+  missing or older than `client/`, `vite.config.ts` or the lockfile.
+  `dist/.source-stamp` records what a self-check build covered, so source files
+  with FUTURE mtimes can't make every start rebuild.
+- `/api/version` reports the running server commit (captured at STARTUP, not
+  per request — after a pull without a restart HEAD moves but the code doesn't)
+  and `dist/build-info.json` (written by vite.config.ts's build-info plugin,
+  also baked into the client as `__BUILD_INFO__`). The client's
+  `checkVersion()` runs on every control-socket connect: a tab whose bundle
+  predates the served one gets "FleetView was updated — tap to reload";
+  dependency trouble gets "This machine needs npm install"; Settings → This
+  machine shows the version.
 
 ## Gotchas
 - `index.js` hardcodes `sessions.json`/`layouts.json`/`tasks.json` under repo ROOT.

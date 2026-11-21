@@ -60,6 +60,9 @@
              refused — mid-turn, plain shell, no conversation captured yet.
              Transient; see flipView() in main.ts. -->
         <span id="viewNote" class="current" hidden></span>
+        <!-- "FleetView was updated — reload" / "this machine needs npm install":
+             see checkVersion() in main.ts and server/self-check.js. -->
+        <button id="updateNote" class="qchip update-chip" hidden></button>
       </div>
 
       <!-- Settings: everything that isn't "+ Terminal". One dropdown on every
@@ -200,6 +203,10 @@
             <div class="set-row">
               <span class="set-label">Icon colour</span>
               <select id="mcColor"></select>
+            </div>
+            <div class="set-row">
+              <span class="set-label">Version</span>
+              <span id="mcVersion" class="set-value">…</span>
             </div>
             <div class="set-row mc-logo">
               <span class="set-label">Pane badge</span>

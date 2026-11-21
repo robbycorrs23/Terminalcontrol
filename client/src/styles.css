@@ -6067,3 +6067,27 @@ body.light .ns-seg button.on {
     font-size: 16px; /* no iOS focus-zoom */
   }
 }
+
+/* ---- Update / dependency chip (checkVersion in main.ts) ---- */
+#bar .update-chip {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  cursor: pointer;
+}
+#bar .update-chip[hidden] {
+  display: none;
+}
+#settings .set-value {
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 13px ui-monospace, Menlo, monospace;
+  color: var(--text-dim);
+}
+/* Empty chip containers (#queue, #followups, #recovery) still took a flex gap,
+   pushing the first visible chip in. */
+#barChips > :empty {
+  display: none;
+}

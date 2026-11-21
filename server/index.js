@@ -31,6 +31,7 @@ import { listDirs, makeDir } from "./fs-browse.js";
 import { generateTitle } from "./auto-title.js";
 import { sessionChanges } from "./changes.js";
 import { preflight } from "../scripts/preflight.js";
+import { ensureDeps, ensureFreshBuild, serverVersion, bundleVersion } from "./self-check.js";
 
 // Check for tmux / curl / claude / codex FIRST, so any missing-dependency warning is the
 // most prominent thing the user sees — not buried under later startup logs.
@@ -46,6 +47,12 @@ const isLoopback = HOST === "127.0.0.1" || HOST === "::1" || HOST === "localhost
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const DIST = join(ROOT, "dist");
+// Before anything binds: dependencies matching the lockfile (may npm install
+// and exit for a clean restart), then a client bundle at least as new as its
+// source — a `git pull` updates neither. See self-check.js.
+const depIssues = ensureDeps(ROOT);
+ensureFreshBuild(ROOT);
+const RUNNING = serverVersion(ROOT, Date.now(), depIssues);
 
 // Make sure Claude Code / Codex know how to phone home before any terminal starts.
 ensureHooks(PORT);
@@ -424,6 +431,11 @@ app.get("/api/dirs", async (req, res) => {
   }
 });
 app.get("/api/recents", (_req, res) => res.json(layouts.recents()));
+
+// Which code is running and which bundle is being served — so "I pulled and
+// nothing changed" is visible in Settings instead of a mystery. The client
+// compares its own baked-in build stamp with `bundle` to offer a reload.
+app.get("/api/version", (_req, res) => res.json({ ...RUNNING, bundle: bundleVersion(ROOT) }));
 
 app.post("/api/mkdir", async (req, res) => {
   try {

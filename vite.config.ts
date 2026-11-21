@@ -1,4 +1,25 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+import { execSync } from "node:child_process";
+
+// Build stamp: baked into the client (__BUILD_INFO__) AND written next to it as
+// dist/build-info.json. The server reports the file; the client compares it with
+// its own copy, so a tab running an older bundle than the server now serves can
+// offer "Reload to update" (see main.ts checkVersion), and Settings can show
+// exactly what this machine is running.
+function gitShort(): string | null {
+  try {
+    return execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch {
+    return null;
+  }
+}
+const BUILD_INFO = { commit: gitShort(), builtAt: Date.now() };
+const buildInfo = (): Plugin => ({
+  name: "fleetview-build-info",
+  generateBundle() {
+    this.emitFile({ type: "asset", fileName: "build-info.json", source: JSON.stringify(BUILD_INFO) });
+  },
+});
 
 // The client lives in /client and is built into /dist, which the Node server
 // serves statically.
@@ -19,6 +40,8 @@ import { defineConfig } from "vite";
 export default defineConfig({
   root: "client",
   base: "/",
+  define: { __BUILD_INFO__: JSON.stringify(BUILD_INFO) },
+  plugins: [buildInfo()],
   build: {
     outDir: "../dist",
     emptyOutDir: true,
