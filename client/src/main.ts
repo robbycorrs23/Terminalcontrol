@@ -1722,6 +1722,10 @@ function closeSettings() {
   settingsPanel.classList.remove("open");
   settingsBtn.classList.remove("active");
 }
+function openSettingsPanel() {
+  settingsPanel.classList.add("open");
+  settingsBtn.classList.add("active");
+}
 settingsBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   const open = settingsPanel.classList.toggle("open");
@@ -1793,6 +1797,53 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+// ---- Version / update check -------------------------------------------------
+// "I pulled and restarted, but nothing changed" used to be invisible. The server
+// now rebuilds a stale bundle and fixes dependencies at startup
+// (server/self-check.js); this side catches the last gap — a tab or home-screen
+// app still running the bundle it loaded before the update — and shows what the
+// machine is running in Settings.
+type VersionInfo = {
+  server: { commit: string | null; branch: string | null; dirty: boolean; startedAt: number };
+  bundle: { commit: string | null; builtAt: number } | null;
+  deps: { name: string; want: string; have: string | null }[];
+};
+async function checkVersion() {
+  let v: VersionInfo;
+  try {
+    const res = await fetch("/api/version", { cache: "no-store" });
+    if (!res.ok) return; // an older server without the route
+    v = await res.json();
+  } catch {
+    return;
+  }
+  const el = document.getElementById("updateNote") as HTMLButtonElement;
+  const mine = typeof __BUILD_INFO__ !== "undefined" ? __BUILD_INFO__ : null;
+  const stale = !!(v.bundle && mine && v.bundle.builtAt !== mine.builtAt);
+  if (v.deps?.length) {
+    el.textContent = "This machine needs npm install";
+    el.title = v.deps.map((d) => `${d.name}: ${d.have || "missing"} → ${d.want}`).join("\n");
+    el.onclick = () => openSettingsPanel();
+    el.hidden = false;
+  } else if (stale) {
+    el.textContent = "FleetView was updated — tap to reload";
+    el.title = `Running ${mine?.commit || "?"}, server has ${v.bundle?.commit || "?"}`;
+    el.onclick = () => location.reload();
+    el.hidden = false;
+  } else el.hidden = true;
+
+  const ver = document.getElementById("mcVersion");
+  if (ver) {
+    const s = v.server;
+    const when = (t?: number) => (t ? new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "?");
+    ver.textContent = `${s.commit || "unknown"}${s.branch && s.branch !== "HEAD" ? " · " + s.branch : ""}${s.dirty ? " · modified" : ""}`;
+    ver.title =
+      `Server running ${s.commit} since ${when(s.startedAt)}\n` +
+      `App built from ${v.bundle?.commit || "?"} at ${when(v.bundle?.builtAt)}\n` +
+      `This tab: ${mine?.commit || "?"} (built ${when(mine?.builtAt)})`;
+  }
+}
+
 function connectControl() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/control?session=${encodeURIComponent(SESSION)}`);
@@ -1801,6 +1852,7 @@ function connectControl() {
     const m = JSON.parse(e.data);
     switch (m.t) {
       case "panes": {
+        void checkVersion(); // every (re)connect — a server restart is when updates land
         // Authoritative snapshot of this window's live terminals (sent on every
         // connect). Add new ones and drop any box the server no longer has —
         // e.g. a terminal closed while we were asleep.
