@@ -1,0 +1,632 @@
+/* Chat view: messages, Markdown, tables, media, code, charts. */
+/* ---- Agent chat view (client/src/agent-chat.ts) -----------------------
+   No xterm here — a plain flex column with a native-scrolling message log
+   and a bottom input bar, which is the whole point (no cursor to fight, no
+   touch-vs-mouse-tracking-mode conflicts). Same flex:1/min-height:0 sizing
+   as .xt above so it fills the same slot in the box. */
+.term .chat {
+  position: relative; /* anchors .busy-rain, same as .xt above */
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term .chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.term .msg {
+  max-width: 88%;
+  padding: 7px 11px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Neutral rounded bubble, as in the Claude app's remote-control view — the
+   bubble itself (vs. the chromeless assistant side) is what tells the
+   speakers apart, so it doesn't need to shout in accent blue. */
+.term .msg.user {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--text) 11%, var(--panel));
+  color: var(--text);
+  border-radius: 16px;
+  padding: 8px 13px;
+}
+/* The assistant side is deliberately NOT a bubble. One reply arrives as
+   several `assistant_done` events (one per text block), so bubbling each
+   chopped a single answer into a stack of near-identical cards; as plain
+   text on the pane background they read as consecutive paragraphs of one
+   message instead. The user's bubble is what distinguishes the speakers
+   now, and this side carries no chrome at all. */
+.term .msg.assistant {
+  align-self: stretch;
+  max-width: 100%;
+  padding: 2px 2px;
+  color: var(--text);
+  /* Rendered Markdown supplies its own block structure (see markdown.ts), so
+     drop the bubble-era pre-wrap that would otherwise double the spacing. */
+  white-space: normal;
+}
+/* Consecutive assistant blocks are paragraphs of one turn, not separate
+   messages — tighten the chat-log gap between them so the seam doesn't read
+   as a speaker change. */
+.term .msg.assistant + .msg.assistant {
+  margin-top: -3px;
+}
+/* ---- Rendered Markdown inside an assistant message ---- */
+.term .msg.assistant p {
+  margin: 0 0 8px;
+}
+.term .msg.assistant > :last-child {
+  margin-bottom: 0;
+}
+.term .msg.assistant .md-h {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 12px 0 6px;
+}
+.term .msg.assistant .md-h1 {
+  font-size: 17px;
+}
+.term .msg.assistant .md-h2 {
+  font-size: 15.5px;
+}
+.term .msg.assistant .md-h3,
+.term .msg.assistant .md-h4,
+.term .msg.assistant .md-h5,
+.term .msg.assistant .md-h6 {
+  font-size: 14px;
+}
+.term .msg.assistant a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.term .msg.assistant code {
+  font-family: ui-monospace, Menlo, Monaco, monospace;
+  font-size: 0.92em;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.term .msg.assistant pre.md-code {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+/* A code block's <code> is a plain monospace slab — undo the inline-code pill
+   styling and let the <pre> own the frame and horizontal scroll. */
+.term .msg.assistant pre.md-code code {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font-size: 12.5px;
+  white-space: pre;
+}
+.term .msg.assistant ul,
+.term .msg.assistant ol {
+  margin: 4px 0 8px;
+  padding-left: 22px;
+}
+.term .msg.assistant li {
+  margin: 2px 0;
+}
+.term .msg.assistant blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--line);
+  color: var(--text-dim);
+}
+.term .msg.assistant hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 12px 0;
+}
+/* ---- Readability -------------------------------------------------------
+   The complaint this answers: agent replies arrive as long unbroken runs of
+   lines that are hard to track across. A longer line-height so the eye finds
+   the next line, and enough space between blocks that structure is visible
+   before you start reading.
+
+   NOTE: there is deliberately NO max-width on the text. A measure cap (~74
+   characters) was tried and removed: prose was capped while tables, code
+   blocks, and charts stayed full-width, so on a wide pane the text filled a
+   third of the box beside a full-width table and the message read as broken
+   alignment rather than as careful typography. If you reintroduce a cap, it
+   has to apply to EVERY block so the message stays one aligned column. */
+.term .msg.assistant {
+  font-size: 13px;
+  line-height: 1.62;
+}
+.term .msg.assistant p {
+  margin: 0 0 10px;
+}
+.term .msg.assistant li {
+  margin: 4px 0;
+}
+/* Headings need to win against the body text around them, and a run of ##
+   sections needs a visible seam — otherwise every heading reads as just
+   another bold line in the wall. */
+.term .msg.assistant .md-h {
+  margin: 16px 0 7px;
+  letter-spacing: -0.01em;
+}
+.term .msg.assistant .md-h1 {
+  font-size: 18px;
+}
+.term .msg.assistant .md-h2 {
+  font-size: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+/* …except the very first block, which has the title bar right above it. */
+.term .msg.assistant > .md-h2:first-child {
+  padding-top: 0;
+  border-top: 0;
+  margin-top: 4px;
+}
+.term .msg.assistant .md-h3 {
+  font-size: 14px;
+  color: var(--text);
+}
+.term .msg.assistant > :first-child {
+  margin-top: 0;
+}
+
+/* ---- Task lists ----
+   The checkbox IS the marker, so the list's own bullet is redundant — an item
+   reading "• ☑ done" has two of them. Only the items that are tasks lose their
+   marker; a mixed list keeps its bullets on the plain items. */
+.term .msg.assistant li:has(> .md-task) {
+  list-style: none;
+  margin-left: -18px;
+}
+.term .msg.assistant .md-task {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+.term .msg.assistant .md-task input {
+  margin: 4px 0 0;
+  accent-color: var(--accent);
+  flex: none;
+}
+.term .msg.assistant .md-task.done > span {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+/* ---- Tables ------------------------------------------------------------
+   The wrapper is what scrolls. Without it a wide table stretches the flex
+   column and drags the whole conversation sideways. */
+.term .md-table-wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.term .md-figure .md-table-wrap {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.term .md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+  /* Columns of numbers only line up with fixed-width digits. */
+  font-variant-numeric: tabular-nums;
+}
+.term .md-table th,
+.term .md-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.term .md-table thead th {
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--line) 30%, var(--panel));
+  position: sticky;
+  top: 0;
+}
+.term .md-table tbody tr:last-child th,
+.term .md-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.term .md-table tbody tr:hover td,
+.term .md-table tbody tr:hover th {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+/* A figure is a table plus its chart view; only one is shown at a time. */
+.term .md-figure {
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.term .md-figure-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.term .md-chartbtn,
+.term .viz-toggle {
+  background: var(--btn);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.term .md-chartbtn:hover,
+.term .viz-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.term .md-figure-chart {
+  padding: 4px;
+}
+
+/* ---- Media -------------------------------------------------------------
+   Capped by height as well as width: an agent's full-page screenshot is
+   often 3000px tall, and unconstrained it would bury the rest of the turn.
+   Click opens the original at full size. */
+.term .md-media-link {
+  display: block;
+  margin: 10px 0;
+  width: fit-content;
+  max-width: 100%;
+}
+.term .md-img {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  width: auto;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.term .md-media-link:hover .md-img {
+  border-color: var(--accent);
+}
+.term .md-video {
+  display: block;
+  margin: 10px 0;
+  max-width: 100%;
+  max-height: 420px;
+  border-radius: 8px;
+  background: #000;
+}
+.term .md-audio {
+  display: block;
+  margin: 10px 0;
+  width: 100%;
+  max-width: 340px;
+}
+.term .md-media-missing {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.term .md-media-missing::before {
+  content: "⃠ ";
+}
+
+/* ---- Code blocks ---- */
+.term .md-codeblock {
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.term .md-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 6px 3px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.term .md-code-lang {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.term .md-copy {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.term .md-copy:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+.term .md-codeblock pre.md-code {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+/* ---- Charts ------------------------------------------------------------
+   Marks carry the series colour; every piece of TEXT here wears a text token,
+   because a light categorical hue (yellow, aqua) is illegible as type on the
+   surface. Identity comes from the swatch beside the label, never from
+   colouring the label itself. */
+.term .viz {
+  position: relative;
+  margin: 10px 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.term .md-figure-chart .viz,
+.term .viz.bare {
+  margin: 0;
+  border: 0;
+}
+.term .viz-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.term .viz-title {
+  flex: 1;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.term .viz-head .viz-toggle {
+  margin-left: auto;
+}
+.term .viz-plot {
+  min-width: 0;
+}
+.term .viz-svg {
+  display: block;
+  max-width: 100%;
+  /* Clip to the viewport (the SVG default). A chart must never paint outside
+     its own card and over the conversation — if a scale bug ever puts a mark
+     out of bounds, that has to show up as a clipped chart, not as a line drawn
+     across the message above it. */
+  overflow: hidden;
+}
+/* Gridlines and axes: solid hairlines one step off the surface, never dashed
+   — a dashed grid reads as a threshold or a projection when it's just a grid. */
+.term .viz-grid,
+.term .viz-axis-line {
+  stroke: var(--line);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.term .viz-axis {
+  fill: var(--text-dim);
+  font-size: 10px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.term .viz-mark {
+  transition: opacity 0.12s;
+}
+.term .viz-mark:hover {
+  opacity: 0.82;
+}
+.term .viz-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+/* A wash, never a saturated block. */
+.term .viz-area {
+  stroke: none;
+  fill-opacity: 0.1;
+}
+/* The 2px ring is surface-coloured so a dot stays legible where it crosses a
+   line or another dot — spacing, not a border drawn around the mark. */
+.term .viz-dot {
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+.term .viz-donut-total {
+  fill: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+.term .viz-donut-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.term .viz-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 8px;
+}
+.term .viz-donut-wrap .viz-legend {
+  margin-top: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.term .viz-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.term .viz-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+}
+.term .viz-key-label {
+  white-space: nowrap;
+}
+.term .viz-tip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11.5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+}
+.term .viz-tip-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+}
+.term .viz-tip-value {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
+}
+.term .viz-table-wrap {
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.term .viz-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.term .viz-table th,
+.term .viz-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+.term .viz-table th[scope="row"],
+.term .viz-table thead th:first-child {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.term .viz-table thead th {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.term .viz-empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 12px;
+}
+/* Stat tile: the form for when the data is one number. A one-bar bar chart
+   is not a chart — this is. */
+.term .viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.term .viz-stat-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.term .viz-stat-value {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text);
+  /* Proportional figures: tabular-nums gives every digit a `0`'s width, which
+     reads loose at display size. Tabular is for COLUMNS, not headline numbers. */
+}
+.term .viz-stat-delta {
+  font-size: 12px;
+  font-weight: 600;
+}
+/* Direction is in the ▲/▼ glyph and the sign, so this never depends on colour
+   alone. */
+.term .viz-stat-delta.good {
+  color: #3fb950;
+}
+.term .viz-stat-delta.bad {
+  color: #f85149;
+}
+.term .viz-spark {
+  margin-top: 4px;
+}
+body.light .term .viz-tip {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+.term .msg.error {
+  align-self: stretch;
+  background: color-mix(in srgb, #f85149 18%, var(--panel));
+  border: 1px solid #f85149;
+  color: var(--text);
+}
+/* Whole-turn "this was interrupted" notice (appendBubble("aborted", …), see
+   setStatus()) — same shape as .msg.error since both are a standalone
+   notice, not a spoken line, but its own color so the two read as distinct
+   situations ("something's wrong" vs "this just didn't finish"). */
+.term .msg.aborted {
+  align-self: stretch;
+  background: color-mix(in srgb, var(--aborted) 14%, var(--panel));
+  border: 1px solid var(--aborted);
+  color: var(--text);
+}
+/* Per-message marker on a truncated assistant reply itself (see
+   agent-chat.ts's assistant_done handling) — .msg.assistant is deliberately
+   plain/chromeless (see the comment above), so this stays a subtle left
+   accent + trailing caption rather than a full bubble treatment. */
+.term .msg.assistant.aborted {
+  border-left: 3px solid var(--aborted);
+  padding-left: 9px;
+}
+.term .msg.assistant.aborted::after {
+  content: "⚠ cut off — response may be incomplete";
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--aborted);
+}

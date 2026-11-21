@@ -1,0 +1,416 @@
+/* A box: title bar, terminal, controls. */
+/* ---- A terminal box ---- */
+.term {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--term-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+/* Work-account boxes (opened via "claude (work)"): didit-blue title tint +
+   a large, faint logo watermark centered over the terminal — big enough to
+   always catch your eye, faint enough to never fight with reading output.
+   `.tinted` is declared after this, so a manual color-code still wins if set. */
+.term.work .title {
+  background: color-mix(in srgb, #00adec 55%, var(--panel));
+}
+/* The badge image is a per-machine setting, injected as --work-logo. With no
+   image configured there is nothing to show, so both badge elements collapse —
+   a machine that never asked for branding gets none. */
+body:not(.has-logo) .work-logo,
+body:not(.has-logo) .work-badge {
+  display: none !important;
+}
+.term.work .work-logo,
+.term.work .work-badge {
+  background-image: var(--work-logo, none);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+.term.work .work-logo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: clamp(300px, 50%, 480px);
+  height: auto;
+  opacity: 0.1;
+  pointer-events: none;
+  z-index: 5;
+}
+/* AgentChat's work-account marker (see agent-chat.ts): a small title-bar
+   badge instead of Term's big watermark — there's no blank canvas to overlay
+   it on (a chat pane is a column of bubbles, not an open viewport), and a
+   mobile-width box has no room to spare. Sits just left of the paperclip
+   (add-file) button. Full opacity, unlike .work-logo — at this size a faint
+   version would just read as a smudge, not an "it's the work account" cue. */
+.term.work .work-badge {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex: none;
+}
+/* AgentChat's remote (ssh) marker (see agent-chat.ts): same slot/sizing
+   family as .work-badge, but a text pill — there's no logo for an arbitrary
+   hostname. Sits in the same spot .work-badge would (left of the mode
+   selector); a pane is never both work AND remote-badged at once visually
+   crowded since each is its own opt-in dimension, but truncates gracefully
+   either way. */
+.term .remote-badge {
+  flex: none;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--btn);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+/* Color-code: tint the title bar (the interior header), NOT the border — the
+   border is reserved for the needs-you / done / flagged / zoomed alert glows.
+   `--tint` is set per box; it inherits down to the title. */
+.term.tinted .title {
+  background: color-mix(in srgb, var(--tint) 40%, var(--panel));
+}
+/* The color control: a rainbow wheel when no tint is set, a solid dot of the
+   chosen color once one is — so it reads as "pick a color" and shows the state. */
+.term .ctl.color::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(127, 127, 127, 0.45);
+  background: conic-gradient(from 0deg, #f85149, #e3b341, #3fb950, #58a6ff, #bc8cff, #f85149);
+}
+.term.tinted .ctl.color::before {
+  background: var(--tint);
+  border-color: var(--tint);
+}
+
+/* Color-picker popover */
+.term .cpop {
+  position: absolute;
+  top: 23px;
+  right: 6px;
+  z-index: 6;
+  display: flex;
+  gap: 6px;
+  padding: 6px 7px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.term .cpop .sw {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: var(--c);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.term .cpop .sw:hover {
+  transform: scale(1.18);
+}
+.term .cpop .sw.clear {
+  background: transparent;
+  color: var(--text-dim);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  line-height: 1;
+}
+.term .cpop .sw.clear:hover {
+  color: var(--text);
+}
+
+/* Ephemeral-secret popover (🔒) */
+/* Anchored under the title bar for terminal panes. Chat panes moved the 🔒 to
+   the tools row at the BOTTOM of the box, so .spop.up flips it to open upward
+   from there — otherwise the popover renders at the top of the pane, nowhere
+   near the button that opened it. */
+.term .spop {
+  position: absolute;
+  top: 23px;
+  right: 6px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 220px;
+  padding: 9px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  font-size: 11px;
+}
+.term .spop.up {
+  top: auto;
+  bottom: 84px;
+  left: 8px;
+  right: auto;
+  /* .term is overflow:hidden, so a popover taller than the space above the
+     tools row would be silently clipped at the top — in an unzoomed grid box
+     that is most of it. Shrink and scroll instead of disappearing. */
+  max-height: calc(100% - 104px);
+  overflow-y: auto;
+}
+.term .spop input,
+.term .spop select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 7px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+}
+.term .spop button.spop-go {
+  padding: 6px;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.term .spop button.spop-go:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.term .spop-warn {
+  color: var(--warn, #e3b341);
+  line-height: 1.4;
+}
+.term .spop-status {
+  color: var(--text-dim);
+  min-height: 13px;
+  word-break: break-word;
+}
+.term .spop-active {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.term .spop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 6px;
+  background: var(--bg);
+  border-radius: 5px;
+  color: var(--text-dim);
+}
+.term .spop-revoke {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 2px;
+  font: inherit;
+}
+.term .spop-revoke:hover {
+  color: var(--danger, #f85149);
+}
+.term .title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--panel);
+  cursor: grab; /* the title bar is also the drag handle */
+  user-select: none;
+}
+.term .title .dot {
+  color: var(--accent);
+  font-size: 9px;
+}
+.term .title .path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: text; /* click to rename */
+}
+.term .title .path:hover {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+/* Inline rename field — dresses like .path, plus a focus outline. */
+.term .title .rename {
+  flex: 1;
+  min-width: 40px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0 4px;
+  outline: none;
+}
+.term .title .badge-slot {
+  display: flex;
+}
+/* Work-account / remote-host badges. Deliberately NOT .badge-slot — that one
+   is emptied by setWaiting() on every attention change. */
+.term .title .acct-slot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.term .title .acct-slot:empty {
+  display: none;
+}
+/* Permission-mode selector (agent-chat.ts only — see AgentChat's constructor
+   and setModeUI()). Dressed like a small chip rather than #bar's full-size
+   selects — the title bar is already tight, especially on mobile. */
+.term .mode-sel {
+  flex: none;
+  background: var(--btn);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 1px 5px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  max-width: 88px;
+}
+.term .mode-sel:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+/* bypassPermissions skips every approval prompt, unlike the other three
+   modes — flagged distinctly so it's never mistaken for one of the "still
+   asks before anything destructive" modes at a glance. */
+.term .mode-sel.bypass {
+  border-color: var(--waiting);
+  color: var(--waiting);
+}
+/* Inline SVG control icons (client/src/icons.ts). Stroked and sized from the
+   button's own colour, so hover/disabled/theme states need no icon-specific
+   rules. vector-effect keeps the 2px stroke honest at any box size. */
+.ico-svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ico-svg.fill {
+  fill: currentColor;
+  stroke: none;
+}
+.chatview .ico-svg,
+.plist .ico .ico-svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Window controls */
+.term .ctl {
+  flex: none;
+  width: 20px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.term .ctl.attach {
+  width: 22px;
+  font-size: 12px;
+}
+/* Mobile-only "back" affordance for the zoomed view — see the media query
+   below for when it actually shows. */
+.term .ctl.back {
+  display: none;
+}
+.term .ctl:hover {
+  background: var(--btn);
+  color: var(--text);
+}
+.term .ctl.close:hover {
+  background: #f85149;
+  color: #fff;
+}
+.term .ctl.flag.active {
+  background: var(--flag);
+  color: #000;
+}
+.term .ctl.flag.active:hover {
+  background: var(--flag);
+  color: #000;
+}
+/* Pinned "last prompt you sent" strip, directly under the title bar. */
+.term .pinned {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+.term .pinned::before {
+  content: "❯ ";
+  color: var(--accent);
+  font-weight: 700;
+}
+body.big .term .pinned {
+  font-size: 13px;
+}
+/* Full cwd path — a mobile-only "where is this" line for collapsed cards
+   (see the @media block above). Hidden everywhere else: desktop already has
+   the path in the title's hover tooltip, and it'd be redundant once zoomed. */
+.term .cwdline {
+  display: none;
+  padding: 0 8px 3px 30px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.term .xt {
+  position: relative; /* anchors .work-logo to the terminal viewport, not the whole box */
+  flex: 1;
+  min-height: 0;
+  padding: 2px 4px;
+}

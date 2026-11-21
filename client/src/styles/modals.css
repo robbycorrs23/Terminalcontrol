@@ -1,0 +1,456 @@
+/* Minimized tray, layout chooser, folder picker. */
+/* ---- Minimized tray ---- */
+#tray {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  overflow-x: auto;
+}
+#tray .tray-label {
+  color: #6e7681;
+  font-size: 11px;
+  flex: none;
+}
+.tchip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  background: var(--btn);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 4px 3px 10px;
+  cursor: pointer;
+}
+.tchip:hover {
+  border-color: var(--accent);
+}
+.tchip .tclose {
+  width: 18px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  color: var(--text-dim);
+}
+.tchip .tclose:hover {
+  background: #f85149;
+  color: #fff;
+}
+.tchip.waiting {
+  border-color: var(--waiting);
+  box-shadow: 0 0 0 1px var(--waiting);
+}
+.tchip.waiting.done {
+  border-color: var(--done);
+  box-shadow: 0 0 0 1px var(--done);
+}
+.tchip.waiting.aborted {
+  border-color: var(--aborted);
+  box-shadow: 0 0 0 1px var(--aborted);
+}
+
+/* ---- Open-layout chooser modal ---- */
+/* Task view/edit modal */
+.taskmodal {
+  position: fixed;
+  inset: 0;
+  z-index: 73;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+.taskmodal .panel {
+  width: min(560px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.taskmodal .tm-text {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 180px;
+  max-height: 60vh;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+  border: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.taskmodal .tm-text:focus {
+  outline: none;
+}
+
+#openmode,
+#sshManager,
+#sshEdit {
+  position: fixed;
+  inset: 0;
+  z-index: 72;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+#openmode .panel.small,
+#sshManager .panel.small,
+#sshEdit .panel.small {
+  width: min(460px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+/* SSH server add/edit form: stacked label+input rows, same weight as .set-row. */
+.sshform {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  overflow-y: auto;
+}
+.sshform label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+.sshform label .hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.sshform input {
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+}
+.sshform input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* SSH server list rows (#sshList): reuse .prow, add trailing edit/delete icons. */
+.prow.sshrow {
+  cursor: default;
+}
+.prow.sshrow .nm {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.prow.sshrow .nm .sub {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.ssh-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.ssh-actions button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 4px;
+  font: inherit;
+}
+.ssh-actions button:hover {
+  color: var(--text);
+}
+.ssh-actions button.ssh-del:hover {
+  color: var(--danger, #f85149);
+}
+.omsg {
+  padding: 16px 14px;
+  color: var(--text);
+  line-height: 1.5;
+}
+.omsg b {
+  color: var(--accent);
+}
+.omsg .omnote {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.omsg .omnote b {
+  color: var(--text);
+}
+
+/* ---- Folder picker modal ---- */
+#picker {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+#picker .panel {
+  width: min(560px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.phead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.ptitle {
+  color: var(--accent);
+  font-weight: 700;
+}
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.crumbs .crumb {
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+.crumbs .crumb:hover {
+  background: var(--btn);
+  color: var(--text);
+}
+.crumbs .sep {
+  opacity: 0.5;
+}
+.ptools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.ptools input,
+.ptools select,
+.ptools button {
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.ptools input {
+  flex: 1;
+  cursor: text;
+}
+.ptools input:focus,
+.ptools select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.ptools button:hover,
+.ptools select:hover {
+  border-color: var(--accent);
+}
+.ptools #pstar.active {
+  border-color: var(--waiting);
+  color: var(--waiting);
+}
+.plist {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  padding: 6px;
+}
+.prow .meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: #6e7681;
+  white-space: nowrap;
+}
+.prow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.prow:hover {
+  background: var(--btn);
+}
+.prow .ico {
+  opacity: 0.85;
+}
+.prow.up {
+  color: var(--text-dim);
+}
+.prow.empty {
+  color: #6e7681;
+  cursor: default;
+}
+.prow.empty:hover {
+  background: transparent;
+}
+.precent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: #6e7681;
+}
+.precent .rchip {
+  background: var(--btn);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 2px 9px;
+  color: var(--text);
+  cursor: pointer;
+}
+.precent .rchip:hover {
+  border-color: var(--accent);
+}
+.pfoot {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+/* Options wrap as whole fields; the actions keep their own row so a narrow
+   panel can never squeeze "Open here" against a half-wrapped label. */
+.popts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+}
+.pacts {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.popt-lbl {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+/* Same dressing as the picker's own toolbar selects (.ptools) — this one was
+   left native, so it rendered as a white slab on the dark panel. */
+.pfoot select {
+  min-height: 30px;
+  max-width: 260px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.pfoot select:hover {
+  border-color: var(--accent);
+}
+.pfoot select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.runclaude {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap; /* the mid-phrase wrapping was the whole problem */
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.runclaude code {
+  color: var(--accent);
+}
+.chatview {
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.chatview input:disabled {
+  cursor: not-allowed;
+}
+.chatview:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pfoot button {
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+.pfoot button:hover {
+  border-color: var(--accent);
+}
+.pfoot button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+/* Neither row wraps by default — on a phone the search input, sort select,
+   +Folder/★Start buttons (.ptools) or the run-on-open select + Cancel/Open
+   here (.pfoot) just clip instead. Also bump to 16px: below that, iOS Safari
+   zooms the whole page in on focus, which is disorienting mid-type. */
+@media (max-width: 640px) {
+  .ptools,
+  .pfoot {
+    flex-wrap: wrap;
+  }
+  .ptools input,
+  .ptools select,
+  .ptools button,
+  .pfoot button,
+  #agentSelect {
+    font-size: 16px;
+    padding: 8px 10px;
+  }
+}

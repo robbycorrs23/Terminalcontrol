@@ -1,0 +1,153 @@
+/* Variables, themes, page shell. */
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --line: #30363d;
+  --accent: #58a6ff;
+  /* Usage status ramp. Deliberately NOT themed per light/dark and deliberately
+     NOT reusing --waiting (which means "needs you" — one hue must not carry two
+     meanings). Validated for CVD separation and for contrast against --panel in
+     both modes; on the light surface the amber step is sub-3:1 by design, which
+     is why every ring and bar always shows its percentage as text. */
+  --use-ok: #0ca30c;
+  --use-warn: #fab219;
+  --use-crit: #d03b3b;
+  --waiting: #f0a35e; /* needs you */
+  --done: #f5d142; /* finished a turn */
+  --aborted: #f85149; /* cut off mid-turn — interrupt/restart/rate limit/API error, not a clean finish */
+  --flag: #a371f7;
+  /* "Working" is one green family, deliberately: --busy paints the travelling
+     border light, --rain the falling glyphs, --rain-head the hot leading edge
+     of BOTH. Kept as separate variables so the border and the rain can still be
+     tuned independently, but they must stay in the same hue or a working box
+     reads as two unrelated effects. */
+  --busy: #00e64a;
+  --rain: #00e64a;
+  --rain-head: #8fffad; /* brighter leading edge, still unmistakably green */
+  --text: #c9d1d9;
+  --text-dim: #8b949e;
+  --btn: #21262d;
+  --term-bg: #000000;
+  /* Categorical chart slots, assigned in this fixed order and never cycled
+     (see charts.ts). Both modes are SELECTED — the light block below is the
+     same eight hues re-stepped for a light surface, not an automatic flip.
+     The order is the colour-vision-deficiency safety mechanism, not taste:
+     validated as a set against this mode's chart surface (--panel), worst
+     adjacent pair CVD ΔE 8.4 and normal-vision ΔE 19.3. Re-run the check
+     before touching any value or the order. */
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #c98500;
+  --viz-5: #d55181;
+  --viz-6: #008300;
+  --viz-7: #9085e9;
+  --viz-8: #e66767;
+}
+body.light {
+  --term-bg: #ffffff;
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --line: #d0d7de;
+  --accent: #0969da;
+  --waiting: #bc4c00;
+  --done: #8a6a00;
+  --aborted: #cf222e;
+  --flag: #8250df;
+  /* On a white terminal the working green has to go DARKER, not brighter — a
+     bright leading glyph is simply invisible there. Still green, just deep. */
+  --busy: #0f7a2e;
+  --rain: #0f7a2e;
+  --rain-head: #04421a;
+  --text: #1f2328;
+  --text-dim: #57606a;
+  --btn: #eaeef2;
+  /* Light-mode steps of the same eight hues, validated against the light
+     chart surface. Three slots (aqua, yellow, magenta) sit below 3:1 contrast
+     there, which obligates relief — that's why every chart ships a Table
+     toggle rather than treating it as optional chrome. */
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-6: #008300;
+  --viz-7: #4a3aa7;
+  --viz-8: #e34948;
+}
+/* Large-text mode bumps UI chrome; xterm font size is handled in JS. */
+body.big {
+  font-size: 15px;
+}
+body.big .term .title,
+body.big .badge,
+body.big #tray .tray-label {
+  font-size: 13px;
+}
+body.big .term .title .path {
+  font-size: 17px;
+}
+body.big #bar button,
+body.big #bar select,
+body.big .qchip,
+body.big .fchip,
+body.big .rchip.recover,
+body.big .rec-label {
+  font-size: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+/* No font-family was ever declared for the app's normal UI text, so it fell
+   back to the browser's default document font — a serif (Times-ish) on
+   mobile Safari/Chrome, whose word-spacing reads as much wider than a system
+   sans-serif. Went unnoticed because UI chrome text is all short labels/
+   buttons; became obvious once the chat bubbles (client/src/agent-chat.ts)
+   added real wrapped prose. The terminal itself is unaffected — xterm sets
+   its own monospace fontFamily in JS (see client/src/theme.ts). */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+}
+/* Ensure the `hidden` attribute always wins over element display rules below
+   (e.g. #picker{display:grid}, #tray{display:flex}) — otherwise a hidden
+   overlay keeps intercepting clicks. */
+[hidden] {
+  display: none !important;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+  /* Nothing in this app scrolls the DOCUMENT — the grid, the settings sheet and
+     the chat log own their own scrollers. Without this, over-scrolling any of
+     them chains out to the document and rubber-bands the whole app (see the
+     height note below for why that's not merely cosmetic on iOS). */
+  overscroll-behavior: none;
+}
+/* App is a vertical stack: bar / grid (fills) / tray. */
+body {
+  display: flex;
+  flex-direction: column;
+  /* NOT 100vh. On iOS `vh` is the LARGE viewport — the height the page would
+     have if Safari's chrome were retracted — so with the URL bar showing, the
+     body is TALLER than what you can actually see. Safari resolves that by
+     letting the whole document pan, which slides #bar (and with it the
+     env(safe-area-inset-top) padding below) up underneath the status bar and
+     Dynamic Island, where its buttons stop being tappable. That's why the
+     safe-area padding alone never fixed this: the clearance was always there,
+     it was just scrolled off-screen.
+     --app-h is visualViewport.height, kept live from main.ts, and is the only
+     measure that ALSO shrinks when the on-screen keyboard opens (vh and dvh
+     are both keyboard-blind). 100dvh is the CSS-only fallback; 100vh is the
+     last resort for browsers without dvh. Layered, so the app is never taller
+     than the pixels the user can see, so there is nothing to pan. */
+  height: 100vh;
+  height: 100dvh;
+  height: var(--app-h, 100dvh);
+}

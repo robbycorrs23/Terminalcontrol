@@ -1,0 +1,567 @@
+/* Top bar, attention chips, the original settings dropdown. */
+/* ---- Top bar ----
+   #bar itself is a plain block box, NOT the flex container: it exists only to
+   own the safe-area clearance (padding-top) and the panel background/border,
+   so that clearance can never be "absorbed" by the flex row's own sizing.
+   An earlier version put padding-top and the flex row on the SAME element —
+   on a notch/Dynamic-Island phone that made the row's rendered top edge drift
+   (sometimes overflowing past the border-bottom, sometimes riding up under
+   the status bar) depending on how the browser reconciled the flex
+   cross-size against height vs min-height vs the padding. Splitting them
+   into an outer block (#bar) + inner flex row (#barRow) sidesteps that
+   entirely: a block box's auto height is unambiguously
+   padding-top + child height + padding-bottom, full stop. */
+#bar {
+  flex: none;
+  padding-top: env(safe-area-inset-top); /* clears the iPhone notch; 0 elsewhere */
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+  z-index: 60;
+}
+#barRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 10px;
+}
+.brand {
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.spacer {
+  flex: 1;
+}
+#bar button,
+#bar select {
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+#bar button:hover,
+#bar select:hover {
+  border-color: var(--accent);
+}
+#nextBtn {
+  border-color: var(--waiting);
+  color: var(--waiting);
+}
+#bar button.icon {
+  width: 30px;
+  padding: 4px 0;
+  text-align: center;
+  font-size: 14px;
+}
+
+/* ---- Attention chip row ----
+   A second row under #barRow, NOT a flex item inside it. This used to be an
+   inline horizontal scroller; the problem with sharing the row is that chips
+   and controls compete for the same width, and on a phone one waiting terminal
+   was enough to crush ⚙ / "+ Terminal" down to untappable slivers.
+   Here the chips WRAP onto as many lines as they need and the controls above
+   are never affected.
+
+   Capped and scrollable so a fleet with a dozen simultaneous waiters can't push
+   the grid off-screen — past ~3 lines the row scrolls rather than grows. */
+#barChips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 7px;
+  max-height: 22dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+#barChips::-webkit-scrollbar {
+  display: none;
+}
+/* Empty fleet, no row: #queue/#followups/#recovery are always in the DOM (their
+   render functions fill them in place), so :empty on the container never
+   matches — test for actual chips instead. Keeps the bar exactly as tall as it
+   was before when nothing needs attention, rather than leaving a dead strip. */
+#barChips:not(:has(.qchip, .fchip, .rchip, .rec-label, .rec-all)) {
+  display: none;
+}
+
+/* ---- Settings dropdown ----
+   Everything that isn't "+ Terminal". One panel at every width — this replaced
+   a ☰ menu that only existed under 640px, so the bar no longer has two
+   different personalities depending on the viewport.
+
+   top: 100%, not a hardcoded px: #settings is a child of #bar
+   (position: relative), whose own height varies with env(safe-area-inset-top).
+   A fixed number drifted out of sync (opened mid-bar, or left a gap) whenever
+   that padding made #bar taller than the number assumed. */
+#settings {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  width: 320px;
+  max-width: 100vw;
+  /* Never taller than the space under the bar — the panel scrolls instead of
+     running off-screen (which is what a phone in landscape would otherwise do). */
+  max-height: calc(100dvh - var(--bar-h, 40px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  z-index: 59;
+}
+#settings.open {
+  display: flex;
+}
+#settingsBtn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.set-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.set-sec + .set-sec {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.set-h {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ---- Usage rows (subscription limits) ----
+   One row per ACCOUNT, not per pane — every claude box shares one bucket, so
+   a per-pane list would repeat the same number. Reading these costs no tokens
+   (see server/usage.js), which is why the panel can refresh freely. */
+.use-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.use-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.use-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.use-name {
+  font-size: 13px;
+  color: var(--text);
+}
+.use-plan {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.use-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--btn);
+  overflow: hidden;
+}
+.use-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--use-ok);
+  transition: width 0.3s ease;
+}
+/* Colour by headroom so a bucket about to bite reads as urgent at a glance.
+   Same thresholds as the chat panes' rings — see usageLevel() in main.ts. */
+.use-bar.warn i,
+.use-pct.warn {
+  color: var(--use-warn);
+  background: var(--use-warn);
+}
+.use-bar.crit i,
+.use-pct.crit {
+  color: var(--use-crit);
+  background: var(--use-crit);
+}
+.use-pct {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--use-ok);
+  background: none !important; /* .warn/.crit above set both; text wants colour only */
+}
+.use-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.use-win {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.use-err,
+.use-empty {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+#bar .use-refresh {
+  margin-left: auto;
+  padding: 0 6px;
+  min-height: 20px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+}
+#bar .use-refresh:hover {
+  color: var(--accent);
+}
+.use-refresh.spin {
+  animation: use-spin 0.8s linear infinite;
+}
+@keyframes use-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Unread "your limit reset" marker — shown even when notifications are off,
+   so the news can't be missed entirely. Cleared when the panel is opened. */
+#settingsBtn.hasnews::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--done);
+}
+#settingsBtn {
+  position: relative;
+}
+/* Label on the left, control on the right — the shape people expect from a
+   settings sheet, and it keeps the segmented controls right-aligned with each
+   other down the panel. */
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.set-label {
+  font-size: 13px;
+  color: var(--text);
+}
+.set-btns {
+  display: flex;
+  gap: 8px;
+}
+.set-btns button {
+  flex: 1;
+}
+
+/* Segmented control: shows the current value instead of making you infer it
+   from a cycling icon (what the old ◍ / A⁺ / ☀ buttons did). */
+.seg {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  flex: none;
+}
+#bar .seg button {
+  border: none;
+  border-radius: 0;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: transparent;
+  min-height: 30px;
+}
+#bar .seg button + button {
+  border-left: 1px solid var(--line);
+}
+#bar .seg button:hover {
+  color: var(--text);
+  background: var(--btn);
+}
+#bar .seg button.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+.set-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+.set-check input {
+  margin: 1px 0 0;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+/* The volume row is meaningless with sound off — dimmed and inert rather than
+   removed, so the panel doesn't reflow every time you toggle the checkbox. */
+#volRow.off {
+  opacity: 0.4;
+  pointer-events: none;
+}
+#setVolume {
+  flex: 1;
+  max-width: 160px;
+  accent-color: var(--accent);
+}
+.set-text {
+  flex: 1;
+  min-width: 0;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+.set-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mc-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mc-missing {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.8;
+}
+.mc-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mc-logo-preview {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background-image: var(--work-logo, none);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+.mc-btn {
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mc-btn:hover {
+  border-color: var(--accent);
+}
+.set-note {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--waiting);
+}
+
+/* Sub-options that only make sense while their parent toggle is on (the push
+   categories under "Push to this device"). Indented and dimmed rather than
+   hidden, so you can see what you'd be turning on before you turn it on. */
+.set-sub {
+  margin-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.set-sub[aria-disabled="true"] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+@media (max-width: 640px) {
+  /* Belt-and-braces on the notch clearance: Safari reports a smaller top inset
+     than the system's own in some UI states (mid toolbar-collapse, for one), and
+     a bar sitting flush against the top edge is a bar whose buttons the Island
+     eats. max() — not "+" — so this is a plain no-op whenever the inset reports
+     properly (59pt on an Island phone). */
+  #bar {
+    padding-top: max(env(safe-area-inset-top), 10px);
+  }
+  /* Full-width sheet, and touch-sized targets throughout. */
+  #settings {
+    left: 0;
+    right: 0;
+    width: auto;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+  #settings select,
+  #settings > .set-sec > button,
+  .set-btns button {
+    width: 100%;
+    min-height: 44px;
+  }
+  #bar .seg button {
+    min-height: 40px;
+    padding: 5px 14px;
+    font-size: 13px;
+  }
+  .set-check {
+    min-height: 32px;
+    align-items: center;
+  }
+  #settingsBtn,
+  #addBtn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* Chips are tap targets on a phone, and the desktop 11px/1px-padding pill is
+     a hard thing to hit. Their own row means there's now width to spend. */
+  #barChips .qchip,
+  #barChips .fchip,
+  #barChips .rchip {
+    font-size: 12px;
+    padding: 5px 11px;
+  }
+}
+
+/* Current-layout indicator */
+.current {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.current.saved {
+  color: var(--done);
+  border-color: var(--done);
+}
+
+/* ---- Attention queue chips ---- */
+#queue {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.qchip {
+  background: var(--waiting);
+  color: #000;
+  border-radius: 10px;
+  padding: 1px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.qchip.done {
+  background: var(--done);
+}
+.qchip.aborted {
+  background: var(--aborted);
+  color: #fff;
+}
+
+/* ---- Follow-up chips ---- */
+#followups {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.fchip {
+  background: var(--flag);
+  color: #000;
+  border-radius: 10px;
+  padding: 1px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ---- Recovery chips (dormant terminals) ---- */
+#recovery {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.rec-label {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.rchip.recover {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 1px 5px 1px 9px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.rchip.recover.alive {
+  /* its tmux session is still running — respawn restores it fully */
+  border-color: var(--done);
+  border-style: solid;
+}
+.rchip.recover .rname {
+  cursor: pointer;
+}
+.rchip.recover .rx {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.rchip.recover .rx:hover {
+  color: var(--waiting);
+}
+.rec-all {
+  font-size: 11px;
+  padding: 1px 8px;
+}

@@ -1,0 +1,120 @@
+/* Grid and the phone list layout. */
+/* ---- Grid ---- */
+#grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom)); /* clears the home indicator; 0 elsewhere */
+  grid-auto-rows: 1fr;
+}
+.cell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Narrow screens: every terminal collapses to a compact row (just its
+   title bar — see the .xt/.pinned hiding rule below); tapping a row zooms it
+   full-screen via the existing zoom()/unzoom() in main.ts, completely
+   unchanged. `.term.zoomed` is `position: fixed` (see that rule below), so
+   it's already fully decoupled from its `.cell`'s box — shrinking the cell
+   doesn't affect the zoomed terminal's own rendering at all. JS forces a
+   single column (see reflow()) and floats needs-you terminals to the top of
+   this list (see reflowMobileOrder()) — with short rows, many are visible at
+   once without scrolling, which is the actual point. */
+@media (max-width: 640px) {
+  /* A plain flex list, not grid: grid-auto-rows forces every row in the
+     implicit track to share one size, which would fight the "collapse the
+     zoomed row's placeholder" rule below (flex items size independently). */
+  #grid {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    /* Flicking past the top of the card list must not chain into the document
+       and drag the bar up under the Island — this scroller stops at its own
+       edges. */
+    overscroll-behavior: contain;
+    gap: 10px;
+  }
+  .cell {
+    flex: 0 0 auto; /* content-sized: a card is as tall as its title (+ cwd line, + last-prompt
+                        preview when present) — no fixed row height to leave dead space under
+                        cards that don't have every line */
+  }
+  /* Collapsed cards aren't absolutely positioned to fill their cell — they size
+     to their own content instead, which is what makes the line above work.
+     `.term.zoomed` keeps `position: fixed` from the base rule (higher
+     specificity — more classes — so it wins here regardless of this block). */
+  .term:not(.zoomed) {
+    position: static;
+  }
+  /* The row for whatever's currently zoomed is a redundant empty gap — its
+     content is already showing full-screen via the fixed-position overlay
+     below, so collapse the placeholder instead of leaving a blank strip.
+     NOT display:none: that hides the whole subtree regardless of position,
+     which would take the position:fixed zoomed terminal down with it — fixed
+     positioning only escapes layout/clipping (flex-basis:0 + overflow:hidden
+     here), never the display cascade. */
+  .cell:has(.term.zoomed) {
+    flex-basis: 0;
+    overflow: hidden;
+  }
+  .term:not(.zoomed) .xt,
+  .term:not(.zoomed) .chat {
+    display: none;
+  }
+  /* .pinned (last prompt sent) and .cwdline (full path) turn a collapsed row
+     into an actual card: name + where it is + what you last asked — reusing
+     data the app already tracks rather than inventing a new "preview" concept.
+     Neither shows at all when there's nothing to show (.pinned is hidden via
+     its own `hidden` attribute when there's no last input; .cwdline always
+     has content). */
+  .term:not(.zoomed) .cwdline {
+    display: block;
+  }
+  .term.zoomed .softkeys {
+    display: flex;
+  }
+  /* The ✕ already unzooms rather than closing while zoomed, but that's not
+     obvious full-screen on a phone — show an unambiguous back arrow instead.
+     Desktop never needs it: unzooming there is a click on the visible scrim
+     around the (non-edge-to-edge) zoomed card, or Escape. */
+  .term.zoomed .ctl.back {
+    display: grid;
+    font-size: 22px;
+    font-weight: 700;
+  }
+  /* Minimizing doesn't mean anything here — every unzoomed terminal is
+     already a compact row — and attach/color only matter once you're
+     actually looking at a terminal, so declutter the collapsed row down to
+     just status + name + badge + close. Full toolset returns on zoom. */
+  .term:not(.zoomed) .ctl.attach,
+  .term:not(.zoomed) .ctl.color,
+  .term:not(.zoomed) .ctl.min {
+    display: none;
+  }
+  .term .title .path {
+    font-size: 16px; /* also keeps this row's rename input off the 14px iOS-zoom threshold */
+  }
+  .term .title .rename {
+    font-size: 16px;
+  }
+  .term .ctl,
+  .term .ctl.attach {
+    width: 44px;
+    height: 40px;
+  }
+  .term .cpop .sw {
+    width: 32px;
+    height: 32px;
+  }
+  /* Zoomed = the whole visible screen (see centerRect() in main.ts, which
+     goes edge-to-edge on mobile) — a floating card's rounded corners/margins
+     just waste space you don't have on a phone. */
+  .term.zoomed {
+    border-radius: 0;
+    border-width: 0;
+  }
+}

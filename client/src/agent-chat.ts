@@ -1,11 +1,10 @@
 import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, setBusyClass, profileOf, UsageRow, UsageWindow } from "./terminal";
-import { AgentEvent, AgentQuestion, AgentTask, ModelOption } from "./agent-events";
+import { AgentEvent, AgentTask, ModelOption } from "./agent-events";
 import {
   el,
   toolLabel,
   toolDetail,
   todosOf,
-  renderTodos,
   diffStat,
   inputDiff,
   inputPreview,
@@ -19,98 +18,23 @@ import { CommandMenu } from "./chat-commands";
 import { wireLightbox } from "./lightbox";
 import { openChanges } from "./changes-panel";
 import { createRewindEditor, RewindEditor, RewindPreview } from "./rewind-editor";
-import { mediaSrc } from "./markdown";
-import { uploadFiles, wireFileDrop, wireFilePicker } from "./attach";
-import { renderMarkdown } from "./markdown";
+import { wireFileDrop, wireFilePicker } from "./attach";
+import { renderMarkdown, mediaSrc } from "./markdown";
 import { enhanceRich } from "./rich";
 import { attachSecretPopover } from "./secret-popover";
 import { iconSvg, setIcon } from "./icons";
+import { chipSelect, syncChip } from "./chip-select";
+import { createQuestionCard, resolveQuestionCard } from "./chat-question";
+import { TaskTray, isLiveTask } from "./chat-tasks";
+import { MessageQueue } from "./chat-queue";
+import { AttachmentTray } from "./chat-attachments";
+import { clipboardImages, readClipboardImages } from "./clipboard-images";
+import { headKeysOf } from "./event-keys";
+import { shortModel, usageRing, usageLevel, resetAt } from "./chat-usage";
 
-/**
- * Wrap a <select> so what you SEE is a small styled label, while the real
- * select sits invisibly on top of it at 16px. Why: iOS zooms the whole page
- * when you focus a form control whose text is under 16px — tapping the 11px
- * mode picker blew the app up and left it zoomed. The invisible select still
- * gets the tap and opens the native picker.
- */
-function chipSelect(sel: HTMLSelectElement, cls: string): HTMLElement {
-  const chip = el("span", `sel-chip ${cls}`);
-  const label = el("span", "sel-label");
-  chip.append(label, sel);
-  const sync = () => {
-    label.textContent = sel.selectedOptions[0]?.textContent || "";
-    chip.title = sel.title;
-  };
-  sel.addEventListener("change", sync);
-  (sel as HTMLSelectElement & { syncChip?: () => void }).syncChip = sync;
-  sync();
-  return chip;
-}
-function syncChip(sel: HTMLSelectElement) {
-  (sel as HTMLSelectElement & { syncChip?: () => void }).syncChip?.();
-}
-
-/** Images in a paste event, as named Files (a pasted screenshot has no useful name). */
-function clipboardImages(data: DataTransfer): File[] {
-  const out: File[] = [...data.files].filter((f) => f.type.startsWith("image/"));
-  if (!out.length) {
-    for (const item of data.items) {
-      if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
-      const f = item.getAsFile();
-      if (f) out.push(f);
-    }
-  }
-  return out.map((f, i) => renamePasted(f, i));
-}
-
-/** Read images via the async Clipboard API (needs a user gesture; the browser may ask). */
-async function readClipboardImages(): Promise<File[]> {
-  try {
-    const items = await navigator.clipboard.read();
-    const out: File[] = [];
-    for (const item of items) {
-      const type = item.types.find((t) => t.startsWith("image/"));
-      if (!type) continue;
-      const blob = await item.getType(type);
-      out.push(renamePasted(new File([blob], "image", { type }), out.length));
-    }
-    return out;
-  } catch {
-    return []; // denied, or nothing readable
-  }
-}
-
-function renamePasted(f: File, i: number): File {
-  if (f.name && f.name !== "image.png" && f.name !== "image") return f;
-  const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg").replace(/[^a-z0-9]/g, "");
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
-  return new File([f], `pasted-${stamp}${i ? "-" + i : ""}.${ext}`, { type: f.type });
-}
-
-/**
- * Identity of an event shared by the live stream and the on-disk transcript —
- * how "load earlier" tells the server where this log begins. MIRRORS
- * server/transcript.js's `eventKey`.
- */
-function eventKey(e: AgentEvent): string | null {
-  if (e.t === "tool_call" || e.t === "tool_result") return `${e.t}:${e.id}`;
-  if (e.t === "user") return `user:${e.text}`;
-  if (e.t === "assistant_done") return `a:${e.text}`;
-  if (e.t === "thinking") return `th:${e.text}`;
-  return null;
-}
-function headKeysOf(events: AgentEvent[], n = 40): string[] {
-  const out: string[] = [];
-  for (const e of events) {
-    const k = eventKey(e);
-    if (k) out.push(k);
-    if (out.length >= n) break;
-  }
-  return out;
-}
-
-/** Steps a tool run shows before older ones fold behind "N earlier steps" (mirrored in styles.css). */
+/** Steps a tool run shows before older ones fold behind "N earlier steps" (mirrored in styles/chat-steps.css). */
 const TOOL_RUN_VISIBLE = 3;
+
 
 /**
  * A "made for mobile" alternative to `Term`: instead of a PTY rendered
@@ -124,96 +48,6 @@ const TOOL_RUN_VISIBLE = 3;
  * zoom, tray, drag, and attention-queue code needs zero changes to host
  * this alongside terminal panes — see terminal.ts's `PaneView` doc comment.
  */
-/**
- * Turn a model id into something that fits a badge: "claude-opus-4-5-20260315"
- * -> "Opus 4.5". Falls back to the raw id minus the vendor prefix and date
- * suffix, so an unrecognised model still reads as something rather than
- * vanishing — the full id is always on the title attribute.
- */
-function shortModel(id: string): string {
-  const m = /(opus|sonnet|haiku)[-_]?(\d+)(?:[-.](\d+))?/i.exec(id);
-  if (!m) return id.replace(/^claude-/, "").replace(/-\d{8}$/, "");
-  const name = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
-  return m[3] ? `${name} ${m[2]}.${m[3]}` : `${name} ${m[2]}`;
-}
-
-/** "5-hour" -> "5h", "7-day" -> "7d". Codex labels are data-driven, so fall back. */
-function winShort(label: string): string {
-  const m = /^(\d+)[-\s]*(hour|day|week|min)/i.exec(label);
-  if (!m) return label.slice(0, 3);
-  return m[1] + m[2][0].toLowerCase();
-}
-
-/**
- * A usage window as a small ring meter. This is the "single ratio against a
- * limit" case, so it is a meter, not a pie — and the percentage is ALWAYS
- * rendered in normal ink beside/inside the ring, never conveyed by colour
- * alone. That matters twice over: status colour must carry a label to be
- * accessible, and the amber step is deliberately low-contrast on a light
- * surface, so the numeral is what stays readable.
- */
-const RING_NS = "http://www.w3.org/2000/svg";
-
-function usageRing(win: UsageWindow): HTMLElement {
-  const size = 20; // sits inside the 28px pill alongside its label
-  const stroke = 3;
-  const r = (size - stroke) / 2;
-  const circ = 2 * Math.PI * r;
-  const pct = Math.max(0, Math.min(100, Math.round(win.percent)));
-
-  const wrap = el("span", "ring " + usageLevel(pct));
-  const svg = document.createElementNS(RING_NS, "svg");
-  svg.setAttribute("width", String(size));
-  svg.setAttribute("height", String(size));
-  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
-  svg.setAttribute("aria-hidden", "true"); // the text below carries it for AT
-
-  const mk = (cls: string, dash?: string) => {
-    const c = document.createElementNS(RING_NS, "circle");
-    c.setAttribute("cx", String(size / 2));
-    c.setAttribute("cy", String(size / 2));
-    c.setAttribute("r", String(r));
-    c.setAttribute("fill", "none");
-    c.setAttribute("stroke-width", String(stroke));
-    c.setAttribute("class", cls);
-    if (dash) {
-      c.setAttribute("stroke-dasharray", dash);
-      c.setAttribute("stroke-linecap", "round");
-      // start at 12 o'clock instead of 3
-      c.setAttribute("transform", `rotate(-90 ${size / 2} ${size / 2})`);
-    }
-    return c;
-  };
-  svg.append(mk("ring-track"));
-  if (pct > 0) svg.append(mk("ring-fill", `${(pct / 100) * circ} ${circ}`));
-
-  const num = el("b", "ring-num");
-  num.textContent = String(pct);
-  const tag = el("i", "ring-tag");
-  tag.textContent = winShort(win.label);
-
-  const face = el("span", "ring-face");
-  face.append(svg, num);
-  wrap.append(face, tag);
-  wrap.title =
-    `${win.label}: ${pct}% used` + (win.resetsAt ? ` · resets ${resetAt(win.resetsAt)}` : "");
-  return wrap;
-}
-
-/** Same thresholds as the settings panel's bars — one shared ramp (main.ts). */
-function usageLevel(pct: number): string {
-  if (pct >= 90) return "crit";
-  if (pct >= 75) return "warn";
-  return "ok";
-}
-
-function resetAt(at: number): string {
-  const d = new Date(at);
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const today = new Date().toDateString() === d.toDateString();
-  return today ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
-}
-
 export class AgentChat implements PaneView {
   id: string;
   info: PaneInfo;
@@ -240,8 +74,7 @@ export class AgentChat implements PaneView {
   private infoEl!: HTMLElement; // + menu header: plan usage + context, labelled
   private usageRow: UsageRow | null = null;
   private ctxInfo: { percent: number; used: number; max: number } | null = null;
-  private taskTray!: HTMLElement; // background tasks, each with its own stop
-  private tasks = new Map<string, AgentTask>();
+  private taskTray!: TaskTray; // background tasks, each with its own stop (chat-tasks.ts)
   private connEl!: HTMLElement; // "Reconnecting…" banner
   private connTimer?: number;
   private dock!: ApprovalDock;
@@ -254,9 +87,8 @@ export class AgentChat implements PaneView {
   private turnFiles = new Set<string>(); // files edited this turn → "N files changed" under it
   private rewind: { messageId: string; editor: RewindEditor; bubble: HTMLElement } | null = null;
   private undoBar!: HTMLElement; // "Rewound · Undo" above the composer
-  private attachRow!: HTMLElement;
-  private attachments: { path: string; name: string; uploading?: boolean }[] = [];
-  private lastTs: number | undefined;
+  private attachTray!: AttachmentTray; // composer thumbnails (chat-attachments.ts)
+  private lastTs: number | undefined; // ts of the previous event (thinking's start when replayed whole)
   // "Load earlier": keys of the oldest events shown, whether the server may
   // have more, a request in flight, and the marker at the top of the log.
   private headKeys: string[] = [];
@@ -265,9 +97,8 @@ export class AgentChat implements PaneView {
   private historyTop!: HTMLElement;
   private prepending = false; // rendering an older page off-screen: no live side effects
   // Messages typed while a turn runs wait here (visible, editable,
-  // cancellable) and go out together when the turn ends.
-  private queued: string[] = [];
-  private queueEl!: HTMLElement; // ts of the previous event (thinking's start when replayed whole)
+  // cancellable) and go out together when the turn ends (chat-queue.ts).
+  private queue!: MessageQueue;
   private ws?: WebSocket;
   private reconnectTimer?: number;
   private disposed = false;
@@ -504,9 +335,8 @@ export class AgentChat implements PaneView {
     this.setModeUI(this.modeSel.value); // now that the chip exists, colour it
     // Attachments wait here as thumbnails (the way the app shows them) rather
     // than as raw upload paths pasted into your message.
-    this.attachRow = el("div", "attach-row");
-    this.attachRow.hidden = true;
-    inputBar.append(this.attachRow, this.inputEl, row);
+    this.attachTray = new AttachmentTray(this.id, () => this.syncSend());
+    inputBar.append(this.attachTray.el, this.inputEl, row);
 
     this.cmdMenu = new CommandMenu(this.inputEl, () => {
       this.autoGrow();
@@ -514,8 +344,17 @@ export class AgentChat implements PaneView {
     });
     this.suggestEl = el("div", "chat-suggest");
     this.suggestEl.hidden = true;
-    this.queueEl = el("div", "chat-queue");
-    this.queueEl.hidden = true;
+    this.queue = new MessageQueue({
+      renderText: (into, text) => this.renderUserText(into, text),
+      onEdit: (text) => {
+        // Tap to edit: back into the composer.
+        this.inputEl.value = this.inputEl.value ? `${text}\n${this.inputEl.value}` : text;
+        this.autoGrow();
+        this.syncSend();
+        this.inputEl.focus();
+      },
+      onSendNow: (text) => this.wsSend({ t: "send", text }),
+    });
     this.dock = new ApprovalDock(
       this.isCodex,
       (ev, a) => this.answerPermission(ev, a),
@@ -534,8 +373,7 @@ export class AgentChat implements PaneView {
     wireLightbox(chat);
     this.undoBar = el("div", "rw-undo");
     this.undoBar.hidden = true;
-    this.taskTray = el("div", "task-tray");
-    this.taskTray.hidden = true;
+    this.taskTray = new TaskTray((id) => this.wsSend({ t: "stopTask", id }));
     this.connEl = el("div", "conn-banner");
     this.connEl.hidden = true;
     this.connEl.textContent = "Reconnecting…";
@@ -546,9 +384,9 @@ export class AgentChat implements PaneView {
       this.plusMenu,
       this.cmdMenu.el,
       this.undoBar,
-      this.taskTray,
+      this.taskTray.el,
       this.suggestEl,
-      this.queueEl,
+      this.queue.el,
       this.dock.el,
       inputBar,
       workingOverlay()
@@ -843,17 +681,15 @@ export class AgentChat implements PaneView {
 
   private submit() {
     const typed = this.inputEl.value.trim();
-    if (this.attachments.some((a) => a.uploading)) return; // wait for the upload
-    const paths = this.attachments.map((a) => a.path);
+    if (this.attachTray.uploading) return; // wait for the upload
+    const paths = this.attachTray.paths();
     if (!typed && !paths.length) return;
     const text = [typed, ...paths].filter(Boolean).join("\n");
-    this.attachments = [];
-    this.renderAttachments();
+    this.attachTray.clear();
     this.inputEl.value = "";
     if (this.busy) {
       // Claude is mid-turn: hold it (visibly) and send when the turn ends.
-      this.queued.push(text);
-      this.renderQueue();
+      this.queue.push(text);
       this.autoGrow();
       this.syncSend();
       return;
@@ -875,7 +711,7 @@ export class AgentChat implements PaneView {
 
   /** One button, two jobs: Send when there's text, Stop while a turn runs with nothing typed. */
   private syncSend() {
-    const has = !!this.inputEl.value.trim() || this.attachments.length > 0;
+    const has = !!this.inputEl.value.trim() || this.attachTray.count > 0;
     const stop = this.busy && !has;
     this.sendBtn.classList.toggle("stop", stop);
     this.sendBtn.classList.toggle("empty", !stop && !has);
@@ -898,53 +734,8 @@ export class AgentChat implements PaneView {
    */
   private async attachFiles(files: File[]) {
     if (!files.length) return;
-    const placeholders: { path: string; name: string; uploading?: boolean }[] = files.map((f) => ({
-      path: "",
-      name: f.name || "image",
-      uploading: true,
-    }));
-    this.attachments.push(...placeholders);
-    this.renderAttachments();
-    const paths = await uploadFiles(this.id, files);
-    this.attachments = this.attachments.filter((a) => !placeholders.includes(a));
-    for (const path of paths) this.attachments.push({ path, name: basename(path) });
-    this.renderAttachments();
+    await this.attachTray.add(files);
     this.inputEl.focus({ preventScroll: true });
-  }
-
-  private renderAttachments() {
-    this.attachRow.textContent = "";
-    this.attachRow.hidden = !this.attachments.length;
-    for (const a of this.attachments) {
-      const chip = el("div", "attach-chip" + (a.uploading ? " uploading" : ""));
-      const media = a.path ? mediaSrc(a.path) : null;
-      if (media?.kind === "image") {
-        const thumb = el("span", "attach-thumb");
-        const img = document.createElement("img");
-        img.src = media.src;
-        img.alt = a.name;
-        thumb.append(img);
-        chip.append(thumb);
-      } else {
-        const name = el("span", "attach-name");
-        name.textContent = a.uploading ? "Uploading…" : a.name;
-        chip.append(name);
-      }
-      if (!a.uploading) {
-        const x = el("button", "attach-x") as HTMLButtonElement;
-        x.textContent = "✕";
-        x.title = `Remove ${a.name}`;
-        x.setAttribute("aria-label", `Remove ${a.name}`);
-        x.addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.attachments = this.attachments.filter((b) => b !== a);
-          this.renderAttachments();
-        });
-        chip.append(x);
-      }
-      this.attachRow.append(chip);
-    }
-    this.syncSend();
   }
 
   // ---- Event rendering ---------------------------------------------------
@@ -970,8 +761,7 @@ export class AgentChat implements PaneView {
     this.turnStart = null;
     this.turnEls = [];
     this.setSuggestion("");
-    this.tasks.clear();
-    this.renderTasks();
+    this.taskTray.clear();
     this.rewind = null;
   }
 
@@ -1471,158 +1261,10 @@ export class AgentChat implements PaneView {
         : `${decision === "always" ? "Always allowed" : "Allowed"} · ${what}`;
   }
 
-  /**
-   * The interactive AskUserQuestion prompt (see claude-driver.js). Each
-   * question renders its options as buttons plus an "Other…" write-in — the
-   * tool provides an Other affordance automatically in its native UI, and its
-   * answer is just a free string, so a typed value slots into the same answers
-   * map as a chosen label. Single-select submits on click; multi-select and
-   * write-ins wait for Submit. Answers are keyed by question TEXT (the shape
-   * the tool echoes back) and sent as one `answer` message once complete.
-   */
+  /** The AskUserQuestion card (chat-question.ts); answers go back over the socket. */
   private appendQuestionCard(ev: Extract<AgentEvent, { t: "question" }>) {
     this.endToolGroup();
-    const card = el("div", "question-card");
-    const picks = new Map<string, Set<string>>(); // question text -> chosen option labels
-    const custom = new Map<string, string>(); // question text -> "Other" free text (when active)
-
-    // The final answer for a question: chosen labels plus any active write-in,
-    // comma-joined (the tool's own multi-select encoding).
-    const answerFor = (q: string) => {
-      const parts = [...(picks.get(q) || [])];
-      const c = (custom.get(q) || "").trim();
-      if (c) parts.push(c);
-      return parts.join(", ");
-    };
-    const answered = (q: string) => (picks.get(q)?.size ?? 0) > 0 || (custom.get(q) || "").trim().length > 0;
-
-    // Submit is created on demand: a single-select single-question card answers
-    // on click and needs none — until the user picks "Other" and needs a way
-    // to send the typed text.
-    let submitBtn: HTMLButtonElement | null = null;
-    const ensureSubmit = () => {
-      if (submitBtn) return;
-      submitBtn = document.createElement("button");
-      submitBtn.className = "ctl q-submit";
-      submitBtn.textContent = "Submit";
-      submitBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        trySubmit();
-      });
-      card.append(submitBtn);
-    };
-
-    const trySubmit = () => {
-      if (!ev.questions.every((q) => answered(q.question))) return;
-      const answers: Record<string, string> = {};
-      for (const q of ev.questions) answers[q.question] = answerFor(q.question);
-      card.classList.add("resolved");
-      card.querySelectorAll("button, input").forEach((b) => ((b as HTMLInputElement).disabled = true));
-      this.renderQuestionSummary(card, answers);
-      this.wsSend({ t: "answer", requestId: ev.requestId, answers });
-    };
-
-    for (const q of ev.questions) {
-      picks.set(q.question, new Set<string>());
-      const block = el("div", "q-block");
-      if (q.header) {
-        const h = el("div", "q-header");
-        h.textContent = q.header;
-        block.append(h);
-      }
-      const qt = el("div", "q-text");
-      qt.textContent = q.question;
-      block.append(qt);
-
-      const opts = el("div", "q-opts");
-
-      // "Other…" write-in row, revealed when its option is chosen.
-      const otherWrap = el("div", "q-other");
-      otherWrap.hidden = true;
-      const otherInput = document.createElement("input");
-      otherInput.type = "text";
-      otherInput.className = "q-other-input";
-      otherInput.placeholder = "Type your own answer…";
-      otherInput.addEventListener("input", () => custom.set(q.question, otherInput.value));
-      otherInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          trySubmit();
-        }
-      });
-      otherWrap.append(otherInput);
-
-      const deselectOpts = () => opts.querySelectorAll("button").forEach((x) => x.classList.remove("selected"));
-
-      const otherBtn = document.createElement("button");
-      otherBtn.className = "ctl q-opt q-opt-other";
-      const olbl = el("span", "q-opt-label");
-      olbl.textContent = "✎ Other…";
-      otherBtn.append(olbl);
-
-      for (const o of q.options) {
-        const b = document.createElement("button");
-        b.className = "ctl q-opt";
-        const lbl = el("span", "q-opt-label");
-        lbl.textContent = o.label;
-        b.append(lbl);
-        if (o.description) {
-          const d = el("span", "q-opt-desc");
-          d.textContent = o.description;
-          b.append(d);
-        }
-        b.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const set = picks.get(q.question)!;
-          if (q.multiSelect) {
-            if (set.has(o.label)) set.delete(o.label);
-            else set.add(o.label);
-            b.classList.toggle("selected", set.has(o.label));
-          } else {
-            set.clear();
-            set.add(o.label);
-            deselectOpts();
-            b.classList.add("selected");
-            // A concrete pick cancels an in-progress write-in.
-            otherBtn.classList.remove("selected");
-            otherWrap.hidden = true;
-            custom.delete(q.question);
-            trySubmit();
-          }
-        });
-        opts.append(b);
-      }
-
-      otherBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (q.multiSelect) {
-          const active = otherBtn.classList.toggle("selected");
-          otherWrap.hidden = !active;
-          if (active) otherInput.focus();
-          else {
-            custom.delete(q.question);
-            otherInput.value = "";
-          }
-        } else {
-          // Single-select: "Other" becomes the sole selection.
-          picks.get(q.question)!.clear();
-          deselectOpts();
-          otherBtn.classList.add("selected");
-          otherWrap.hidden = false;
-          otherInput.focus();
-          ensureSubmit(); // this card had none; the write-in needs one
-        }
-      });
-      opts.append(otherBtn);
-
-      block.append(opts, otherWrap);
-      card.append(block);
-    }
-
-    // Multi-select or multi-question cards always need an explicit Submit;
-    // single-select single-question cards get one lazily via "Other".
-    if (ev.questions.some((q) => q.multiSelect) || ev.questions.length > 1) ensureSubmit();
-
+    const card = createQuestionCard(ev, (answers) => this.wsSend({ t: "answer", requestId: ev.requestId, answers }));
     this.logEl.append(card);
     this.questionEls.set(ev.requestId, card);
     this.scrollToBottom();
@@ -1630,29 +1272,7 @@ export class AgentChat implements PaneView {
 
   private resolveQuestionCard(requestId: string, answers: Record<string, string>) {
     const card = this.questionEls.get(requestId);
-    if (!card || card.classList.contains("resolved")) return;
-    card.classList.add("resolved");
-    card.querySelectorAll("button").forEach((b) => ((b as HTMLButtonElement).disabled = true));
-    // Reflect the choice made on another window (or before a reconnect).
-    for (const [q, ans] of Object.entries(answers)) {
-      card.querySelectorAll(".q-block").forEach((block) => {
-        if (block.querySelector(".q-text")?.textContent !== q) return;
-        block.querySelectorAll(".q-opt").forEach((b) => {
-          const label = b.querySelector(".q-opt-label")?.textContent || "";
-          if (ans.split(", ").includes(label)) b.classList.add("selected");
-        });
-      });
-    }
-    this.renderQuestionSummary(card, answers);
-  }
-
-  private renderQuestionSummary(card: HTMLElement, answers: Record<string, string>) {
-    let foot = card.querySelector(".q-foot") as HTMLElement | null;
-    if (!foot) {
-      foot = el("div", "q-foot");
-      card.append(foot);
-    }
-    foot.textContent = "✓ " + Object.values(answers).join(" · ");
+    if (card) resolveQuestionCard(card, answers);
   }
 
   // ---- Edit & resend (rewind) -------------------------------------------------
@@ -1810,56 +1430,11 @@ export class AgentChat implements PaneView {
    * you see how they ended, then go.
    */
   private updateTask(task: AgentTask) {
-    const live = task.status === "running" || task.status === "pending" || task.status === "paused";
-    this.tasks.set(task.id, task);
-    if (!live) setTimeout(() => {
-      if (this.tasks.get(task.id) === task) {
-        this.tasks.delete(task.id);
-        this.renderTasks();
-      }
-    }, 5000);
+    const live = isLiveTask(task);
+    this.taskTray.update(task);
     // Mark the step that launched it.
     const card = task.toolUseId ? this.toolEls.get(task.toolUseId) : undefined;
     if (card && task.backgrounded) this.setStepNote(card, live ? "Running in background" : task.status === "completed" ? "Finished" : task.status === "failed" ? "Failed" : "Stopped", live ? "pending" : task.status === "failed" ? "denied" : "allowed");
-    this.renderTasks();
-  }
-
-  private renderTasks() {
-    this.taskTray.textContent = "";
-    // Only backgrounded work belongs here; a foreground subagent is already
-    // visible as its Agent step and stops with the turn.
-    const list = [...this.tasks.values()].filter((t) => t.backgrounded);
-    this.taskTray.hidden = !list.length;
-    for (const t of list) {
-      const live = t.status === "running" || t.status === "pending" || t.status === "paused";
-      const row = el("div", `task-row ${t.status}`);
-      const dot = el("span", "task-dot");
-      const text = el("span", "task-text");
-      const name = el("span", "task-name");
-      name.textContent = t.description || (t.kind === "local_bash" ? "Background command" : "Background task");
-      const sub = el("span", "task-sub");
-      const bits = [
-        t.kind === "local_bash" ? "shell" : t.kind || "agent",
-        live ? t.summary || (t.lastTool ? `using ${t.lastTool}` : "running") : t.status,
-        t.durationMs ? fmtDuration(t.durationMs) : "",
-      ].filter(Boolean);
-      sub.textContent = bits.join(" · ");
-      text.append(name, sub);
-      row.append(dot, text);
-      if (live) {
-        const stop = el("button", "task-stop") as HTMLButtonElement;
-        setIcon(stop, "stop");
-        stop.title = "Stop this task";
-        stop.setAttribute("aria-label", `Stop ${name.textContent}`);
-        stop.addEventListener("click", (e) => {
-          e.stopPropagation();
-          stop.disabled = true;
-          this.wsSend({ t: "stopTask", id: t.id });
-        });
-        row.append(stop);
-      }
-      this.taskTray.append(row);
-    }
   }
 
   // ---- Earlier history ---------------------------------------------------------
@@ -1926,66 +1501,19 @@ export class AgentChat implements PaneView {
 
   // ---- Queued messages ----------------------------------------------------------
 
-  private renderQueue() {
-    this.queueEl.textContent = "";
-    this.queueEl.hidden = !this.queued.length;
-    this.queued.forEach((text, i) => {
-      const row = el("div", "queued");
-      const label = el("span", "queued-label");
-      label.textContent = "Queued";
-      const body = el("div", "queued-text");
-      this.renderUserText(body, text);
-      body.title = "Edit";
-      body.addEventListener("click", (e) => {
-        // Tap to edit: back into the composer.
-        e.stopPropagation();
-        this.queued.splice(i, 1);
-        this.inputEl.value = this.inputEl.value ? `${text}\n${this.inputEl.value}` : text;
-        this.renderQueue();
-        this.autoGrow();
-        this.syncSend();
-        this.inputEl.focus();
-      });
-      const now = el("button", "queued-now") as HTMLButtonElement;
-      now.textContent = "Send now";
-      now.title = "Send it now — Claude picks it up mid-turn";
-      now.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.queued.splice(i, 1);
-        this.renderQueue();
-        this.wsSend({ t: "send", text });
-      });
-      const x = el("button", "queued-x") as HTMLButtonElement;
-      x.textContent = "✕";
-      x.title = "Remove";
-      x.setAttribute("aria-label", "Remove queued message");
-      x.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.queued.splice(i, 1);
-        this.renderQueue();
-      });
-      row.append(label, body, now, x);
-      this.queueEl.append(row);
-    });
-  }
-
   /**
    * A LIVE status change (never a replayed one — a reload must not fire a
    * stale queue). Turn ended cleanly → send what's queued, as one message.
    * Interrupted → put it back in the composer to rethink, as Claude Code does.
    */
   private onLiveStatus(state: string) {
-    if (!this.queued.length) return;
+    if (!this.queue.length) return;
     if (state === "idle") {
-      const text = this.queued.join("\n\n");
-      this.queued = [];
-      this.renderQueue();
+      const text = this.queue.takeAll().join("\n\n");
       this.stick = true;
       this.wsSend({ t: "send", text });
     } else if (state === "aborted") {
-      this.inputEl.value = [...this.queued, this.inputEl.value].filter(Boolean).join("\n\n");
-      this.queued = [];
-      this.renderQueue();
+      this.inputEl.value = [...this.queue.takeAll(), this.inputEl.value].filter(Boolean).join("\n\n");
       this.autoGrow();
       this.syncSend();
     }

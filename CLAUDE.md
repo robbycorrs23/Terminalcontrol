@@ -83,6 +83,10 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/changes-panel.ts` / `server/changes.js` | per-session Changes panel (transcript-attributed files × git diff) |
 | `client/src/rewind-editor.ts` | edit-and-resend editor (rewind logic lives in agent-manager.js) |
 | `server/self-check.js` | startup: fix deps vs lockfile, rebuild a stale bundle, version info |
+| `client/src/chat-question.ts` / `chat-tasks.ts` / `chat-queue.ts` / `chat-attachments.ts` | chat pane components: AskUserQuestion card / background-task tray / queued messages / composer attachments |
+| `client/src/chip-select.ts` / `clipboard-images.ts` / `event-keys.ts` / `chat-usage.ts` | small helpers: invisible-select chips / paste & clipboard images / history anchors / usage rings + the ONE usage ramp |
+| `client/src/phone-nav.ts` / `version-check.ts` | phone swipe + session switcher + header subline / "updated — reload" chip + Settings version row |
+| `client/src/styles.css` + `client/src/styles/*.css` | styles, split by area; `styles.css` only `@import`s them in the ORIGINAL cascade order — keep that order |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
 | `client/src/push.ts` / `client/public/sw.js` | Web Push subscribe/badge / the service worker that shows notifications |
 | `server/gate.js` | optional passkey-auth reverse proxy (`fleetview-gate` service) that `tailscale serve` fronts instead of the app directly — a SEPARATE process from `server/index.js`, own port (`FLEET_GATE_PORT`, default 4290), own launchd/systemd unit (`com.fleetview.gate`). See Gotchas. |
@@ -330,7 +334,8 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   iOS offers no Paste in a text box for an image-only clipboard. The
   lightbox's Copy writes PNG via a ClipboardItem holding a PROMISE built
   inside the click — Safari drops the gesture after an await.
-- **Phone navigation** (main.ts, "Phone: move between panes"): swipe left/right
+- **Phone navigation** (`phone-nav.ts`; main.ts owns the state and passes it
+  in via `initPhoneNav()` — `zoomed` is read through a getter, never copied): swipe left/right
   on an open pane = next/previous in GRID order (not the list's attention
   order, which re-sorts as you open things); the "3/12 ⌄" `.pane-switch`
   button added to every title bar opens a sessions sheet (needs-you first);
@@ -382,13 +387,14 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   phones every pane input/textarea/select is 16px for the same reason, and the
   usage rings move into the + menu's labelled `.menu-info` (tap the context %
   to open it). Set a picker's value in code → call `syncChip()`.
-- **Settings is grouped cards** (index.html `#settings`, styles.css "Settings
+- **Settings is grouped cards** (index.html `#settings`, `styles/settings.css` "Settings
   — grouped cards"): Usage (one labelled bar per window), Workspace,
   Appearance, Notifications, Safety, This machine. Checkboxes render as
   switches via CSS (`appearance:none` + `order:2`, so JS-built rows such as
   `#mcAccounts` need no markup change). Popover on desktop, full-screen sheet
   with Done on a phone. The redesign appended overrides rather than deleting
-  the older `#settings` rules — when editing, look at the later block first.
+  the older `#settings` rules (still in `styles/bar.css`) — when editing, look
+  at settings.css first.
   All ids are unchanged and wired in main.ts.
 - **Phone "+" opens the new-session sheet** (`new-session.ts`): recent folder,
   agent, Chat/Terminal (remembered in localStorage), optional first message.
@@ -458,8 +464,8 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   percentage is ALWAYS drawn as text in normal ink: status colour is the
   glanceable second cue, never the only one — which matters because the amber
   step is deliberately sub-3:1 on the light surface. Thresholds live in ONE
-  ramp (`usageLevel()` in both `main.ts` and `agent-chat.ts`: crit ≥90, warn
-  ≥75) and the colours are `--use-ok/warn/crit`, fixed rather than themed, and
+  ramp (`usageLevel()` in `chat-usage.ts`, used by `main.ts` and
+  `agent-chat.ts`: crit ≥90, warn ≥75) and the colours are `--use-ok/warn/crit`, fixed rather than themed, and
   deliberately NOT `--waiting` — that already means "needs you", and one hue
   must not carry two meanings. A pane finds its row by `usageRow.id ===
   pane.cmd`; remote panes show none, since their agent bills another machine's
@@ -488,12 +494,12 @@ structure instead of a wall of lines. Three things are worth knowing:
   image/video/audio and responds under `default-src 'none'; sandbox`.
 - **Readability.** Messages render in full, never clipped behind a "Show more"
   toggle — that was tried and removed. Text is deliberately NOT width-capped
-  (see the note in `styles.css`): capping prose while tables/charts stayed
+  (see the note in `styles/chat.css`): capping prose while tables/charts stayed
   full-width made wide panes look misaligned.
 
 ⚠️ `markdown.ts`'s invariant is that raw model output NEVER reaches innerHTML
 unescaped, and `charts.ts` builds every node with `createElementNS`. Keep both
-that way. The categorical palette in `styles.css` (`--viz-1..8`) is validated as
+that way. The categorical palette in `styles/base.css` (`--viz-1..8`) is validated as
 an ordered set for colour-vision deficiency against each mode's chart surface —
 re-run the check before changing a value or the order.
 
