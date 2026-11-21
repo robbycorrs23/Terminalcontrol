@@ -24,6 +24,10 @@
  *   | { t: "commands", commands: { name: string, description: string, argumentHint: string }[] }
  *   | { t: "models", models: { value: string, label: string, description: string, resolved?: string }[] }
  *   | { t: "suggestion", text: string }
+ *   | { t: "retry", attempt: number, max: number, delayMs: number, status: number|null }
+ *   | { t: "compact", trigger: "auto"|"manual", preTokens?: number, postTokens?: number }
+ *   | { t: "context", percent: number, used: number, max: number }
+ *   | { t: "task", task: { id: string, description: string, status: string, backgrounded?: boolean, toolUseId?: string, kind?: string, lastTool?: string, summary?: string, toolUses?: number, durationMs?: number } }
  * } AgentEvent
  *
  * Every event also carries `ts` (ms epoch), stamped by agent-manager.js.

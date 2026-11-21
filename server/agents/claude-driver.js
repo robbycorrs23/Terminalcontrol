@@ -148,6 +148,10 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
       // much); this only asks for the readable summaries the app shows in its
       // collapsible "Thinking" rows. Without it the SDK omits thinking text.
       thinking: { type: "adaptive", display: "summarized" },
+      // We render a per-task stop control (the background-task tray), so the
+      // SDK lets the turn's Stop spare background agents/shells instead of
+      // killing them along with the turn.
+      perTaskStopAffordance: true,
       abortController,
       // `env` REPLACES the subprocess env entirely per the SDK's own docs —
       // omit it to inherit process.env untouched (the common case); the
@@ -216,6 +220,28 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
   // asks phone/remote UIs to do.
   let terminalOnly = new Set();
   let models = []; // from supportedModels(); maps a picked alias to its wire id
+
+  // Background tasks (subagents, background shells) by task id — so a
+  // progress/update frame can be merged into what we already know and the
+  // client always gets the whole record.
+  const tasks = new Map();
+  function emitTask(id) {
+    const t = tasks.get(id);
+    if (t) onEvent({ t: "task", task: { ...t } });
+  }
+
+  // How full the context window is — the app shows it; nothing else here
+  // knew. "summary" answers from the last response's usage, no extra API
+  // calls. Best effort: an older CLI without the control request just
+  // never reports.
+  function reportContext() {
+    q.getContextUsage({ detail: "summary" }).then(
+      (u) => {
+        if (u && u.maxTokens) onEvent({ t: "context", percent: Math.round(u.percentage), used: u.totalTokens, max: u.maxTokens });
+      },
+      () => {}
+    );
+  }
   function emitCommands(list) {
     const commands = (list || [])
       .filter((c) => c && c.name && !terminalOnly.has(c.name))
@@ -247,6 +273,54 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
           }, () => {});
         } else if (msg.subtype === "commands_changed") {
           emitCommands(msg.commands);
+        } else if (msg.subtype === "api_retry") {
+          // Without this an overloaded API just looks like a hang.
+          onEvent({
+            t: "retry",
+            attempt: msg.attempt,
+            max: msg.max_retries,
+            delayMs: msg.retry_delay_ms,
+            status: msg.error_status ?? null,
+          });
+        } else if (msg.subtype === "compact_boundary") {
+          const m = msg.compact_metadata || {};
+          onEvent({ t: "compact", trigger: m.trigger || "auto", preTokens: m.pre_tokens, postTokens: m.post_tokens });
+          reportContext();
+        } else if (msg.subtype === "task_started") {
+          tasks.set(msg.task_id, {
+            id: msg.task_id,
+            description: msg.description || "",
+            status: "running",
+            backgrounded: !!msg.is_backgrounded,
+            toolUseId: msg.tool_use_id,
+            kind: msg.subagent_type || msg.task_type || "",
+          });
+          emitTask(msg.task_id);
+        } else if (msg.subtype === "task_progress") {
+          const t = tasks.get(msg.task_id);
+          if (t) {
+            t.lastTool = msg.last_tool_name;
+            t.summary = msg.summary || t.summary;
+            t.toolUses = msg.usage?.tool_uses;
+            t.durationMs = msg.usage?.duration_ms;
+            emitTask(msg.task_id);
+          }
+        } else if (msg.subtype === "task_updated") {
+          const t = tasks.get(msg.task_id);
+          if (t && msg.patch) {
+            if (msg.patch.status) t.status = msg.patch.status === "killed" ? "stopped" : msg.patch.status;
+            if (msg.patch.description) t.description = msg.patch.description;
+            if (msg.patch.is_backgrounded != null) t.backgrounded = !!msg.patch.is_backgrounded;
+            emitTask(msg.task_id);
+          }
+        } else if (msg.subtype === "task_notification") {
+          const t = tasks.get(msg.task_id) || { id: msg.task_id, description: "", toolUseId: msg.tool_use_id };
+          t.status = msg.status;
+          t.summary = msg.summary || t.summary;
+          if (msg.usage) t.durationMs = msg.usage.duration_ms;
+          tasks.set(msg.task_id, t);
+          emitTask(msg.task_id);
+          tasks.delete(msg.task_id); // finished: the client keeps it briefly, we don't
         }
         break;
       case "stream_event":
@@ -331,6 +405,7 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
           // "Worked for 1m 12s" under the turn.
           ...(typeof msg.duration_ms === "number" ? { durationMs: msg.duration_ms } : {}),
         });
+        reportContext();
         break;
       }
       case "rate_limit_event":
@@ -416,6 +491,12 @@ export function startClaudeSession({ cwd, resume, env, mode, remote, onEvent, on
     async setMode(newMode) {
       await q.setPermissionMode(newMode);
       onEvent({ t: "mode", mode: newMode });
+    },
+    /** Stop one background task (the tray's ■), leaving the turn running. */
+    async stopTask(taskId) {
+      try {
+        await q.stopTask(taskId);
+      } catch {}
     },
     /** Switch model on the live session (the composer's model picker). */
     async setModel(model) {

@@ -10,7 +10,17 @@ const RING_BUFFER_SIZE = 300; // replayed to a client that attaches/reconnects
 // Never ringed. Deltas would evict real history (see _handleEvent); progress
 // ticks are stale the moment they land; the session-level ones are re-sent as
 // current state on attach instead.
-const LIVE_ONLY = new Set(["assistant_delta", "thinking_delta", "tool_progress", "commands", "models", "suggestion"]);
+const LIVE_ONLY = new Set([
+  "assistant_delta",
+  "thinking_delta",
+  "tool_progress",
+  "commands",
+  "models",
+  "suggestion",
+  "retry",
+  "context",
+  "task",
+]);
 const LAST_INPUT_CAP = 2000; // matches PtyManager's UserPromptSubmit cap
 
 /**
@@ -230,6 +240,12 @@ export class AgentManager {
     if (ev.t === "commands") pane.commands = ev.commands;
     else if (ev.t === "models") pane.models = ev.models;
     else if (ev.t === "suggestion") (pane.suggestions ||= []).push(ev.text);
+    else if (ev.t === "context") pane.context = ev;
+    else if (ev.t === "task") {
+      pane.tasks ||= new Map();
+      if (ev.task.status === "running" || ev.task.status === "pending" || ev.task.status === "paused") pane.tasks.set(ev.task.id, ev.task);
+      else pane.tasks.delete(ev.task.id);
+    }
     else if (ev.t === "user" || (ev.t === "status" && ev.state === "working")) pane.suggestions = [];
     if (!LIVE_ONLY.has(ev.t)) {
       pane.events.push(ev);
@@ -377,6 +393,8 @@ export class AgentManager {
       const state = [];
       if (pane.commands) state.push({ t: "commands", commands: pane.commands });
       if (pane.models) state.push({ t: "models", models: pane.models });
+      if (pane.context) state.push(pane.context);
+      for (const task of pane.tasks?.values() || []) state.push({ t: "task", task });
       if (pane.status !== "working") for (const text of pane.suggestions || []) state.push({ t: "suggestion", text });
       for (const ev of state) ws.send(JSON.stringify({ t: "ev", ev }));
     } catch {}
@@ -399,6 +417,8 @@ export class AgentManager {
         this.setMode(id, m.mode);
       } else if (m.t === "setModel" && typeof m.model === "string" && m.model) {
         this.setModel(id, m.model);
+      } else if (m.t === "stopTask" && typeof m.id === "string") {
+        pane.driver?.stopTask?.(m.id);
       } else if (m.t === "history" && Array.isArray(m.anchors)) {
         // Older messages than the replay ring holds, read from the transcript.
         let page = { events: [], more: false };

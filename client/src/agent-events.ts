@@ -38,7 +38,25 @@ export type AgentEvent = { ts?: number } & (
   | { t: "commands"; commands: SlashCommand[] }
   | { t: "models"; models: ModelOption[] }
   | { t: "suggestion"; text: string }
+  | { t: "retry"; attempt: number; max: number; delayMs: number; status: number | null }
+  | { t: "compact"; trigger: "auto" | "manual"; preTokens?: number; postTokens?: number }
+  | { t: "context"; percent: number; used: number; max: number }
+  | { t: "task"; task: AgentTask }
 );
+
+/** A background task (subagent, background shell) — see the `task` AgentEvent. */
+export type AgentTask = {
+  id: string;
+  description: string;
+  status: string; // running | pending | paused | completed | failed | stopped
+  backgrounded?: boolean;
+  toolUseId?: string;
+  kind?: string;
+  lastTool?: string;
+  summary?: string;
+  toolUses?: number;
+  durationMs?: number;
+};
 
 /** One entry in the composer's "/" menu — see the `commands` AgentEvent. */
 export type SlashCommand = { name: string; description: string; argumentHint: string };

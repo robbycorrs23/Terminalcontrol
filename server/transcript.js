@@ -82,6 +82,13 @@ export function eventsFromTranscript(file, limit = 250) {
 
     const msg = d.message;
     const ts = d.timestamp ? Date.parse(d.timestamp) || undefined : undefined;
+    // Mirrors the driver's compact_boundary → { t: "compact" }. On disk the
+    // metadata is camelCased; accept either spelling.
+    if (d.type === "system" && d.subtype === "compact_boundary") {
+      const m = d.compactMetadata || d.compact_metadata || {};
+      events.push({ t: "compact", trigger: m.trigger || "auto", preTokens: m.preTokens ?? m.pre_tokens, postTokens: m.postTokens ?? m.post_tokens, ts });
+      continue;
+    }
     if (d.type === "user" && msg) {
       if (typeof msg.content === "string") {
         if (msg.content.trim()) events.push({ t: "user", id: d.uuid, text: msg.content, ts });

@@ -77,7 +77,7 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/tab.ts` | browser-tab title + favicon attention indicator |
 | `client/src/markdown.ts` | Markdown → safe HTML for chat bubbles (tables, media, task lists) |
 | `client/src/rich.ts` | post-render pass: charts, table→chart toggle, copy buttons, clipping |
-| `client/src/chat-steps.ts` / `chat-dock.ts` / `chat-commands.ts` / `lightbox.ts` | chat view: step rendering / approval dock / "/" menu / image viewer |
+| `client/src/chat-steps.ts` / `chat-dock.ts` / `chat-commands.ts` / `lightbox.ts` / `highlight.ts` | chat view: step rendering / approval dock / "/" menu / image viewer / code highlighting |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
 | `client/src/push.ts` / `client/public/sw.js` | Web Push subscribe/badge / the service worker that shows notifications |
 | `server/gate.js` | optional passkey-auth reverse proxy (`fleetview-gate` service) that `tailscale serve` fronts instead of the app directly — a SEPARATE process from `server/index.js`, own port (`FLEET_GATE_PORT`, default 4290), own launchd/systemd unit (`com.fleetview.gate`). See Gotchas. |
@@ -345,6 +345,21 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 - **Messages typed mid-turn are queued CLIENT-side**, visibly, with edit /
   Send now / ✕, and go out as one message on the next LIVE `idle` (never a
   replayed one); an interrupted turn puts them back in the composer.
+- **Status the SDK reports, now shown**: `api_retry` → "Retrying in 8s ·
+  attempt 2/10 (API 529)" in the status line (back to Working… when output
+  resumes); `compact_boundary` → a "Conversation compacted · 162k → 21k"
+  divider (also mirrored from transcripts, camelCased on disk);
+  `getContextUsage({detail:"summary"})` after each turn/compaction → the
+  context meter in the composer row (same warn/crit ramp as usage rings);
+  `task_*` → the background-task tray, each with its own ■ (`stopTask`).
+  `perTaskStopAffordance: true` is what makes the turn's Stop spare
+  background tasks — only valid BECAUSE the tray exists. retry/context/task
+  are LIVE_ONLY; context and running tasks are re-sent on attach.
+- **"Reconnecting…"** shows 1.5s after the agent socket drops. The timer must
+  NOT restart on each failed retry (one per second) or it never shows.
+- **Code blocks are syntax-highlighted** by `highlight.ts` (dependency-free,
+  approximate). It escapes every fragment itself and emits only
+  `<span class="tk-…">`, so markdown.ts's never-unescaped invariant holds.
 - **On a phone an open pane hides `#bar`** (`body.pane-open`); its title bar
   takes over the safe-area inset. `setPaneOpen()` must run before measuring
   in both `zoom()` and `unzoom()`.

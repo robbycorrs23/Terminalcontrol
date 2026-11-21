@@ -1,5 +1,5 @@
 import { PaneInfo, PaneView, TermHost, displayName, basename, workingOverlay, setBusyClass, profileOf, UsageRow, UsageWindow } from "./terminal";
-import { AgentEvent, AgentQuestion, ModelOption } from "./agent-events";
+import { AgentEvent, AgentQuestion, AgentTask, ModelOption } from "./agent-events";
 import {
   el,
   toolLabel,
@@ -210,6 +210,11 @@ export class AgentChat implements PaneView {
   private modelSel!: HTMLSelectElement;
   private models: ModelOption[] = [];
   private usageEl!: HTMLElement;
+  private ctxEl!: HTMLElement; // context-window meter in the composer row
+  private taskTray!: HTMLElement; // background tasks, each with its own stop
+  private tasks = new Map<string, AgentTask>();
+  private connEl!: HTMLElement; // "Reconnecting…" banner
+  private connTimer?: number;
   private dock!: ApprovalDock;
   private cmdMenu!: CommandMenu;
   private suggestEl!: HTMLElement;
@@ -438,7 +443,9 @@ export class AgentChat implements PaneView {
     plusBtn.title = "Add files, secrets, view";
     plusBtn.setAttribute("aria-label", "More");
     const row = el("div", "composer-row");
-    row.append(plusBtn, this.modeSel, el("span", "spacer"), this.usageEl, this.modelSel, this.sendBtn);
+    this.ctxEl = el("span", "ctx-meter");
+    this.ctxEl.hidden = true;
+    row.append(plusBtn, this.modeSel, el("span", "spacer"), this.ctxEl, this.usageEl, this.modelSel, this.sendBtn);
     // Attachments wait here as thumbnails (the way the app shows them) rather
     // than as raw upload paths pasted into your message.
     this.attachRow = el("div", "attach-row");
@@ -469,7 +476,24 @@ export class AgentChat implements PaneView {
     const logWrap = el("div", "log-wrap");
     logWrap.append(this.logEl, this.jumpBtn);
     wireLightbox(chat);
-    chat.append(logWrap, this.statusEl, this.plusMenu, this.cmdMenu.el, this.suggestEl, this.queueEl, this.dock.el, inputBar, workingOverlay());
+    this.taskTray = el("div", "task-tray");
+    this.taskTray.hidden = true;
+    this.connEl = el("div", "conn-banner");
+    this.connEl.hidden = true;
+    this.connEl.textContent = "Reconnecting…";
+    logWrap.append(this.connEl);
+    chat.append(
+      logWrap,
+      this.statusEl,
+      this.plusMenu,
+      this.cmdMenu.el,
+      this.taskTray,
+      this.suggestEl,
+      this.queueEl,
+      this.dock.el,
+      inputBar,
+      workingOverlay()
+    );
     this.syncSend();
 
     this.el.append(this.titleBar, cwdline, this.pinnedEl, chat);
@@ -668,6 +692,9 @@ export class AgentChat implements PaneView {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/agent?pane=${this.id}`);
     this.ws = ws;
+    ws.onopen = () => {
+      if (this.ws === ws) this.setConnected(true);
+    };
     ws.onmessage = (e) => {
       let m: { t: string; events?: AgentEvent[]; ev?: AgentEvent; more?: boolean };
       try {
@@ -700,7 +727,9 @@ export class AgentChat implements PaneView {
     // message and reply painted twice. Mirrors terminal.ts's Term.connect(),
     // which had the same bug fixed already.
     ws.onclose = () => {
-      if (this.ws === ws) this.scheduleReconnect();
+      if (this.ws !== ws) return;
+      this.setConnected(false);
+      this.scheduleReconnect();
     };
   }
 
@@ -870,9 +899,14 @@ export class AgentChat implements PaneView {
     this.turnStart = null;
     this.turnEls = [];
     this.setSuggestion("");
+    this.tasks.clear();
+    this.renderTasks();
   }
 
   private applyEvent(ev: AgentEvent) {
+    // Output is flowing again after an API retry: back to "Working…".
+    if (!this.prepending && this.statusEl.classList.contains("retry") && /^(assistant_delta|thinking_delta|tool_call|assistant_done)$/.test(ev.t))
+      this.setStatus("working");
     this.applyEventInner(ev);
     if (ev.ts) this.lastTs = ev.ts;
   }
@@ -982,6 +1016,18 @@ export class AgentChat implements PaneView {
         break;
       case "suggestion":
         if (!this.busy) this.setSuggestion(ev.text);
+        break;
+      case "retry":
+        this.showRetry(ev.attempt, ev.max, ev.delayMs, ev.status);
+        break;
+      case "compact":
+        this.appendCompact(ev.trigger, ev.preTokens, ev.postTokens);
+        break;
+      case "context":
+        this.setContext(ev.percent, ev.used, ev.max);
+        break;
+      case "task":
+        this.updateTask(ev.task);
         break;
     }
   }
@@ -1535,6 +1581,124 @@ export class AgentChat implements PaneView {
     foot.textContent = "✓ " + Object.values(answers).join(" · ");
   }
 
+  // ---- Connection, retries, compaction, context, background tasks ---------------
+
+  /**
+   * "Reconnecting…" over the log while the socket is down. Delayed a beat so
+   * the routine wake-from-sleep reconnect (usually <1s) doesn't flash it —
+   * it's for "this is NOT live right now", not for every blip.
+   */
+  private setConnected(on: boolean) {
+    if (on) {
+      if (this.connTimer != null) clearTimeout(this.connTimer);
+      this.connTimer = undefined;
+      this.connEl.hidden = true;
+    } else if (this.connEl.hidden && this.connTimer == null) {
+      // Not restarted by each failed retry (one per second while the server
+      // is down) — that kept pushing the banner back so it never showed.
+      this.connTimer = window.setTimeout(() => {
+        this.connTimer = undefined;
+        this.connEl.hidden = false;
+      }, 1500);
+    }
+  }
+
+  /** The API is overloaded/erroring and the SDK is backing off — say so instead of looking hung. */
+  private showRetry(attempt: number, max: number, delayMs: number, status: number | null) {
+    this.statusEl.hidden = false;
+    this.statusEl.classList.add("retry");
+    const word = this.statusEl.querySelector(".status-word") as HTMLElement | null;
+    const text = `Retrying in ${Math.max(1, Math.round(delayMs / 1000))}s · attempt ${attempt}/${max}${status ? ` (API ${status})` : ""}`;
+    if (word) word.textContent = text;
+    else this.statusEl.textContent = text;
+  }
+
+  private appendCompact(trigger: string, pre?: number, post?: number) {
+    this.endToolGroup();
+    const k = (n?: number) => (n == null ? "" : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+    const d = el("div", "compact-divider");
+    const label = el("span", "compact-label");
+    label.textContent =
+      `Conversation compacted${trigger === "manual" ? "" : " automatically"}` +
+      (pre ? ` · ${k(pre)}${post ? ` → ${k(post)}` : ""} tokens` : "");
+    d.append(label);
+    this.logEl.append(d);
+  }
+
+  /** How full the context window is: "23%" in the composer row, colour-ramped like the usage rings. */
+  private setContext(percent: number, used: number, max: number) {
+    this.ctxEl.hidden = false;
+    this.ctxEl.className = `ctx-meter ${usageLevel(percent)}`;
+    this.ctxEl.textContent = "";
+    const bar = el("span", "ctx-bar");
+    const fill = el("span", "ctx-fill");
+    fill.style.width = `${Math.min(100, Math.max(2, percent))}%`;
+    bar.append(fill);
+    const n = el("span", "ctx-num");
+    n.textContent = `${percent}%`;
+    this.ctxEl.append(bar, n);
+    this.ctxEl.title = `Context: ${used.toLocaleString()} of ${max.toLocaleString()} tokens used`;
+  }
+
+  /**
+   * Background tasks (subagents, background shells) in a tray above the
+   * composer, each with its own ■ — the turn's Stop leaves them running
+   * (perTaskStopAffordance in the driver). Finished ones linger a moment so
+   * you see how they ended, then go.
+   */
+  private updateTask(task: AgentTask) {
+    const live = task.status === "running" || task.status === "pending" || task.status === "paused";
+    this.tasks.set(task.id, task);
+    if (!live) setTimeout(() => {
+      if (this.tasks.get(task.id) === task) {
+        this.tasks.delete(task.id);
+        this.renderTasks();
+      }
+    }, 5000);
+    // Mark the step that launched it.
+    const card = task.toolUseId ? this.toolEls.get(task.toolUseId) : undefined;
+    if (card && task.backgrounded) this.setStepNote(card, live ? "Running in background" : task.status === "completed" ? "Finished" : task.status === "failed" ? "Failed" : "Stopped", live ? "pending" : task.status === "failed" ? "denied" : "allowed");
+    this.renderTasks();
+  }
+
+  private renderTasks() {
+    this.taskTray.textContent = "";
+    // Only backgrounded work belongs here; a foreground subagent is already
+    // visible as its Agent step and stops with the turn.
+    const list = [...this.tasks.values()].filter((t) => t.backgrounded);
+    this.taskTray.hidden = !list.length;
+    for (const t of list) {
+      const live = t.status === "running" || t.status === "pending" || t.status === "paused";
+      const row = el("div", `task-row ${t.status}`);
+      const dot = el("span", "task-dot");
+      const text = el("span", "task-text");
+      const name = el("span", "task-name");
+      name.textContent = t.description || (t.kind === "local_bash" ? "Background command" : "Background task");
+      const sub = el("span", "task-sub");
+      const bits = [
+        t.kind === "local_bash" ? "shell" : t.kind || "agent",
+        live ? t.summary || (t.lastTool ? `using ${t.lastTool}` : "running") : t.status,
+        t.durationMs ? fmtDuration(t.durationMs) : "",
+      ].filter(Boolean);
+      sub.textContent = bits.join(" · ");
+      text.append(name, sub);
+      row.append(dot, text);
+      if (live) {
+        const stop = el("button", "task-stop") as HTMLButtonElement;
+        setIcon(stop, "stop");
+        stop.title = "Stop this task";
+        stop.setAttribute("aria-label", `Stop ${name.textContent}`);
+        stop.addEventListener("click", (e) => {
+          e.stopPropagation();
+          stop.disabled = true;
+          this.wsSend({ t: "stopTask", id: t.id });
+        });
+        row.append(stop);
+      }
+      this.taskTray.append(row);
+    }
+  }
+
   // ---- Earlier history ---------------------------------------------------------
   // The replay ring holds the last ~300 events; anything older is fetched from
   // the transcript a page at a time as you scroll toward the top.
@@ -1675,6 +1839,7 @@ export class AgentChat implements PaneView {
       hint.textContent = state === "working" ? "esc to interrupt" : "";
       this.statusEl.append(spark, word, hint);
       this.statusEl.classList.toggle("waiting", state === "waiting_permission");
+      this.statusEl.classList.remove("retry");
       this.setSuggestion("");
       return;
     }
