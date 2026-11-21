@@ -1,4 +1,4 @@
-import { Term, PaneInfo, PaneView, TermHost, UsageRow, displayName, profileOf } from "./terminal";
+import { Term, PaneInfo, PaneView, TermHost, UsageRow, UsageWindow, displayName, profileOf } from "./terminal";
 import { AgentChat } from "./agent-chat";
 import { play } from "./sound";
 import { setTabAttention, setAppLabel } from "./tab";
@@ -215,6 +215,7 @@ function addTerm(info: PaneInfo, at?: number): PaneView {
   }
   enableDrag(t);
   addSwitcherButton(t);
+  addTitleSubline(t);
   t.setUsage(usageFor(t)); // a box created after the last usage broadcast
   reflow();
   if (info.attention?.waiting) enqueue(info.id, info.attention.kind || "question");
@@ -879,6 +880,26 @@ document.addEventListener(
   },
   { passive: true }
 );
+
+/**
+ * Two-line title for the phone header: the name, and under it where the
+ * session lives — prefixed by its state ("Working · ", "Needs you · ") purely
+ * in CSS off the box's own .busy/.waiting classes, so nothing has to keep it
+ * in sync. Desktop hides the second line.
+ */
+function addTitleSubline(t: PaneView) {
+  const path = t.titleBar.querySelector(".path");
+  if (!path || path.parentElement?.classList.contains("title-text")) return;
+  const wrap = document.createElement("span");
+  wrap.className = "title-text";
+  path.before(wrap);
+  const sub = document.createElement("span");
+  sub.className = "pane-sub";
+  const parts = (t.info.cwd || "").split("/").filter(Boolean);
+  sub.textContent = parts.length > 2 ? parts.slice(-2).join("/") : t.info.cwd || "";
+  sub.title = t.info.cwd || "";
+  wrap.append(path, sub);
+}
 
 /** The "3/12 ⌄" control, added to every box's title bar; CSS shows it only on an open pane on a phone. */
 function addSwitcherButton(t: PaneView) {
@@ -1669,6 +1690,10 @@ settingsBtn.addEventListener("click", (e) => {
     settingsBtn.title = "Settings";
   }
 });
+document.getElementById("settingsDone")!.addEventListener("click", (e) => {
+  e.stopPropagation();
+  closeSettings();
+});
 settingsPanel.addEventListener("click", (e) => {
   // Toggles and sliders leave the panel open — you often flip two at once. The
   // ACTIONS (open/save a layout, show tasks, jump to the next waiting terminal)
@@ -1678,7 +1703,9 @@ settingsPanel.addEventListener("click", (e) => {
 });
 document.addEventListener("click", (e) => {
   if (!settingsPanel.classList.contains("open")) return;
-  if (e.target === settingsBtn || settingsPanel.contains(e.target as Node)) return;
+  // contains(), not ===: the button holds an SVG icon, so a tap's target is
+  // usually the <svg>/<path>, and === would close the panel it just opened.
+  if (settingsBtn.contains(e.target as Node) || settingsPanel.contains(e.target as Node)) return;
   closeSettings();
 });
 document.getElementById("popen")!.addEventListener("click", () => pickPath && choose(pickPath));
@@ -2250,30 +2277,29 @@ function renderUsage() {
       continue;
     }
 
-    const p = row.primary;
-    const bar = document.createElement("div");
-    bar.className = `use-bar ${usageLevel(p.percent)}`;
-    const fill = document.createElement("i");
-    fill.style.width = `${p.percent}%`;
-    bar.append(fill);
-    el.append(bar);
-
-    const meta = document.createElement("div");
-    meta.className = "use-meta";
-    const pctEl = document.createElement("span");
-    pctEl.className = `use-pct ${usageLevel(p.percent)}`;
-    pctEl.textContent = `${p.percent}%`;
-    const win = document.createElement("span");
-    win.className = "use-win";
-    win.textContent = p.resetsAt ? `${p.label} · resets ${resetLabel(p.resetsAt)}` : p.label;
-    meta.append(pctEl, win);
-    if (row.secondary) {
-      const sec = document.createElement("span");
-      sec.className = "use-sec";
-      sec.textContent = `${row.secondary.label} ${row.secondary.percent}%`;
-      meta.append(sec);
+    // One labelled bar per window — the weekly limit used to be a tail of
+    // text on the 5-hour line, easy to miss and the one that bites hardest.
+    for (const w of [row.primary, row.secondary].filter(Boolean) as UsageWindow[]) {
+      const win = document.createElement("div");
+      win.className = "use-window";
+      const meta = document.createElement("div");
+      meta.className = "use-meta";
+      const name = document.createElement("span");
+      name.className = "use-win";
+      const label = /5.?h/i.test(w.label) ? "5-hour" : /7.?d|week/i.test(w.label) ? "Weekly" : w.label;
+      name.textContent = w.resetsAt ? `${label} · resets ${resetLabel(w.resetsAt)}` : label;
+      const pctEl = document.createElement("span");
+      pctEl.className = `use-pct ${usageLevel(w.percent)}`;
+      pctEl.textContent = `${w.percent}%`;
+      meta.append(name, pctEl);
+      const bar = document.createElement("div");
+      bar.className = `use-bar ${usageLevel(w.percent)}`;
+      const fill = document.createElement("i");
+      fill.style.width = `${w.percent}%`;
+      bar.append(fill);
+      win.append(meta, bar);
+      el.append(win);
     }
-    el.append(meta);
     usageListEl.append(el);
   }
 }

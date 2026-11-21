@@ -363,6 +363,30 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 - **On a phone an open pane hides `#bar`** (`body.pane-open`); its title bar
   takes over the safe-area inset. `setPaneOpen()` must run before measuring
   in both `zoom()` and `unzoom()`.
+- **Phone headers are a redesign in CSS over the SAME DOM** (≤640px only):
+  `#bar` becomes a large title + round ⚙ / + (the "Terminal" label is
+  `.add-label`, hidden), chips scroll in one row; an open pane's title becomes
+  a neutral nav bar — ‹, name + `.pane-sub` (folder, prefixed "Working · /
+  Needs you · / Done ·" by CSS off `.busy`/`.waiting`), switcher, ⚑ — with the
+  tint, badges, –, ✕ and (chat panes) `.pinned` hidden. `addTitleSubline()`
+  wraps `.path` in `.title-text`; anything that looks for `.path` must not
+  assume it's a direct child of `.title`.
+- **Composer pickers are `chipSelect()`s**: a styled label with the real
+  `<select>` invisibly on top at 16px. iOS zooms the page when a control
+  under 16px is focused (the 11.5px mode picker zoomed the whole app). On
+  phones every pane input/textarea/select is 16px for the same reason, and the
+  usage rings move into the + menu's labelled `.menu-info` (tap the context %
+  to open it). Set a picker's value in code → call `syncChip()`.
+- **Settings is grouped cards** (index.html `#settings`, styles.css "Settings
+  — grouped cards"): Usage (one labelled bar per window), Workspace,
+  Appearance, Notifications, Safety, This machine. Checkboxes render as
+  switches via CSS (`appearance:none` + `order:2`, so JS-built rows such as
+  `#mcAccounts` need no markup change). Popover on desktop, full-screen sheet
+  with Done on a phone. The redesign appended overrides rather than deleting
+  the older `#settings` rules — when editing, look at the later block first.
+  All ids are unchanged and wired in main.ts.
+- **Settings outside-click uses `settingsBtn.contains(target)`** — the button
+  holds an SVG, so `target === settingsBtn` closed the panel as it opened.
 - **Account badges use `.acct-slot`, not `.badge-slot`.** They sit in the
   right-hand cluster beside ⚑. This is not cosmetic: `setWaiting()` does
   `badgeSlot.innerHTML = ""` on every attention change, so anything persistent

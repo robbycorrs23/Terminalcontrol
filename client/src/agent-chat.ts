@@ -24,6 +24,30 @@ import { enhanceRich } from "./rich";
 import { attachSecretPopover } from "./secret-popover";
 import { iconSvg, setIcon } from "./icons";
 
+/**
+ * Wrap a <select> so what you SEE is a small styled label, while the real
+ * select sits invisibly on top of it at 16px. Why: iOS zooms the whole page
+ * when you focus a form control whose text is under 16px — tapping the 11px
+ * mode picker blew the app up and left it zoomed. The invisible select still
+ * gets the tap and opens the native picker.
+ */
+function chipSelect(sel: HTMLSelectElement, cls: string): HTMLElement {
+  const chip = el("span", `sel-chip ${cls}`);
+  const label = el("span", "sel-label");
+  chip.append(label, sel);
+  const sync = () => {
+    label.textContent = sel.selectedOptions[0]?.textContent || "";
+    chip.title = sel.title;
+  };
+  sel.addEventListener("change", sync);
+  (sel as HTMLSelectElement & { syncChip?: () => void }).syncChip = sync;
+  sync();
+  return chip;
+}
+function syncChip(sel: HTMLSelectElement) {
+  (sel as HTMLSelectElement & { syncChip?: () => void }).syncChip?.();
+}
+
 /** Images in a paste event, as named Files (a pasted screenshot has no useful name). */
 function clipboardImages(data: DataTransfer): File[] {
   const out: File[] = [...data.files].filter((f) => f.type.startsWith("image/"));
@@ -211,6 +235,9 @@ export class AgentChat implements PaneView {
   private models: ModelOption[] = [];
   private usageEl!: HTMLElement;
   private ctxEl!: HTMLElement; // context-window meter in the composer row
+  private infoEl!: HTMLElement; // + menu header: plan usage + context, labelled
+  private usageRow: UsageRow | null = null;
+  private ctxInfo: { percent: number; used: number; max: number } | null = null;
   private taskTray!: HTMLElement; // background tasks, each with its own stop
   private tasks = new Map<string, AgentTask>();
   private connEl!: HTMLElement; // "Reconnecting…" banner
@@ -398,7 +425,9 @@ export class AgentChat implements PaneView {
     const viewBtn = menuItem("view", "terminal", "Switch to terminal view");
     this.plusMenu = el("div", "plus-menu");
     this.plusMenu.hidden = true;
-    this.plusMenu.append(attachBtn, pasteBtn, secretBtn, viewBtn);
+    this.infoEl = el("div", "menu-info");
+    this.infoEl.hidden = true;
+    this.plusMenu.append(this.infoEl, attachBtn, pasteBtn, secretBtn, viewBtn);
     pasteBtn.hidden = !navigator.clipboard?.read;
     pasteBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -443,9 +472,25 @@ export class AgentChat implements PaneView {
     plusBtn.title = "Add files, secrets, view";
     plusBtn.setAttribute("aria-label", "More");
     const row = el("div", "composer-row");
-    this.ctxEl = el("span", "ctx-meter");
+    this.ctxEl = el("button", "ctx-meter");
     this.ctxEl.hidden = true;
-    row.append(plusBtn, this.modeSel, el("span", "spacer"), this.ctxEl, this.usageEl, this.modelSel, this.sendBtn);
+    // No hover on a phone: tapping the % opens the + menu, which spells out
+    // context and plan usage with labels.
+    this.ctxEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.plusMenu.hidden = !this.plusMenu.hidden;
+      plusBtn.classList.toggle("open", !this.plusMenu.hidden);
+    });
+    row.append(
+      plusBtn,
+      chipSelect(this.modeSel, "mode-chip"),
+      el("span", "spacer"),
+      this.ctxEl,
+      this.usageEl,
+      chipSelect(this.modelSel, "model-chip"),
+      this.sendBtn
+    );
+    this.setModeUI(this.modeSel.value); // now that the chip exists, colour it
     // Attachments wait here as thumbnails (the way the app shows them) rather
     // than as raw upload paths pasted into your message.
     this.attachRow = el("div", "attach-row");
@@ -1638,6 +1683,9 @@ export class AgentChat implements PaneView {
     n.textContent = `${percent}%`;
     this.ctxEl.append(bar, n);
     this.ctxEl.title = `Context: ${used.toLocaleString()} of ${max.toLocaleString()} tokens used`;
+    this.ctxEl.setAttribute("aria-label", `Context ${percent}% full`);
+    this.ctxInfo = { percent, used, max };
+    this.renderInfo();
   }
 
   /**
@@ -1934,6 +1982,12 @@ export class AgentChat implements PaneView {
     } else if (cur) this.modelSel.value = cur;
     this.modelSel.disabled = this.models.length < 2 || this.isRemote;
     this.modelSel.hidden = !opts.length;
+    const chip = this.modelSel.parentElement;
+    if (chip?.classList.contains("sel-chip")) {
+      chip.hidden = !opts.length;
+      chip.classList.toggle("disabled", this.modelSel.disabled);
+    }
+    syncChip(this.modelSel);
     this.modelSel.title = cur ? `Model: ${cur}` : "Model";
   }
 
@@ -1948,6 +2002,12 @@ export class AgentChat implements PaneView {
     // visual "this is the dangerous one" cue.
     this.modeSel.classList.toggle("bypass", mode === "bypassPermissions" || mode === "full-access");
     this.modeSel.classList.toggle("plan", mode === "plan");
+    const chip = this.modeSel.parentElement;
+    if (chip?.classList.contains("sel-chip")) {
+      chip.classList.toggle("bypass", mode === "bypassPermissions" || mode === "full-access");
+      chip.classList.toggle("plan", mode === "plan");
+    }
+    syncChip(this.modeSel);
   }
 
   private scrollToBottom(force = false) {
@@ -1988,6 +2048,8 @@ export class AgentChat implements PaneView {
    * numbers would be confidently wrong.
    */
   setUsage(row: UsageRow | null) {
+    this.usageRow = row;
+    this.renderInfo();
     this.usageEl.textContent = "";
     if (!row || !row.available || this.isRemote) {
       this.usageEl.hidden = true;
@@ -2000,6 +2062,43 @@ export class AgentChat implements PaneView {
     }
     for (const w of wins) this.usageEl.append(usageRing(w));
     this.usageEl.hidden = false;
+  }
+
+  /**
+   * The + menu's header: plan usage and context spelled out in words — the
+   * composer row only has room for bare numbers (and on a phone, not even
+   * for the usage rings).
+   */
+  private renderInfo() {
+    if (!this.infoEl) return;
+    this.infoEl.textContent = "";
+    const line = (label: string, value: string, sub: string) => {
+      const r = el("div", "info-line");
+      const l = el("span", "info-label");
+      l.textContent = label;
+      const v = el("span", "info-value");
+      v.textContent = value;
+      r.append(l, v);
+      if (sub) {
+        const s2 = el("span", "info-sub");
+        s2.textContent = sub;
+        r.append(s2);
+      }
+      this.infoEl.append(r);
+    };
+    if (this.ctxInfo) {
+      const k = (n: number) =>
+        n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+      line("Context", `${this.ctxInfo.percent}%`, `${k(this.ctxInfo.used)} of ${k(this.ctxInfo.max)} tokens in this chat`);
+    }
+    const row = this.usageRow;
+    if (row && row.available && !this.isRemote) {
+      for (const w of [row.primary, row.secondary].filter(Boolean) as UsageWindow[]) {
+        const name = /5.?h/i.test(w.label) ? "5-hour limit" : /7.?d|week/i.test(w.label) ? "Weekly limit" : w.label;
+        line(name, `${Math.round(w.percent)}%`, w.resetsAt ? `resets ${resetAt(w.resetsAt)}` : "");
+      }
+    }
+    this.infoEl.hidden = !this.infoEl.childElementCount;
   }
 
   /** Which model this session resolved to; hidden until the driver says. */
