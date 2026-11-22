@@ -59,6 +59,7 @@ for (const key of [
   // which is a sane default but not the one you chose.
   "FLEET_LABEL",
   "FLEET_ICON_COLOR",
+  "FLEET_ICON_MARK",
   // Who push services contact about this app server (VAPID `sub`).
   "FLEET_PUSH_CONTACT",
 ]) {
