@@ -37,6 +37,7 @@ import { shipStatus, draftCommit, commit, push, draftPr, openPr, overlaps } from
 import { trustFolder, isTrusted } from "./claude-trust.js";
 import { preflight } from "../scripts/preflight.js";
 import { ensureDeps, ensureFreshBuild, serverVersion, bundleVersion } from "./self-check.js";
+import { startAutoUpdate } from "./auto-update.js";
 
 // Check for tmux / curl / claude / codex FIRST, so any missing-dependency warning is the
 // most prominent thing the user sees — not buried under later startup logs.
@@ -462,7 +463,7 @@ app.get("/api/recents", (_req, res) => res.json(layouts.recents()));
 // Which code is running and which bundle is being served — so "I pulled and
 // nothing changed" is visible in Settings instead of a mystery. The client
 // compares its own baked-in build stamp with `bundle` to offer a reload.
-app.get("/api/version", (_req, res) => res.json({ ...RUNNING, bundle: bundleVersion(ROOT) }));
+app.get("/api/version", (_req, res) => res.json({ ...RUNNING, bundle: bundleVersion(ROOT), autoUpdate: autoUpdate?.state || null }));
 
 app.post("/api/mkdir", async (req, res) => {
   try {
@@ -1363,6 +1364,7 @@ server.on("error", (e) => {
 // restart, so this fires on the restarts you didn't type as well as the ones
 // you did.
 let shuttingDown = false;
+let autoUpdate = null;
 function snapshotAndExit(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -1381,6 +1383,19 @@ server.listen(PORT, HOST, () => {
   console.log(`[fleetview] pane snapshots: ${SNAPSHOT_DIR} (auto on shutdown, or \`npm run snapshot\`)`);
   // Started here, not at module load, so a slow/absent CLI can never delay boot.
   usage.start();
+  // Pull + restart into new FleetView code by itself, only when every pane is
+  // idle (server/auto-update.js). "Idle" = nothing working and nothing waiting
+  // on an approval/answer: a restart would cut a live turn off mid-reply.
+  autoUpdate = startAutoUpdate({
+    repo: ROOT,
+    isIdle: () =>
+      registry.list().every((p) => !p.working && !(p.attention?.waiting && (p.attention.kind || "question") === "question")),
+    beforeExit: () => {
+      try {
+        saveSnapshot(collectSnapshot(ptys, agents, "auto-update"));
+      } catch {}
+    },
+  });
   if (!isLoopback) {
     console.warn(
       `  ⚠ Listening on ${HOST} — reachable from the network. This server runs\n` +

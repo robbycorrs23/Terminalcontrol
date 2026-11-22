@@ -1,7 +1,7 @@
 import express from "express";
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -332,6 +332,39 @@ server.on("upgrade", (req, socket, head) => {
   }
   proxy.ws(req, socket, head);
 });
+
+// ---- Pick up new code by itself ---------------------------------------------
+// The server auto-updates (server/auto-update.js: git fast-forward + restart),
+// but the gate is a separate process that reads its files once at startup — a
+// pull that changed it used to leave the OLD gate running until someone
+// restarted it by hand (that's how the iOS app's sign-in handoff went missing
+// on a second machine). So: if any of the gate's own files change on disk,
+// exit and let the supervisor (launchd KeepAlive / systemd Restart=) start the
+// new code. A hand-started gate isn't supervised — exiting would just stop
+// it — so then it only logs.
+const OWN_FILES = ["gate.js", "gate-login.html", "gate-session.js", "webauthn-store.js", "step-up-token.js"].map((f) =>
+  join(__dirname, f)
+);
+const mtimes = () => OWN_FILES.map((f) => {
+  try {
+    return statSync(f).mtimeMs;
+  } catch {
+    return 0;
+  }
+}).join(",");
+const startedWith = mtimes();
+const isSupervised = /^com\.fleetview\./.test(process.env.XPC_SERVICE_NAME || "") || !!process.env.INVOCATION_ID;
+let warnedStale = false;
+setInterval(() => {
+  if (mtimes() === startedWith) return;
+  if (isSupervised) {
+    console.log("[fleetview-gate] my code changed on disk — restarting into it");
+    process.exit(75);
+  } else if (!warnedStale) {
+    warnedStale = true;
+    console.warn("[fleetview-gate] my code changed on disk — restart the gate to pick it up");
+  }
+}, 60 * 1000).unref();
 
 const targetDescription = typeof TARGET === "string" ? TARGET : TARGET.socketPath;
 server.listen(PORT, "127.0.0.1", () => {

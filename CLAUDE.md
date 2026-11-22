@@ -640,6 +640,23 @@ before binding, `server/index.js` runs:
   dependency trouble gets "This machine needs npm install"; Settings → This
   machine shows the version.
 
+### Auto-update (`server/auto-update.js`)
+Each machine runs its own checkout, so a change used to reach the second
+machine only after a manual pull + restart. Now, under the auto-start service
+ONLY (launchd `com.fleetview.server` / a systemd service — exiting a hand-run
+`npm start` would just stop it), the server `git fetch`es every
+`FLEET_AUTO_UPDATE_MINUTES` (5) and, if a FAST-FORWARD is available on a CLEAN
+checkout (no tracked edits, no local commits — a dev machine is never touched),
+waits until every pane has been idle (not working, not waiting on an
+approval/answer) for 2 minutes, then `merge --ff-only`, writes a snapshot and
+exits 75 → the supervisor restarts it → the self-check above handles deps and
+the bundle → tabs get the "updated" chip. It never stashes/resets/merges.
+`FLEET_AUTO_UPDATE=0` disables; status in `~/.fleetview/auto-update.json`,
+`/api/version.autoUpdate`, Settings → This machine. The GATE is a separate
+process that read its files once at startup (why the app's sign-in handoff was
+missing on a second machine): it now polls its own files' mtimes and exits 75
+when they change, IF supervised — otherwise it only logs.
+
 ## Gotchas
 - `index.js` hardcodes `sessions.json`/`layouts.json`/`tasks.json` under repo ROOT.
   **Do NOT boot a real server for a test** — it reads/writes those live files (and

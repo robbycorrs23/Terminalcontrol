@@ -397,3 +397,13 @@ notifications. It shows the same pages as the browser, so features land in both.
 - Build/ship: `cd ios && xcodegen generate` to open it in Xcode, or
   `ios/scripts/testflight.sh` to test, archive and upload to TestFlight.
 
+## Updates
+
+Machines running the auto-start service keep themselves current: every few
+minutes each checks GitHub and, when there's an update, pulls it and restarts
+— but only once no session is working or waiting on you, and only on a clean
+checkout (a machine with local edits or commits is left alone and says so).
+Status is in Settings → This machine. Turn it off with `FLEET_AUTO_UPDATE=0`.
+The passkey gate restarts itself when its own code changes, if it's running
+as a service.
+
