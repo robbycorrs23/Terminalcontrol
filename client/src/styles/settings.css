@@ -536,3 +536,22 @@ body.in-app .brand {
   color: var(--text);
   font: 700 15px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 }
+/* With quick switch showing, the icons say which machine this is — no name. */
+body.in-app.app-quick #bar .brand {
+  display: none;
+}
+#bar .app-machines .app-machines-more {
+  width: 28px;
+  min-width: 28px;
+  opacity: 0.7;
+  filter: none;
+  color: var(--text);
+  display: grid;
+  place-items: center;
+}
+#bar .app-machines .app-machines-more .ico-svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: none;
+}

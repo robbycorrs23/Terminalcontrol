@@ -40,6 +40,10 @@ final class FleetViewUITests: XCTestCase {
         XCTAssertTrue(other.waitForExistence(timeout: 20), "quick-switch buttons never appeared")
         XCTAssertTrue(any["did2200 (current)"].exists)
         attach(app, "q1-two-machines")
+        XCTAssertFalse(any["Switch machine"].isHittable, "the machine name should be hidden when quick switch shows")
+        any["All machines"].tap()
+        XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 5), "'more' didn't open the switcher")
+        app.buttons["Done"].tap()
         other.tap()
         // The other machine's page loads and shows ITS button as current.
         let pred = NSPredicate(format: "count >= 1")

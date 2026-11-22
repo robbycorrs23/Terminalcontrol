@@ -10,8 +10,10 @@
  *  - Quick switch: the app hands the page its machine list
  *    (`window.fleetSetMachines([...])`) and the page draws one button per
  *    machine — that machine's own Home Screen icon — beside the name; a tap is
- *    {t:"switch", id}. Only with 2+ machines; the name still opens the full
- *    switcher (where you add machines).
+ *    {t:"switch", id}. Only with 2+ machines, and then the machine NAME is
+ *    hidden (body.app-quick) — the icons say which machine you're on — and a
+ *    trailing "more" button opens the full switcher (where you add machines)
+ *    instead. With one machine the name stays: it's the way in.
  *  - `window.fleetOpenPane(id)` lets a notification tap open a pane in a page
  *    that's already loaded (a fresh load uses the existing #pane= deep link).
  *  - Settings: the app delivers notifications natively (server/apns.js), so the
@@ -54,6 +56,7 @@ export function initAppBridge(deps: { brand: HTMLElement; openPane: (id: string)
   w.fleetSetMachines = (list) => {
     quick.textContent = "";
     quick.hidden = !Array.isArray(list) || list.length < 2;
+    document.body.classList.toggle("app-quick", !quick.hidden);
     if (quick.hidden) return;
     for (const m of list) {
       const b = document.createElement("button");
@@ -75,6 +78,19 @@ export function initAppBridge(deps: { brand: HTMLElement; openPane: (id: string)
       });
       quick.append(b);
     }
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "app-machine app-machines-more";
+    more.title = "Machines";
+    more.setAttribute("aria-label", "All machines");
+    // Three dots, as inline SVG like the rest of the chrome (no emoji/Unicode icons).
+    more.innerHTML =
+      '<svg class="ico-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
+    more.addEventListener("click", (e) => {
+      e.stopPropagation();
+      post({ t: "machines" });
+    });
+    quick.append(more);
   };
   post({ t: "ready" });
 }
