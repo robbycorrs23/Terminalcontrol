@@ -86,7 +86,10 @@ gate.get("/webauthn-browser.js", (_req, res) => {
 });
 gate.get("/login", (_req, res) => res.type("html").send(loginHtml));
 gate.get("/status", (req, res) => {
-  res.json({ loggedIn: isLoggedIn(req), hasPasskeys: !store.isEmpty() });
+  // appLogin: this gate has the iOS app's sign-in handoff (/gate/app-login).
+  // The app checks it BEFORE opening the sign-in sheet: an older gate would
+  // sign you in and then load FleetView inside that Safari sheet forever.
+  res.json({ loggedIn: isLoggedIn(req), hasPasskeys: !store.isEmpty(), appLogin: true });
 });
 
 // A registration ceremony's challenge has to be remembered between /start and

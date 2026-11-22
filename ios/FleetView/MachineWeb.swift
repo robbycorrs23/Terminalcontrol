@@ -96,8 +96,29 @@ final class MachineWeb: NSObject, ObservableObject {
     // MARK: Sign-in
 
     private func startSignIn() {
-        guard authSession == nil else { return }
+        guard authSession == nil, !signingIn else { return }
         signingIn = true
+        // A gate from before the app existed has no /gate/app-login: the sheet
+        // would sign you in and then show FleetView INSIDE itself, never handing
+        // back. Ask first (gate.js /gate/status reports appLogin) and say what
+        // to do instead.
+        Task { @MainActor in
+            var ok = true
+            if let (data, resp) = try? await URLSession.shared.data(from: machine.base.appendingPathComponent("gate/status")),
+               (resp as? HTTPURLResponse)?.statusCode == 200,
+               let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                ok = status["appLogin"] as? Bool == true
+            }
+            if ok {
+                openSignInSheet()
+            } else {
+                signingIn = false
+                problem = "\(machine.name)'s sign-in gate is out of date. On that machine: git pull, then restart its gate service — then Try again."
+            }
+        }
+    }
+
+    private func openSignInSheet() {
         let start = machine.base.appendingPathComponent("gate/app-login")
         let session = ASWebAuthenticationSession(url: start, callbackURLScheme: "fleetview") { [weak self] url, error in
             Task { @MainActor in
