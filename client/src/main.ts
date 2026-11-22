@@ -1,6 +1,7 @@
 import { openNewSession } from "./new-session";
 import { initAppBridge } from "./app-bridge";
 import { initSchedules, openSchedules } from "./schedules";
+import { initTemplates, openTemplates, listTemplates, showForm as showTemplateForm } from "./templates";
 import { initGitStatus, decorateGit, scheduleGitRefresh } from "./git-status";
 import { checkVersion } from "./version-check";
 import { initInbox, openInbox, closeInbox, inboxOpen, refreshInbox } from "./inbox";
@@ -1667,6 +1668,9 @@ document.getElementById("addBtn")!.addEventListener("click", () => {
     recents: () => fetch("/api/recents").then((r) => r.json()),
     agents: newSessionAgents(),
     browse: () => void openPicker(),
+    templates: () => listTemplates(),
+    // Opens the template form prefilled from the sheet — you just name it.
+    saveAsTemplate: (t) => void showTemplateForm({ ...t, name: "" }),
     gitInfo: (path) =>
       fetch("/api/git-info?path=" + encodeURIComponent(path))
         .then((r) => (r.ok ? r.json() : null))
@@ -2255,6 +2259,16 @@ initSchedules({
   // Chat-capable agents only: a scheduled run is a chat session.
   agents: () => newSessionAgents().filter((a) => a.chat && a.value),
 });
+// Prompt templates (templates.ts / server/templates.js).
+initTemplates({
+  recents: () => fetch("/api/recents").then((r) => r.json()),
+  agents: () => newSessionAgents(),
+});
+document.getElementById("tplBtn")!.addEventListener("click", () => {
+  closeSettings();
+  openTemplates();
+});
+
 document.getElementById("schedBtn")!.addEventListener("click", () => {
   closeSettings();
   openSchedules();

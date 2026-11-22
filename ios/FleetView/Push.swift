@@ -27,8 +27,17 @@ final class PushCenter: NSObject, ObservableObject {
         // the request is a plain allow/deny (server/index.js approvalFor).
         let allow = UNNotificationAction(identifier: "ALLOW", title: "Allow", options: [.authenticationRequired])
         let deny = UNNotificationAction(identifier: "DENY", title: "Deny", options: [.authenticationRequired, .destructive])
+        // "No — do this instead": the note goes back with the denial.
+        let denyNote = UNTextInputNotificationAction(identifier: "DENY_NOTE", title: "Deny with a note…",
+                                                     options: [.authenticationRequired],
+                                                     textInputButtonTitle: "Send", textInputPlaceholder: "What should it do instead?")
+        // Reply to a finished session ("yes, go ahead") without opening the app.
+        let reply = UNTextInputNotificationAction(identifier: "REPLY", title: "Reply",
+                                                  options: [.authenticationRequired],
+                                                  textInputButtonTitle: "Send", textInputPlaceholder: "Reply…")
         center.setNotificationCategories([
-            UNNotificationCategory(identifier: "FLEET_APPROVE", actions: [allow, deny], intentIdentifiers: [], options: []),
+            UNNotificationCategory(identifier: "FLEET_APPROVE", actions: [allow, deny, denyNote], intentIdentifiers: [], options: []),
+            UNNotificationCategory(identifier: "FLEET_REPLY", actions: [reply], intentIdentifiers: [], options: []),
         ])
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             Task { @MainActor in
@@ -67,12 +76,21 @@ extension PushCenter: UNUserNotificationCenterDelegate {
         let origin = info["origin"] as? String ?? ""
         let pane = info["pane"] as? String ?? ""
         let action = response.actionIdentifier
-        if action == "ALLOW" || action == "DENY", let token = info["approve"] as? String {
-            // Answered from the lock screen — the app may have been launched in
-            // the background just for this, so nothing here assumes a UI.
+        let typed = (response as? UNTextInputNotificationResponse)?.userText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = response.notification.request.content.title
+        // Answered from the lock screen — the app may have been launched in the
+        // background just for this, so nothing here assumes a UI.
+        var call: (token: String, action: String, text: String)?
+        switch action {
+        case "ALLOW": if let t = info["approve"] as? String { call = (t, "allow", "") }
+        case "DENY": if let t = info["approve"] as? String { call = (t, "deny", "") }
+        case "DENY_NOTE": if let t = info["approve"] as? String { call = (t, "deny", typed) }
+        case "REPLY": if let t = info["reply"] as? String, !typed.isEmpty { call = (t, "reply", typed) }
+        default: break
+        }
+        if let call {
             Task { @MainActor in
-                await Approvals.perform(origin: origin, token: token, allow: action == "ALLOW",
-                                        title: response.notification.request.content.title)
+                await Approvals.perform(origin: origin, token: call.token, action: call.action, text: call.text, title: title)
                 done()
             }
             return
@@ -106,12 +124,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 /// even when the app was launched in the background just for this tap.
 @MainActor
 enum Approvals {
-    static func perform(origin: String, token: String, allow: Bool, title: String) async {
-        let result = await send(origin: origin, token: token, allow: allow)
+    static func perform(origin: String, token: String, action: String, text: String, title: String) async {
+        let result = await send(origin: origin, token: token, action: action, text: text)
         if let failure = result {
             // Never fail silently — the thing still needs you.
             let c = UNMutableNotificationContent()
-            c.title = allow ? "Couldn't allow it" : "Couldn't deny it"
+            c.title = action == "allow" ? "Couldn't allow it" : action == "reply" ? "Couldn't send your reply" : "Couldn't deny it"
             c.body = "\(title): \(failure) Open FleetView to answer."
             c.sound = .default
             c.userInfo = ["origin": origin]
@@ -120,7 +138,7 @@ enum Approvals {
     }
 
     /// nil = done; otherwise a short reason.
-    private static func send(origin: String, token: String, allow: Bool) async -> String? {
+    private static func send(origin: String, token: String, action: String, text: String) async -> String? {
         // Machines are saved by MachineStore under "machines.v1"; read them
         // directly — a background launch may have no UI (and no store) at all.
         guard let data = UserDefaults.standard.data(forKey: "machines.v1"),
@@ -134,7 +152,7 @@ enum Approvals {
         for (k, v) in HTTPCookie.requestHeaderFields(with: cookies.filter { url.host?.hasSuffix($0.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))) == true }) {
             req.setValue(v, forHTTPHeaderField: k)
         }
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "action": allow ? "allow" : "deny"])
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "action": action, "text": text])
         do {
             let (body, resp) = try await URLSession.shared.data(for: req)
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0

@@ -63,6 +63,7 @@ export function createPushNotifier({
   summarize = null,
   forceDone = () => false,
   approval = () => null,
+  replyToken = () => null,
 }) {
   const lastSent = new Map(); // `${paneId}:${kind}` -> timestamp
 
@@ -132,7 +133,10 @@ export function createPushNotifier({
         }
       }
       const appText = approve && p.pushSummary !== false ? `Allow ${approve.label}?` : text;
-      void fanOutApp({ paneId, kind, title, body: appText, count, approve: approve?.token || null });
+      // "Finished" → a Reply button (FLEET_REPLY), so a quick answer to its
+      // summary's "needs you" goes straight back to the session.
+      const reply = kind !== "question" ? replyToken(paneId) : null;
+      void fanOutApp({ paneId, kind, title, body: appText, count, approve: approve?.token || null, reply });
     })();
   }
 
@@ -148,9 +152,10 @@ export function createPushNotifier({
               sound: msg.kind === "question" ? "default" : undefined,
               badge: msg.count,
               "thread-id": msg.paneId, // the app groups one pane's alerts together
-              ...(msg.approve ? { category: "FLEET_APPROVE" } : {}),
+              ...(msg.approve ? { category: "FLEET_APPROVE" } : msg.reply ? { category: "FLEET_REPLY" } : {}),
             },
             ...(msg.approve ? { approve: msg.approve } : {}),
+            ...(msg.reply ? { reply: msg.reply } : {}),
             // Where a tap goes: this machine (as the app knows it) + the pane.
             origin: row.origin,
             pane: msg.paneId,

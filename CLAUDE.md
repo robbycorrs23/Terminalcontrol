@@ -88,6 +88,7 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
 | `client/src/rewind-editor.ts` | edit-and-resend editor (rewind logic lives in agent-manager.js) |
 | `server/summary.js` | session summaries: one digest per finished turn (headline / changed / needs you) for pushes + the inbox |
 | `server/scheduler.js` / `client/src/schedules.ts` | scheduled sessions: saved prompt + days + time → a fresh chat session at that time / the Settings → Scheduled sessions sheet |
+| `server/templates.js` / `client/src/templates.ts` | prompt templates: saved prompts (+ optional folder/agent/view/own branch) → new-session chips, composer + → Templates, Settings sheet |
 | `client/src/review.ts` | review mode: commentable numbered diffs in the Changes panel → one review message |
 | `server/self-check.js` | startup: fix deps vs lockfile, rebuild a stale bundle, version info |
 | `client/src/chat-question.ts` / `chat-tasks.ts` / `chat-queue.ts` / `chat-attachments.ts` | chat pane components: AskUserQuestion card / background-task tray / queued messages / composer attachments |
@@ -362,6 +363,10 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
      SAME function the inbox's cards use — refuses if it was already answered
      or the screen changed. A failure posts a local notification; it never
      fails silently. The body says what you'd approve only with `pushSummary` on.
+     The same token map also serves **"Deny with a note…"** (a text-input
+     action; the note rides on the deny) and **Reply** on "finished" pushes
+     (`FLEET_REPLY`, `mintReply`, `inboxAct({type:"reply"})`). Each token only
+     accepts the actions it was minted for. All require Face ID.
   3. **The web side detects the app by CAPABILITY**
      (`window.webkit.messageHandlers.fleetApp`), not the UA, and hides the
      browser-only notification rows via `body.in-app`.
@@ -579,6 +584,15 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   run in a fresh git worktree (validated as a repo at SAVE time, not at 7am);
   retiring a previous run calls `finishWorktree`, which removes the folder only
   if that run changed nothing and keeps any unmerged branch.
+- **Prompt templates** (`server/templates.js`, `templates.ts`, `/api/templates`).
+  Per machine (`~/.fleetview/templates.json`, 0600). Name + prompt; folder,
+  agent (`shell` = plain shell), view and own-branch are OPTIONAL — a template
+  pins only what it sets. In the new-session sheet a chip fills the form and you
+  still press Start; "Save as template…" opens the form prefilled. In a chat,
+  + → Templates swaps the menu for the list (the menu's capture-phase
+  close-on-click skips `.menu-item.templates`, and a MutationObserver restores
+  the items whenever the menu hides). A terminal-view template can't auto-send
+  its prompt — the form says so.
 - **Parallel-safe sessions** (`server/worktrees.js`, `server/ship.js`,
   `git-status.ts`, `ship-panel.ts`). "Own branch" (new-session sheet's Branch
   row, the picker's checkbox → `POST /api/panes {worktree:true}`) runs `git

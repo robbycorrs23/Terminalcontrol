@@ -41,6 +41,7 @@ import { startAutoUpdate } from "./auto-update.js";
 import { createSummaries } from "./summary.js";
 import { randomBytes } from "node:crypto";
 import { createScheduler } from "./scheduler.js";
+import { createTemplates } from "./templates.js";
 
 // Check for tmux / curl / claude / codex FIRST, so any missing-dependency warning is the
 // most prominent thing the user sees — not buried under later startup logs.
@@ -237,8 +238,9 @@ function scheduleSecretRelease(session) {
 // Web Push fan-out, now that broadcast() and the stores all exist.
 pushes = createPushNotifier({
   summarize: (id) => summaries.summarize(id),
-  // Lock-screen Allow/Deny for the iOS app (see mintApproval below).
+  // Lock-screen Allow/Deny and Reply for the iOS app (see mintApproval / mintReply below).
   approval: (id) => mintApproval(id),
+  replyToken: (id) => mintReply(id),
   // A scheduled run's result is the whole point — notify even with "finished" pushes off.
   // (The set is per process; a schedule's latest run is also known from its job, so this survives restarts.)
   forceDone: (id) => scheduledPanes.has(id) || scheduler.list().some((j) => j.lastPane === id),
@@ -439,6 +441,20 @@ const scheduler = createScheduler({
     return pane.id;
   },
 });
+// ---- Prompt templates (server/templates.js) -------------------------------------
+const templates = createTemplates();
+app.get("/api/templates", (_req, res) => res.json({ templates: templates.list() }));
+app.post("/api/templates", (req, res) => {
+  try {
+    res.json(templates.upsert(req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.delete("/api/templates/:id", (req, res) => {
+  templates.remove(req.params.id) ? res.status(204).end() : res.status(404).json({ error: "no such template" });
+});
+
 app.get("/api/schedules", (_req, res) => res.json({ jobs: scheduler.list(), now: Date.now() }));
 app.post("/api/schedules", async (req, res) => {
   try {
@@ -949,7 +965,7 @@ app.post("/api/inbox/act", async (req, res) => {
 // the app redeems the token here, signed in as you (the gate cookie of that
 // machine). The token maps to exactly what was pending when the push was sent;
 // inboxAct() then refuses if it's since been answered or the screen changed.
-const approvalTokens = new Map(); // token -> { pane, allow, deny, exp }
+const approvalTokens = new Map(); // token -> { pane, allow?, deny?, reply?, exp }
 const APPROVAL_TTL = 15 * 60 * 1000;
 
 /** What an Allow/Deny on this pane's push would do right now, plus a label for the notification. Null if not an approval. */
@@ -986,13 +1002,30 @@ function mintApproval(paneId) {
   return { token, label: a.label };
 }
 
+/** A one-time token for "Reply" on a finished push (FLEET_REPLY). */
+function mintReply(paneId) {
+  if (!registry.info(paneId)) return null;
+  const now = Date.now();
+  for (const [t, v] of approvalTokens) if (v.exp < now) approvalTokens.delete(t);
+  const token = randomBytes(18).toString("base64url");
+  approvalTokens.set(token, { pane: paneId, reply: true, exp: now + APPROVAL_TTL });
+  return token;
+}
+
 app.post("/api/push/action", async (req, res) => {
   const { token, action } = req.body || {};
+  const text = typeof req.body?.text === "string" ? req.body.text.trim().slice(0, 20000) : "";
   const entry = approvalTokens.get(String(token || ""));
   approvalTokens.delete(String(token || "")); // single use, whatever happens next
   if (!entry || entry.exp < Date.now()) return res.status(410).json({ ok: false, reason: "That request has expired — open FleetView." });
-  if (action !== "allow" && action !== "deny") return res.status(400).json({ ok: false, reason: "unknown action" });
-  const r = await inboxAct(entry.pane, action === "allow" ? entry.allow : entry.deny);
+  let act;
+  if (action === "allow" && entry.allow) act = entry.allow;
+  else if (action === "deny" && entry.deny) act = { ...entry.deny, ...(text ? { text } : {}) }; // "Deny with a note…" carries the note
+  else if (action === "reply" && entry.reply) {
+    if (!text) return res.status(400).json({ ok: false, reason: "Nothing to send." });
+    act = { type: "reply", text };
+  } else return res.status(400).json({ ok: false, reason: "That action doesn't fit this notification." });
+  const r = await inboxAct(entry.pane, act);
   res.status(r.ok ? 200 : 409).json(r);
 });
 

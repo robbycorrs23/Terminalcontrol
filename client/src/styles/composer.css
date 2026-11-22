@@ -390,3 +390,35 @@
 .term .suggest-chip:hover {
   border-color: var(--accent);
 }
+
+/* + → Templates (agent-chat.ts showTemplatePicker) */
+.term .tpl-pick {
+  display: flex;
+  flex-direction: column;
+  max-height: 50vh;
+  overflow-y: auto;
+  min-width: 240px;
+  max-width: min(360px, 80vw);
+}
+.term .tpl-pick-head {
+  padding: 8px 12px 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.term .tpl-pick-item {
+  flex-direction: column;
+  align-items: flex-start !important;
+  gap: 2px;
+  height: auto !important;
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+  text-align: left;
+}
+.term .tpl-pick-prev {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-dim);
+}

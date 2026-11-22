@@ -210,3 +210,42 @@ body.light .ns-seg button.on {
   outline: none;
   border-color: var(--accent);
 }
+
+/* Template chips in the new-session sheet (templates.ts). */
+.ns-tpl-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ns-tpl {
+  min-height: 34px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.ns-tpl.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ns-save-tpl {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.ns-save-tpl[hidden],
+.ns-templates[hidden] {
+  display: none;
+}

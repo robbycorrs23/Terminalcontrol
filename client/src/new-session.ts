@@ -10,6 +10,8 @@
  *              session can't trample another one on the same repo (only
  *              offered when the folder is a git repo; remembered)
  *   Message  — optional; a chat session starts working on it immediately
+ *   Templates — chips at the top fill the form from a saved prompt template
+ *              (templates.ts); "Save as template" saves the current setup
  *
  * main.ts supplies the data and the actions; this module only builds the UI.
  * All text goes in via textContent.
@@ -20,6 +22,9 @@ export type NewSessionDeps = {
   agents: { value: string; label: string; chat: boolean }[];
   browse: () => void;
   gitInfo: (path: string) => Promise<{ repo?: boolean; root?: string; branch?: string; worktree?: boolean } | null>;
+  /** Saved prompt templates (templates.ts) and "Save as template". */
+  templates?: () => Promise<import("./templates").Template[]>;
+  saveAsTemplate?: (t: { prompt: string; cwd: string; cmd: string; kind: "agent" | "pty"; worktree: boolean }) => void;
   /** true = created; a string = the server's reason it couldn't be. */
   create: (o: { cwd: string; agent: string; kind: "agent" | "pty"; prompt: string; worktree: boolean }) => Promise<boolean | string>;
 };
@@ -76,6 +81,11 @@ export async function openNewSession(deps: NewSessionDeps) {
   const body = el("div", "ns-body");
   panel.append(body);
 
+  // Templates: chips that fill the form (set after the form exists — see applyTemplate).
+  const tplWrap = el("div", "ns-templates");
+  tplWrap.hidden = true;
+  body.append(tplWrap);
+
   // Folder
   body.append(el("div", "ns-label", "Folder"));
   const folders = el("div", "ns-card ns-folders");
@@ -93,7 +103,7 @@ export async function openNewSession(deps: NewSessionDeps) {
       sync();
     });
   };
-  for (const path of recents) {
+  const addFolderRow = (path: string, before: HTMLElement | null = null) => {
     const row = el("button", "ns-folder") as HTMLButtonElement;
     row.dataset.path = path;
     const parts = path.split("/").filter(Boolean);
@@ -103,8 +113,10 @@ export async function openNewSession(deps: NewSessionDeps) {
     text.append(name, where);
     row.append(text, el("span", "ns-check", "✓"));
     row.addEventListener("click", () => selectFolder(path));
-    folders.append(row);
-  }
+    folders.insertBefore(row, before);
+    return row;
+  };
+  for (const path of recents) addFolderRow(path);
   const browse = el("button", "ns-folder ns-browse") as HTMLButtonElement;
   browse.append(el("span", "ns-folder-name", "Browse or create a folder…"));
   browse.addEventListener("click", () => {
@@ -197,6 +209,8 @@ export async function openNewSession(deps: NewSessionDeps) {
     const showMsg = kind === "agent";
     msgLabel.hidden = !showMsg;
     msg.hidden = !showMsg;
+    const saveTpl = panel.querySelector(".ns-save-tpl") as HTMLElement | null;
+    if (saveTpl) saveTpl.hidden = !showMsg || !msg.value.trim();
     start.disabled = !cwd;
     start.textContent = kind === "agent" && msg.value.trim() ? "Send" : "Start";
   }
@@ -220,6 +234,53 @@ export async function openNewSession(deps: NewSessionDeps) {
       }
     }
   });
+
+  // ---- Templates ----
+  // A chip fills the form from a template: only what it pins (folder, agent,
+  // view, own branch) — the rest stays as you had it — plus the message. You
+  // still press Start, so a template is a head start, not a surprise launch.
+  const applyTemplate = (t: import("./templates").Template) => {
+    if (t.cwd) {
+      if (!folders.querySelector(`.ns-folder[data-path="${CSS.escape(t.cwd)}"]`)) addFolderRow(t.cwd, folders.firstElementChild as HTMLElement);
+      selectFolder(t.cwd);
+    }
+    if (t.cmd) {
+      const v = t.cmd === "shell" ? "" : t.cmd;
+      if (deps.agents.some((a) => a.value === v)) agent = v;
+    }
+    if (t.kind) kind = t.kind;
+    if (t.worktree) ownBranch = true;
+    msg.value = t.prompt;
+    tplWrap.querySelectorAll(".ns-tpl").forEach((c) => c.classList.toggle("on", (c as HTMLElement).dataset.id === t.id));
+    sync();
+  };
+  if (deps.templates) {
+    void deps.templates().then((list) => {
+      if (!list.length) return;
+      tplWrap.append(el("div", "ns-label", "Templates"));
+      const row = el("div", "ns-tpl-row");
+      for (const t of list) {
+        const c = el("button", "ns-tpl", t.name) as HTMLButtonElement;
+        c.dataset.id = t.id;
+        c.title = t.prompt;
+        c.addEventListener("click", () => applyTemplate(t));
+        row.append(c);
+      }
+      tplWrap.append(row);
+      tplWrap.hidden = false;
+    });
+  }
+  if (deps.saveAsTemplate) {
+    const saveTpl = el("button", "ns-save-tpl", "Save as template…") as HTMLButtonElement;
+    saveTpl.addEventListener("click", () => {
+      if (!msg.value.trim()) return msg.focus();
+      closeNewSession();
+      deps.saveAsTemplate!({ prompt: msg.value.trim(), cwd, cmd: agent || "shell", kind, worktree: !!repo && ownBranch });
+    });
+    msg.after(saveTpl);
+    msg.addEventListener("input", () => (saveTpl.hidden = !msg.value.trim()));
+    saveTpl.hidden = true;
+  }
 
   if (recents[0]) selectFolder(recents[0]);
   sync();

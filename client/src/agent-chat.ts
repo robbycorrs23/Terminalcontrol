@@ -17,6 +17,7 @@ import { ApprovalDock, DockAnswer, PermissionEvent } from "./chat-dock";
 import { CommandMenu } from "./chat-commands";
 import { wireLightbox } from "./lightbox";
 import { openChanges } from "./changes-panel";
+import { listTemplates } from "./templates";
 import { createRewindEditor, RewindEditor, RewindPreview } from "./rewind-editor";
 import { wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown, mediaSrc } from "./markdown";
@@ -261,11 +262,17 @@ export class AgentChat implements PaneView {
     secretBtn.title = "Give this chat a secret (never saved to chat memory)";
     // `.view` is what main.ts's flipView() looks up to disable during a flip.
     const viewBtn = menuItem("view", "terminal", "Switch to terminal view");
+    // Saved prompt templates (templates.ts): pick one to put its prompt in the composer.
+    const templatesBtn = menuItem("templates", "template", "Templates");
     this.plusMenu = el("div", "plus-menu");
     this.plusMenu.hidden = true;
     this.infoEl = el("div", "menu-info");
     this.infoEl.hidden = true;
-    this.plusMenu.append(this.infoEl, changesBtn, attachBtn, pasteBtn, secretBtn, viewBtn);
+    this.plusMenu.append(this.infoEl, changesBtn, templatesBtn, attachBtn, pasteBtn, secretBtn, viewBtn);
+    templatesBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void this.showTemplatePicker();
+    });
     changesBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       this.showChanges();
@@ -428,7 +435,9 @@ export class AgentChat implements PaneView {
     // phase: the file picker's own handler stops the click from bubbling.
     this.plusMenu.addEventListener(
       "click",
-      () => {
+      (e) => {
+        // …except "Templates", which opens its list INSIDE the menu.
+        if ((e.target as HTMLElement).closest(".menu-item.templates")) return;
         this.plusMenu.hidden = true;
         plusBtn.classList.remove("open");
       },
@@ -1353,6 +1362,52 @@ export class AgentChat implements PaneView {
     this.undoBar.append(t, undo, x);
     this.undoBar.hidden = false;
     this.scrollToBottom(true); // the bar takes height from the log; keep the new reply in view
+  }
+
+  /**
+   * + → Templates: the menu turns into the template list; picking one puts its
+   * prompt in the composer (after anything already typed) for you to edit and
+   * send. Closing the menu puts the normal items back.
+   */
+  private async showTemplatePicker() {
+    const menu = this.plusMenu;
+    const items = await listTemplates().catch(() => []);
+    const list = el("div", "tpl-pick");
+    const head = el("div", "tpl-pick-head");
+    head.textContent = items.length ? "Insert a template" : "No templates yet — add them in Settings → Prompt templates.";
+    list.append(head);
+    for (const t of items) {
+      const b = el("button", "menu-item tpl-pick-item") as HTMLButtonElement;
+      const name = el("span", "menu-label");
+      name.textContent = t.name;
+      const prev = el("span", "tpl-pick-prev");
+      prev.textContent = t.prompt;
+      b.append(name, prev);
+      b.title = t.prompt;
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const cur = this.inputEl.value.trim();
+        this.inputEl.value = cur ? `${cur}\n\n${t.prompt}` : t.prompt;
+        restore();
+        menu.hidden = true;
+        this.autoGrow();
+        this.syncSend();
+        this.inputEl.focus();
+      });
+      list.append(b);
+    }
+    const kids = [...menu.children] as HTMLElement[];
+    const wasHidden = kids.map((k) => k.hidden);
+    const restore = () => {
+      list.remove();
+      kids.forEach((k, i) => (k.hidden = wasHidden[i]));
+      obs.disconnect();
+    };
+    kids.forEach((k) => (k.hidden = true));
+    menu.append(list);
+    // Put the normal items back whenever the menu closes, however it closes.
+    const obs = new MutationObserver(() => menu.hidden && restore());
+    obs.observe(menu, { attributes: true, attributeFilter: ["hidden"] });
   }
 
   /** The Changes panel over this pane's chat (changes-panel.ts). */
