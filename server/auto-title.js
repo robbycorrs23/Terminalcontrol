@@ -47,20 +47,20 @@ function clean(raw) {
 }
 
 /**
- * @param {string} prompt the session's first real message
- * @param {{ env?: Record<string,string|undefined>, cwd?: string, timeoutMs?: number }} opts
- * @returns {Promise<string>} a title ("" only if even the fallback has nothing)
+ * One isolated Haiku turn — no tools, no settings/hooks (`settingSources: []`),
+ * nothing saved to Claude Code's history (`persistSession: false`). Shared by
+ * session titles and the Changes panel's commit/PR drafts (ship.js). Returns
+ * "" on any failure; callers always have a fallback.
  */
-export async function generateTitle(prompt, { env, cwd, timeoutMs = 20000 } = {}) {
-  const fallback = heuristicTitle(prompt);
+export async function oneShot(system, prompt, { env, cwd, timeoutMs = 20000 } = {}) {
   const abortController = new AbortController();
   const timer = setTimeout(() => abortController.abort(), timeoutMs);
   try {
     const q = query({
-      prompt: `Title this request:\n\n${String(prompt).slice(0, 2000)}`,
+      prompt,
       options: {
         model: "haiku",
-        systemPrompt: SYSTEM,
+        systemPrompt: system,
         maxTurns: 1,
         tools: [],
         settingSources: [],
@@ -76,11 +76,21 @@ export async function generateTitle(prompt, { env, cwd, timeoutMs = 20000 } = {}
         for (const b of msg.message?.content || []) if (b.type === "text") text += b.text;
       } else if (msg.type === "result") break;
     }
-    const title = clean(text);
-    return title && title.split(/\s+/).length <= 10 ? title : fallback;
+    return text.trim();
   } catch {
-    return fallback;
+    return "";
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * @param {string} prompt the session's first real message
+ * @param {{ env?: Record<string,string|undefined>, cwd?: string, timeoutMs?: number }} opts
+ * @returns {Promise<string>} a title ("" only if even the fallback has nothing)
+ */
+export async function generateTitle(prompt, { env, cwd, timeoutMs = 20000 } = {}) {
+  const fallback = heuristicTitle(prompt);
+  const title = clean(await oneShot(SYSTEM, `Title this request:\n\n${String(prompt).slice(0, 2000)}`, { env, cwd, timeoutMs }));
+  return title && title.split(/\s+/).length <= 10 ? title : fallback;
 }

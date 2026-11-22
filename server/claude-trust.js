@@ -25,9 +25,9 @@
  * so a reader never sees a half-written file. We never create the file, and
  * never touch anything but this one boolean on this one project key.
  */
-import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync, statSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 /** `claude-work` -> ~/.claude-work, `claude` -> ~/.claude. Codex is not handled. */
 function configDirFor(profile) {
@@ -85,4 +85,31 @@ export function trustFolder(profile, cwd) {
     } catch {}
     return "skipped";
   }
+}
+
+/**
+ * Whether `cwd` (or a folder above it) is already trusted for this account —
+ * read-only. Used so an "own branch" worktree INHERITS trust from the repo it
+ * came from: FleetView never grants trust you hadn't already given.
+ */
+export function isTrusted(profile, cwd) {
+  const dir = configDirFor(profile);
+  if (!dir || !cwd) return false;
+  let projects;
+  try {
+    projects = JSON.parse(readFileSync(join(dir, ".claude.json"), "utf8"))?.projects;
+  } catch {
+    return false;
+  }
+  if (!projects || typeof projects !== "object") return false;
+  const candidates = new Set([cwd]);
+  try {
+    candidates.add(realpathSync(cwd)); // Claude records real paths (/private/tmp…)
+  } catch {}
+  for (const start of candidates) {
+    for (let p = start; p && p !== dirname(p); p = dirname(p)) {
+      if (projects[p]?.hasTrustDialogAccepted === true) return true;
+    }
+  }
+  return false;
 }

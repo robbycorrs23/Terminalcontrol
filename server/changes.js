@@ -56,7 +56,7 @@ function cap(diff) {
  * (macOS symlinks /tmp; any symlinked folder does the same). A deleted file
  * has no realpath, so resolve its folder and re-attach the name.
  */
-function real(p) {
+export function real(p) {
   try {
     return realpathSync(p);
   } catch {
@@ -69,7 +69,7 @@ function real(p) {
 }
 
 /** Files this session edited, in first-touched order, with the edit inputs (for the non-git fallback). */
-function touchedFiles(configDir, sdkSessionId) {
+export function touchedFiles(configDir, sdkSessionId) {
   const out = new Map(); // abs path -> [{tool, input}]
   if (!sdkSessionId) return out;
   const file = findTranscript(configDir, sdkSessionId);

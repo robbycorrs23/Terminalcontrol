@@ -86,6 +86,8 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `client/src/chat-question.ts` / `chat-tasks.ts` / `chat-queue.ts` / `chat-attachments.ts` | chat pane components: AskUserQuestion card / background-task tray / queued messages / composer attachments |
 | `client/src/chip-select.ts` / `clipboard-images.ts` / `event-keys.ts` / `chat-usage.ts` | small helpers: invisible-select chips / paste & clipboard images / history anchors / usage rings + the ONE usage ramp |
 | `client/src/inbox.ts` / `server/term-prompt.js` | fleet inbox / reading + answering a terminal pane's prompt |
+| `server/worktrees.js` / `server/ship.js` | "Own branch" sessions (git worktrees) / commit → push → PR + cross-session overlaps |
+| `client/src/git-status.ts` / `ship-panel.ts` | branch + overlap chips on every box / the Ship section of the Changes panel |
 | `client/src/phone-nav.ts` / `version-check.ts` | phone swipe + session switcher + header subline / "updated — reload" chip + Settings version row |
 | `client/src/styles.css` + `client/src/styles/*.css` | styles, split by area; `styles.css` only `@import`s them in the ORIGINAL cascade order — keep that order |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
@@ -462,6 +464,31 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   never press keys on a different prompt. Question cards reuse
   chat-question.ts; their `.term .q-*` rules are extended to `.inbox-card`.
   Badge = the attention queue length (`renderQueue`).
+- **Parallel-safe sessions** (`server/worktrees.js`, `server/ship.js`,
+  `git-status.ts`, `ship-panel.ts`). "Own branch" (new-session sheet's Branch
+  row, the picker's checkbox → `POST /api/panes {worktree:true}`) runs `git
+  worktree add -b fleet/<slug>` into `~/.fleetview/worktrees/<repo>/<slug>`
+  and simply starts the pane THERE — branch/worktree/base are always DERIVED
+  from the folder via git (`gitInfo`), the base lives in git config
+  (`branch.<b>.fleetBase`), so the managers, the flip and restarts carry
+  nothing new. Root `.env*` files are copied in and added to the repo's
+  `info/exclude` — without that a copied .env counts as uncommitted work
+  (Finish refuses forever) and is offered as a file to commit. node_modules is
+  NOT copied. Terminal trust is inherited from the source repo only if that
+  repo is already trusted (`isTrusted` → `trustFolder`), never granted fresh.
+  Cleanup is only ever git's safe commands: closing a session keeps its
+  branch; "Finish branch" = `worktree remove` (refuses uncommitted work) +
+  `branch -d` ONLY when `merge-base --is-ancestor <branch> <base>` — `-d`
+  alone also accepts "merged into upstream", i.e. any pushed branch. Ship:
+  every git/gh call is execFile+argv; pushing the default branch is refused
+  server-side; on the default branch the commit form offers a new branch
+  (`check-ref-format`); a shared checkout pre-ticks only the session's own
+  files (never "other" changes). Commit/PR text is drafted by `oneShot()`
+  (auto-title.js, Haiku, no tools/settings/persistence), always editable.
+  Overlaps = sessions grouped by git COMMON dir (so worktrees of one repo
+  count together) whose transcripts edited the same repo-relative file; chip
+  colour is `--use-warn`, never `--waiting`. Chips live in `.git-slot` (not
+  `.badge-slot`) and are 18px so they never grow a title bar.
 - **Settings outside-click uses `settingsBtn.contains(target)`** — the button
   holds an SVG, so `target === settingsBtn` closed the panel as it opened.
 - **Account badges use `.acct-slot`, not `.badge-slot`.** They sit in the
