@@ -481,38 +481,38 @@ body.light .term .tool-diff .del {
 /* AskUserQuestion prompt — the interactive sibling of the permission card.
    Same waiting-tinted frame, but options are full-width stacked buttons
    (label + optional description) rather than a fixed allow/deny row. */
-.term .question-card {
+.term .question-card, .inbox-card .question-card {
   align-self: stretch;
   background: color-mix(in srgb, var(--waiting) 12%, var(--panel));
   border: 1px solid var(--waiting);
   border-radius: 10px;
   padding: 10px;
 }
-.term .question-card.resolved {
+.term .question-card.resolved, .inbox-card .question-card.resolved {
   opacity: 0.6;
 }
-.term .q-block + .q-block {
+.term .q-block + .q-block, .inbox-card .q-block + .q-block {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--line);
 }
-.term .q-header {
+.term .q-header, .inbox-card .q-header {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-dim);
   margin-bottom: 3px;
 }
-.term .q-text {
+.term .q-text, .inbox-card .q-text {
   font-size: 13.5px;
   margin-bottom: 8px;
 }
-.term .q-opts {
+.term .q-opts, .inbox-card .q-opts {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
-.term .q-opt {
+.term .q-opt, .inbox-card .q-opt {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -526,16 +526,16 @@ body.light .term .tool-diff .del {
   color: var(--text);
   text-align: left;
 }
-.term .q-opt.selected {
+.term .q-opt.selected, .inbox-card .q-opt.selected {
   background: var(--accent);
   color: #ffffff;
   border-color: var(--accent);
 }
-.term .q-opt-label {
+.term .q-opt-label, .inbox-card .q-opt-label {
   font-size: 13px;
   font-weight: 600;
 }
-.term .q-opt-desc {
+.term .q-opt-desc, .inbox-card .q-opt-desc {
   font-size: 11.5px;
   opacity: 0.8;
   white-space: normal;
@@ -543,13 +543,13 @@ body.light .term .tool-diff .del {
 }
 /* The "Other…" write-in option: same button, dashed to read as "type here"
    rather than a pre-written choice. */
-.term .q-opt-other {
+.term .q-opt-other, .inbox-card .q-opt-other {
   border-style: dashed;
 }
-.term .q-other {
+.term .q-other, .inbox-card .q-other {
   margin-top: 6px;
 }
-.term .q-other-input {
+.term .q-other-input, .inbox-card .q-other-input {
   width: 100%;
   min-height: 40px;
   padding: 8px 10px;
@@ -560,11 +560,11 @@ body.light .term .tool-diff .del {
   font-size: 13px;
   font-family: inherit;
 }
-.term .q-other-input:focus {
+.term .q-other-input:focus, .inbox-card .q-other-input:focus {
   outline: none;
   border-color: var(--accent);
 }
-.term .q-submit {
+.term .q-submit, .inbox-card .q-submit {
   width: 100%;
   height: auto;
   min-height: 40px;
@@ -575,7 +575,7 @@ body.light .term .tool-diff .del {
   background: var(--accent);
   color: #ffffff;
 }
-.term .q-foot {
+.term .q-foot, .inbox-card .q-foot {
   margin-top: 8px;
   font-size: 12px;
   color: var(--text-dim);

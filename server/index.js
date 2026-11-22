@@ -30,6 +30,7 @@ import { ensureCodexHooks } from "./setup-codex-hooks.js";
 import { listDirs, makeDir } from "./fs-browse.js";
 import { generateTitle } from "./auto-title.js";
 import { sessionChanges } from "./changes.js";
+import { parsePrompt, keysFor } from "./term-prompt.js";
 import { preflight } from "../scripts/preflight.js";
 import { ensureDeps, ensureFreshBuild, serverVersion, bundleVersion } from "./self-check.js";
 
@@ -708,6 +709,92 @@ app.post("/api/panes/:id/name", (req, res) => {
 // sees the var name it's told to reference. Agent (chat) panes have no tmux
 // session, so instead: a private temp file + one chat message telling Claude
 // the file's path (never the value).
+// ---- Fleet inbox -----------------------------------------------------------
+// Everything waiting on you across every pane, answerable in place. Chat panes
+// report their open approvals/questions (agent-manager inboxOf); a terminal
+// pane's prompt is read off its screen (term-prompt.js) and answered with the
+// same keys you'd press. Finished/cut-off sessions follow, with their last
+// reply, so you can answer them from here too.
+function inboxItems() {
+  const items = [];
+  for (const info of registry.list()) {
+    const base = { pane: info.id, name: info.name || basename(info.cwd), cwd: info.cwd, kind: info.kind, lastInput: info.lastInput || "" };
+    const att = info.attention || {};
+    if (info.kind === "agent") {
+      const box = agents.inboxOf(info.id);
+      for (const ev of box?.pending || []) items.push({ ...base, type: ev.t === "question" ? "question" : "permission", ev });
+      if (!box?.pending?.length && att.waiting && att.kind !== "question")
+        items.push({ ...base, type: att.kind === "aborted" ? "aborted" : "done", lastReply: box?.lastReply || "" });
+    } else if (att.waiting) {
+      if (att.kind === "question") {
+        const prompt = parsePrompt(ptys.screen(info.id));
+        items.push(prompt ? { ...base, type: "term-prompt", prompt } : { ...base, type: "term-waiting" });
+      } else items.push({ ...base, type: att.kind === "aborted" ? "aborted" : "done" });
+    }
+  }
+  const rank = { permission: 0, question: 0, "term-prompt": 0, "term-waiting": 1, aborted: 2, done: 3 };
+  return items.sort((a, b) => rank[a.type] - rank[b.type]);
+}
+
+app.get("/api/inbox", (_req, res) => res.json(inboxItems()));
+
+app.post("/api/inbox/act", async (req, res) => {
+  const { pane: id, action } = req.body || {};
+  const info = id && registry.info(id);
+  if (!info || !action || typeof action !== "object") return res.status(400).json({ ok: false, reason: "bad request" });
+  const done = (ok, reason) => {
+    broadcastAll({ t: "inbox" });
+    res.status(ok ? 200 : 409).json({ ok, ...(reason ? { reason } : {}) });
+  };
+  const clear = () => {
+    registry.clearAttention(id);
+    broadcast(registry.sessionOf(id), { t: "cleared", pane: id });
+  };
+  const text = typeof action.text === "string" ? action.text.trim().slice(0, 20000) : "";
+  try {
+    switch (action.type) {
+      case "approve": {
+        if (info.kind !== "agent") return done(false, "not a chat pane");
+        const decision = ["allow", "deny", "always"].includes(action.decision) ? action.decision : "deny";
+        const ok = agents.approve(id, String(action.requestId), decision, text || undefined);
+        if (ok && action.mode && decision !== "deny") await agents.setMode(id, String(action.mode));
+        return done(ok, ok ? null : "That request was already answered.");
+      }
+      case "answer": {
+        if (info.kind !== "agent" || !action.answers || typeof action.answers !== "object") return done(false, "bad answer");
+        const ok = agents.answer(id, String(action.requestId), action.answers);
+        return done(ok, ok ? null : "That question was already answered.");
+      }
+      case "choose": {
+        // Re-read the screen and make sure it's still the prompt the card was
+        // built from — keys sent to a changed screen would answer something else.
+        const prompt = parsePrompt(ptys.screen(id));
+        const opt = prompt?.options[action.index];
+        if (!prompt || !opt || opt.label !== action.label || prompt.question !== action.question)
+          return done(false, "That prompt has changed — refresh and try again.");
+        ptys.sendKeys(id, { keys: keysFor(prompt, action.index) });
+        if (text) setTimeout(() => ptys.sendKeys(id, { text, keys: ["Enter"] }), 900); // "No" + what to do instead
+        clear();
+        return done(true);
+      }
+      case "reply": {
+        if (!text) return done(false, "empty reply");
+        if (info.kind === "agent") agents.sendMessage(id, text);
+        else ptys.sendKeys(id, { text, keys: ["Enter"] });
+        clear();
+        return done(true);
+      }
+      case "dismiss":
+        clear();
+        return done(true);
+      default:
+        return done(false, "unknown action");
+    }
+  } catch (e) {
+    return done(false, e.message);
+  }
+});
+
 // What this session has changed: the files it edited (from its transcript) as
 // they are on disk now vs HEAD, plus other uncommitted changes in the repo,
 // kept apart. Read-only; see changes.js.

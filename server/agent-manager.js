@@ -256,6 +256,20 @@ export class AgentManager {
       else pane.tasks.delete(ev.task.id);
     }
     else if (ev.t === "user" || (ev.t === "status" && ev.state === "working")) pane.suggestions = [];
+    // Fleet inbox: what this pane is waiting on, and what it last said.
+    let inboxChanged = false;
+    if (ev.t === "permission_request" || ev.t === "question") {
+      (pane.pending ||= new Map()).set(ev.requestId, ev);
+      inboxChanged = true;
+    } else if (ev.t === "permission_resolved" || ev.t === "question_resolved") {
+      inboxChanged = !!pane.pending?.delete(ev.requestId);
+    } else if (ev.t === "status" && (ev.state === "idle" || ev.state === "aborted" || ev.state === "error")) {
+      if (pane.pending?.size) pane.pending.clear(); // a finished turn can't still be asking
+      inboxChanged = true;
+    } else if (ev.t === "assistant_done" && ev.text) {
+      pane.lastReply = ev.text.slice(0, 600);
+    }
+    if (inboxChanged) this.broadcast(pane.session, { t: "inbox" });
     if (!LIVE_ONLY.has(ev.t)) {
       pane.events.push(ev);
       if (pane.events.length > RING_BUFFER_SIZE) pane.events.shift();
@@ -715,6 +729,13 @@ export class AgentManager {
 
   sdkSessionIdOf(id) {
     return this.panes.get(id)?.sdkSessionId || null;
+  }
+
+  /** Open approvals / questions, oldest first, plus the last reply — for the fleet inbox. */
+  inboxOf(id) {
+    const pane = this.panes.get(id);
+    if (!pane) return null;
+    return { pending: [...(pane.pending?.values() || [])], lastReply: pane.lastReply || "", status: pane.status };
   }
 
   info(id) {

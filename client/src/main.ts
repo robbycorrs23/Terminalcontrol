@@ -1,5 +1,6 @@
 import { openNewSession } from "./new-session";
 import { checkVersion } from "./version-check";
+import { initInbox, openInbox, closeInbox, inboxOpen, refreshInbox } from "./inbox";
 import { initPhoneNav, setPaneOpen, switchTo, closePaneSheet, updateSwitchers, addSwitcherButton, addTitleSubline } from "./phone-nav";
 // ONE usage ramp + reset formatter, shared with the chat panes' rings — if they
 // ever disagree, the same account reads green on a ring and amber here.
@@ -757,6 +758,7 @@ addEventListener("keydown", (e) => {
   else if (sshEditEl && !sshEditEl.hidden) sshEditEl.hidden = true;
   else if (sshManagerEl && !sshManagerEl.hidden) sshManagerEl.hidden = true;
   else if (settingsPanel.classList.contains("open")) closeSettings();
+  else if (inboxOpen()) closeInbox();
   else if (closeTasksIfOpen()) {
     /* closed the task sidebar */
   } else if (zoomed) unzoom();
@@ -785,6 +787,24 @@ function onVisualViewportChange() {
 // (can fire without a resize) — both need the zoomed rect recomputed.
 window.visualViewport?.addEventListener("resize", onVisualViewportChange);
 window.visualViewport?.addEventListener("scroll", onVisualViewportChange);
+
+// ---- Fleet inbox (inbox.ts) ----------------------------------------------------
+initInbox({
+  openPane: (id) => {
+    const t = panes.get(id);
+    if (!t) return;
+    closeInbox();
+    zoom(t);
+  },
+});
+document.getElementById("inboxBtn")!.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (inboxOpen()) closeInbox();
+  else {
+    closeSettings();
+    openInbox();
+  }
+});
 
 // ---- Phone: move between panes (phone-nav.ts) -------------------------------
 // The state stays here; phone-nav.ts reads it through these accessors.
@@ -986,6 +1006,13 @@ function renderQueue() {
     queueEl.append(chip);
   }
   nextBtn.hidden = queue.length === 0;
+  // The inbox badge: how many panes need you right now.
+  const ic = document.getElementById("inboxCount");
+  if (ic) {
+    ic.textContent = queue.length > 99 ? "99+" : String(queue.length);
+    ic.hidden = queue.length === 0;
+  }
+  refreshInbox();
   syncBarHeightVar();
 
   // Mirror the waiting state in the browser tab (title + favicon dot) so it's
@@ -1667,6 +1694,9 @@ function connectControl() {
         renderFollowups();
         break;
       }
+      case "inbox":
+        refreshInbox(); // an approval/question was opened or answered somewhere
+        break;
       case "attention":
         onAttention(m.pane, m.kind);
         break;

@@ -1,0 +1,315 @@
+/* Fleet inbox (inbox.ts): a drawer on desktop, a full-screen sheet on a phone. */
+#inboxBtn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+#inboxBtn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.inbox-count {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--waiting);
+  color: #000;
+  font: 700 10.5px/17px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  text-align: center;
+}
+.inbox-count[hidden] {
+  display: none;
+}
+.inbox {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 128;
+  width: min(460px, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+  box-shadow: -10px 0 30px rgba(0, 0, 0, 0.35);
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  animation: inbox-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.inbox[hidden] {
+  display: none;
+}
+body.light .inbox {
+  background: #f2f2f7;
+}
+@keyframes inbox-in {
+  from {
+    transform: translateX(30%);
+    opacity: 0.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .inbox {
+    animation: none;
+  }
+}
+.inbox-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(env(safe-area-inset-top) + 12px) 16px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.inbox-title {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text);
+}
+.inbox-done {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.inbox-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 12px max(20px, env(safe-area-inset-bottom));
+}
+.inbox-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 15px;
+}
+.inbox-sec-h {
+  margin: 14px 4px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.inbox-card {
+  margin-bottom: 10px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  font-size: 14px;
+  color: var(--text);
+  transition: opacity 0.2s;
+}
+body.light .inbox-card {
+  background: #fff;
+  border-color: #e5e5ea;
+}
+.inbox-card.busy {
+  opacity: 0.55;
+}
+.inbox-card.done-card {
+  opacity: 0.35;
+}
+.ic-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.ic-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--waiting);
+}
+.t-done .ic-dot {
+  background: var(--done);
+}
+.t-aborted .ic-dot {
+  background: var(--aborted);
+}
+.ic-who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ic-name {
+  font-weight: 600;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ic-where {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ic-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.ic-q {
+  margin: 4px 0 8px;
+  line-height: 1.4;
+}
+.ic-snippet {
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.ic-detail,
+.ic-preview pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  max-height: 200px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12px/1.45 ui-monospace, Menlo, monospace;
+}
+.ic-preview {
+  margin-bottom: 8px;
+}
+.ic-preview .diff-block pre.tool-diff {
+  margin: 0;
+  border: 0;
+  white-space: pre;
+}
+.ic-preview .plan-body {
+  max-height: 260px;
+  overflow: auto;
+}
+.ic-actions,
+.ic-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ic-options {
+  flex-direction: column;
+}
+.ib {
+  min-height: 36px;
+  padding: 0 14px;
+  background: var(--btn);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.ib.option {
+  text-align: left;
+  padding: 8px 12px;
+}
+.ib.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.ib.danger {
+  color: var(--aborted);
+}
+.ib.ghost {
+  background: none;
+  border-color: transparent;
+  color: var(--accent);
+  padding: 0 8px;
+}
+.ib:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ib-text {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ib-text[hidden] {
+  display: none;
+}
+.ib-text textarea {
+  flex: 1;
+  min-height: 40px;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+.ib-text textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.inbox-err {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--aborted);
+}
+.inbox-err[hidden] {
+  display: none;
+}
+/* The question card inside an inbox card: no second frame. */
+.inbox-card .question-card {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+@media (max-width: 640px) {
+  .inbox {
+    width: 100vw;
+    border-left: 0;
+    box-shadow: none;
+  }
+  .ib-text textarea {
+    font-size: 16px; /* no iOS focus-zoom */
+  }
+  #bar #inboxBtn {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+  }
+  #bar #inboxBtn .ico-svg {
+    width: 19px;
+    height: 19px;
+  }
+}
+/* Question cards outside a pane: the chat gives their buttons .term .ctl's
+   base (no border, inherited font, pointer); restate that here. */
+.inbox-card .q-opt,
+.inbox-card .q-submit {
+  border: none;
+  font: inherit;
+  cursor: pointer;
+}
+.inbox-card .q-opt:disabled {
+  cursor: default;
+}
