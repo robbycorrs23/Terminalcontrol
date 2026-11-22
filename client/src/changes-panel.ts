@@ -5,6 +5,7 @@
  *
  *   This session      files Claude edited here — current diff vs HEAD, or
  *                     "no changes now" if committed/reverted since
+ *   Ship              commit → push → PR, plus overlap warnings (ship-panel.ts)
  *   Other changes     uncommitted changes in the repo this session didn't
  *                     make (collapsed) — including anything edited through
  *                     shell commands, which a transcript can't attribute
@@ -13,6 +14,7 @@
  * textContent / chat-steps' renderers — nothing here touches innerHTML.
  */
 import { el, renderDiff, inputDiff } from "./chat-steps";
+import { renderShip } from "./ship-panel";
 
 type FileChange = {
   path: string;
@@ -136,6 +138,10 @@ export function openChanges(host: HTMLElement, paneId: string) {
     body.textContent = "";
     sub.textContent = "Loading…";
     refresh.disabled = true;
+    // Ship section first; it loads on its own (it asks gh about PRs, which can be slow).
+    const shipSlot = el("div", "ship-slot");
+    body.append(shipSlot);
+    void renderShip(shipSlot, paneId, () => void load());
     let data: Changes;
     try {
       const res = await fetch(`/api/panes/${paneId}/changes`);

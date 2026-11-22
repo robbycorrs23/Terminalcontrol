@@ -6,6 +6,9 @@
  *   Folder   — your recent folders, one tap (or "Browse…" for the full picker)
  *   Agent    — the accounts this machine offers, or a plain shell
  *   View     — Chat or Terminal (remembered between uses)
+ *   Branch   — "Own branch": a new git branch in its own worktree, so this
+ *              session can't trample another one on the same repo (only
+ *              offered when the folder is a git repo; remembered)
  *   Message  — optional; a chat session starts working on it immediately
  *
  * main.ts supplies the data and the actions; this module only builds the UI.
@@ -16,11 +19,14 @@ export type NewSessionDeps = {
   recents: () => Promise<string[]>;
   agents: { value: string; label: string; chat: boolean }[];
   browse: () => void;
-  create: (o: { cwd: string; agent: string; kind: "agent" | "pty"; prompt: string }) => Promise<boolean>;
+  gitInfo: (path: string) => Promise<{ repo?: boolean; root?: string; branch?: string; worktree?: boolean } | null>;
+  /** true = created; a string = the server's reason it couldn't be. */
+  create: (o: { cwd: string; agent: string; kind: "agent" | "pty"; prompt: string; worktree: boolean }) => Promise<boolean | string>;
 };
 
 const KIND_KEY = "fleet-new-kind";
 const AGENT_KEY = "fleet-new-agent";
+const BRANCH_KEY = "fleet-new-own-branch";
 
 function el(tag: string, cls: string, text?: string): HTMLElement {
   const n = document.createElement(tag);
@@ -55,6 +61,8 @@ export async function openNewSession(deps: NewSessionDeps) {
   let agent = localStorage.getItem(AGENT_KEY) || deps.agents[0]?.value || "";
   if (!deps.agents.some((a) => a.value === agent)) agent = deps.agents[0]?.value || "";
   let kind: "agent" | "pty" = localStorage.getItem(KIND_KEY) === "pty" ? "pty" : "agent";
+  let ownBranch = localStorage.getItem(BRANCH_KEY) === "1";
+  let repo: { root: string; branch: string } | null = null; // the chosen folder's git facts, if a repo
 
   // Header
   const head = el("div", "ns-head");
@@ -76,7 +84,14 @@ export async function openNewSession(deps: NewSessionDeps) {
   const selectFolder = (path: string) => {
     cwd = path;
     folders.querySelectorAll(".ns-folder").forEach((r) => r.classList.toggle("on", (r as HTMLElement).dataset.path === path));
+    repo = null;
     sync();
+    void deps.gitInfo(path).then((g) => {
+      if (cwd !== path) return;
+      // Already inside a worktree: it IS its own branch — don't nest another.
+      repo = g && g.repo !== false && g.root && !g.worktree ? { root: g.root, branch: g.branch || "" } : null;
+      sync();
+    });
   };
   for (const path of recents) {
     const row = el("button", "ns-folder") as HTMLButtonElement;
@@ -133,7 +148,19 @@ export async function openNewSession(deps: NewSessionDeps) {
     () => kind,
     (v) => (kind = v === "pty" ? "pty" : "agent")
   );
-  settingsCard.append(agentRow, kindRow);
+  const branchRow = seg(
+    "Branch",
+    [
+      { v: "shared", t: "Current" },
+      { v: "own", t: "Own branch" },
+    ],
+    () => (ownBranch ? "own" : "shared"),
+    (v) => (ownBranch = v === "own")
+  );
+  const branchNote = el("div", "ns-note");
+  settingsCard.append(agentRow, kindRow, branchRow, branchNote);
+  const err = el("div", "ns-err");
+  err.hidden = true;
 
   // First message (chat only)
   const msgLabel = el("div", "ns-label", "First message");
@@ -147,7 +174,7 @@ export async function openNewSession(deps: NewSessionDeps) {
       start.click();
     }
   });
-  body.append(msgLabel, msg);
+  body.append(msgLabel, msg, err);
 
   function sync() {
     const a = deps.agents.find((x) => x.value === agent);
@@ -158,6 +185,15 @@ export async function openNewSession(deps: NewSessionDeps) {
       b.classList.toggle("on", b.dataset.v === kind);
       (b as HTMLButtonElement).disabled = b.dataset.v === "agent" && !chatOk;
     });
+    branchRow.hidden = !repo;
+    branchNote.hidden = !repo;
+    branchRow.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === (ownBranch ? "own" : "shared")));
+    if (repo) {
+      const name = repo.root.split("/").pop();
+      branchNote.textContent = ownBranch
+        ? `A new branch of ${name} from ${repo.branch}, in its own folder — other sessions can't touch its files. .env files are copied in.`
+        : `Works directly in ${name} on ${repo.branch}, alongside any other session there.`;
+    }
     const showMsg = kind === "agent";
     msgLabel.hidden = !showMsg;
     msg.hidden = !showMsg;
@@ -171,11 +207,17 @@ export async function openNewSession(deps: NewSessionDeps) {
     start.disabled = true;
     localStorage.setItem(KIND_KEY, kind);
     localStorage.setItem(AGENT_KEY, agent);
-    const ok = await deps.create({ cwd, agent, kind, prompt: kind === "agent" ? msg.value.trim() : "" });
-    if (ok) closeNewSession();
+    if (repo) localStorage.setItem(BRANCH_KEY, ownBranch ? "1" : "0");
+    err.hidden = true;
+    const ok = await deps.create({ cwd, agent, kind, prompt: kind === "agent" ? msg.value.trim() : "", worktree: !!repo && ownBranch });
+    if (ok === true) closeNewSession();
     else {
       start.disabled = false;
       start.textContent = "Try again";
+      if (typeof ok === "string") {
+        err.textContent = ok;
+        err.hidden = false;
+      }
     }
   });
 

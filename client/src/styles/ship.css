@@ -1,0 +1,288 @@
+/* Branches & shipping: title-bar git chips (git-status.ts), the Ship section
+   of the Changes panel (ship-panel.ts), "Own branch" in the pickers. */
+
+/* ---- Title-bar chips ---- */
+.term .title .git-slot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.term .title .git-slot:empty {
+  display: none;
+}
+.term .git-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 160px;
+  height: 18px; /* under the name's line box, so a chip never makes a title bar taller */
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.term .git-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.term .git-chip .ico-svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.term .git-chip.own {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+/* Overlap = a heads-up, not "needs you": the usage warn hue, never --waiting. */
+.term .git-chip.overlap {
+  color: var(--use-warn);
+  border-color: color-mix(in srgb, var(--use-warn) 50%, transparent);
+  cursor: help;
+}
+@media (max-width: 640px) {
+  /* The phone nav bar carries the branch in its subline instead. */
+  .term.zoomed > .title .git-slot {
+    display: none;
+  }
+  .term:not(.zoomed) .git-chip.own span {
+    max-width: 90px;
+  }
+}
+
+/* ---- Pickers ---- */
+.ownbranch[hidden],
+.ns-row[hidden],
+.ns-note[hidden],
+.ns-err[hidden] {
+  display: none;
+}
+.ns-note {
+  padding: 0 14px 12px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+.ns-card > .ns-note {
+  border-top: 0 !important;
+}
+.ns-err {
+  margin: 10px 4px 0;
+  font-size: 14px;
+  color: var(--use-crit);
+}
+
+/* ---- Ship section (Changes panel) ---- */
+.term .ship-card {
+  margin: 10px 0 4px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.term .ship-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.term .ship-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font: 600 14px ui-monospace, Menlo, monospace;
+  color: var(--text);
+}
+.term .ship-branch .ico-svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--text-dim);
+}
+.term .ship-branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.term .ship-tag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.term .ship-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.term .ship-meta:empty {
+  display: none;
+}
+.term .ship-pr {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+.term .ship-pr:hover {
+  text-decoration: underline;
+}
+.term .ship-overlap {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--use-warn) 12%, transparent);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+}
+.term .ship-overlap > .ico-svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  color: var(--use-warn);
+}
+.term .ship-overlap-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.term .ship-actions,
+.term .ship-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.term .ship-form-actions {
+  justify-content: flex-end;
+}
+.term .ship-btn {
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--btn);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.term .ship-btn:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+.term .ship-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.term .ship-btn.ghost {
+  background: transparent;
+}
+.term .ship-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.term .ship-form {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.term .ship-form[hidden] {
+  display: none;
+}
+.term .ship-files {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+.term .ship-files-h {
+  margin: 6px 0 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.term .ship-file,
+.term .ship-newbranch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  font-size: 13.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.term .ship-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12.5px;
+}
+.term .ship-input,
+.term .ship-text {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--term-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+}
+.term .ship-input {
+  font-family: ui-monospace, Menlo, monospace;
+}
+.term .ship-text {
+  resize: vertical;
+  line-height: 1.4;
+}
+.term .ship-input:focus,
+.term .ship-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.term .ship-msg {
+  margin-top: 10px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  color: var(--text-dim);
+}
+.term .ship-msg[hidden] {
+  display: none;
+}
+.term .ship-msg.ok {
+  color: var(--use-ok);
+}
+.term .ship-msg.err {
+  color: var(--use-crit);
+}
+@media (max-width: 640px) {
+  .term .ship-btn {
+    min-height: 40px;
+    font-size: 15px;
+  }
+  .term .ship-input,
+  .term .ship-text {
+    font-size: 16px; /* iOS zooms on focus below 16px */
+  }
+}

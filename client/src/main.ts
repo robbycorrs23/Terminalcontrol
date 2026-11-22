@@ -1,4 +1,5 @@
 import { openNewSession } from "./new-session";
+import { initGitStatus, decorateGit, scheduleGitRefresh } from "./git-status";
 import { checkVersion } from "./version-check";
 import { initInbox, openInbox, closeInbox, inboxOpen, refreshInbox } from "./inbox";
 import { initPhoneNav, setPaneOpen, switchTo, closePaneSheet, updateSwitchers, addSwitcherButton, addTitleSubline } from "./phone-nav";
@@ -223,6 +224,7 @@ function addTerm(info: PaneInfo, at?: number): PaneView {
   enableDrag(t);
   addSwitcherButton(t);
   addTitleSubline(t);
+  decorateGit(t);
   t.setUsage(usageFor(t)); // a box created after the last usage broadcast
   reflow();
   if (info.attention?.waiting) enqueue(info.id, info.attention.kind || "question");
@@ -789,6 +791,7 @@ window.visualViewport?.addEventListener("resize", onVisualViewportChange);
 window.visualViewport?.addEventListener("scroll", onVisualViewportChange);
 
 // ---- Fleet inbox (inbox.ts) ----------------------------------------------------
+initGitStatus(() => panes.values());
 initInbox({
   openPane: (id) => {
     const t = panes.get(id);
@@ -1220,8 +1223,37 @@ function updateSshRunRow() {
 }
 agentSelect.addEventListener("change", updateSshRunRow);
 
+const ownBranchEl = document.getElementById("ownBranch") as HTMLInputElement;
+const ownBranchRow = document.getElementById("ownBranchRow") as HTMLElement;
+let ownBranchFor = ""; // the folder the checkbox's availability was computed for
+/** "Own branch" is only offered in a git repo, and never over SSH. */
+async function updateOwnBranch() {
+  const path = pickPath || "";
+  const ssh = isSshValue(agentSelect.value);
+  if (ssh) {
+    ownBranchRow.hidden = true;
+    return;
+  }
+  if (path === ownBranchFor) {
+    ownBranchRow.hidden = ownBranchEl.disabled;
+    return;
+  }
+  ownBranchFor = path;
+  const info = path ? await fetch("/api/git-info?path=" + encodeURIComponent(path)).then((r) => (r.ok ? r.json() : null)).catch(() => null) : null;
+  if (path !== ownBranchFor) return; // navigated on meanwhile
+  const repo = !!info && info.repo !== false && !!info.root;
+  ownBranchEl.disabled = !repo;
+  if (!repo) ownBranchEl.checked = false;
+  ownBranchRow.hidden = !repo;
+  ownBranchRow.title = repo
+    ? `Start on a new branch of ${info.root.split("/").pop()} (from ${info.branch}), in a separate worktree — parallel sessions never touch each other's files. .env files are copied in; node_modules isn't.`
+    : "";
+}
+agentSelect.addEventListener("change", () => void updateOwnBranch());
+
 async function openPicker() {
   picker.hidden = false;
+  ownBranchEl.checked = false;
   chatViewWanted = false;
   updateChatViewAvailability();
   updateSshRunRow();
@@ -1251,6 +1283,7 @@ async function navigate(path: string | null) {
   renderCrumbs();
   renderList();
   updateStar();
+  void updateOwnBranch();
 }
 
 function renderCrumbs() {
@@ -1388,16 +1421,21 @@ function choose(path: string) {
   }
   // Everything else (local agent/shell, or SSH terminal-view with or without
   // an agent running there) keeps the existing typed-shell-command path.
-  openTermAt(path, resolveCmd(agentSelect.value), wantsChat ? "agent" : "pty");
+  const worktree = !ssh && !ownBranchEl.disabled && ownBranchEl.checked && path === ownBranchFor;
+  openTermAt(path, resolveCmd(agentSelect.value), wantsChat ? "agent" : "pty", undefined, worktree);
   closePicker();
 }
 type RemoteTarget = { target: string; port?: number; identityFile?: string };
-async function openTermAt(cwd: string, cmd: string, kind: "pty" | "agent" = "pty", remote?: RemoteTarget) {
-  await fetch("/api/panes", {
+async function openTermAt(cwd: string, cmd: string, kind: "pty" | "agent" = "pty", remote?: RemoteTarget, worktree = false) {
+  const res = await fetch("/api/panes", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ cwd, cmd, session: SESSION, kind, ...(remote ? { remote } : {}) }),
-  });
+    body: JSON.stringify({ cwd, cmd, session: SESSION, kind, ...(remote ? { remote } : {}), ...(worktree ? { worktree: true } : {}) }),
+  }).catch(() => null);
+  if (worktree && res && !res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || "Couldn't create a branch for that session.");
+  }
 }
 // The structured counterpart of resolveCmd's sshprofile:/sshhost: branching,
 // for the remote-CHAT-VIEW path above — a target descriptor instead of a
@@ -1510,14 +1548,21 @@ document.getElementById("addBtn")!.addEventListener("click", () => {
     recents: () => fetch("/api/recents").then((r) => r.json()),
     agents: newSessionAgents(),
     browse: () => void openPicker(),
-    create: async ({ cwd, agent, kind, prompt }) => {
+    gitInfo: (path) =>
+      fetch("/api/git-info?path=" + encodeURIComponent(path))
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+    create: async ({ cwd, agent, kind, prompt, worktree }) => {
       try {
         const res = await fetch("/api/panes", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ cwd, cmd: resolveCmd(agent), session: SESSION, kind, prompt }),
+          body: JSON.stringify({ cwd, cmd: resolveCmd(agent), session: SESSION, kind, prompt, ...(worktree ? { worktree: true } : {}) }),
         });
-        if (!res.ok) return false;
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          return data.error || false;
+        }
         const info = (await res.json()) as PaneInfo;
         // The `created` broadcast adds the box; open it the moment it exists.
         for (let i = 0; i < 40 && !panes.get(info.id); i++) await new Promise((r) => setTimeout(r, 50));
@@ -1646,10 +1691,12 @@ function connectControl() {
         vacated = null;
         const at = slot !== null && slot.id === m.replaces ? slot.at : undefined;
         addTerm(m.pane, at);
+        scheduleGitRefresh();
         break;
       }
       case "closed":
         removeTerm(m.pane);
+        scheduleGitRefresh();
         break;
       case "dormant":
         for (const info of m.dormant as DormantInfo[]) markDormant(info);
@@ -1702,6 +1749,7 @@ function connectControl() {
         break;
       case "work":
         panes.get(m.pane)?.setBusy(m.on);
+        if (!m.on) scheduleGitRefresh(1500); // a turn ended — new edits may now overlap
         break;
       case "cleared":
         setCleared(m.pane);

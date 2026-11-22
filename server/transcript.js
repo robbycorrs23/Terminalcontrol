@@ -181,9 +181,12 @@ export function olderEvents(configDir, sdkSessionId, anchors, limit = 150) {
   return { events: all.slice(start, end), more: start > 0 };
 }
 
-// Paging re-reads the whole transcript (tens of MB for a long session) once
-// per page, so keep the last parse until the file changes.
-let cache = null;
+// Paging, the Changes panel and conflict detection all re-read whole
+// transcripts (tens of MB for a long session), so keep recent parses until
+// each file changes. Small LRU: conflict detection touches every pane's
+// transcript in one pass, which a single-entry cache would thrash.
+const cache = new Map(); // file -> { size, mtime, events }
+const CACHE_MAX = 32;
 function parsedAll(file) {
   let st;
   try {
@@ -191,9 +194,16 @@ function parsedAll(file) {
   } catch {
     return [];
   }
-  if (cache && cache.file === file && cache.size === st.size && cache.mtime === st.mtimeMs) return cache.events;
+  const hit = cache.get(file);
+  if (hit && hit.size === st.size && hit.mtime === st.mtimeMs) {
+    cache.delete(file); // refresh recency
+    cache.set(file, hit);
+    return hit.events;
+  }
   const events = eventsFromTranscript(file, Infinity).filter((e) => e.t !== "status");
-  cache = { file, size: st.size, mtime: st.mtimeMs, events };
+  cache.delete(file);
+  cache.set(file, { size: st.size, mtime: st.mtimeMs, events });
+  while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
   return events;
 }
 

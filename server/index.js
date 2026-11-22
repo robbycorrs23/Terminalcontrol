@@ -31,6 +31,9 @@ import { listDirs, makeDir } from "./fs-browse.js";
 import { generateTitle } from "./auto-title.js";
 import { sessionChanges } from "./changes.js";
 import { parsePrompt, keysFor } from "./term-prompt.js";
+import { createWorktree, finishWorktree, gitInfo } from "./worktrees.js";
+import { shipStatus, draftCommit, commit, push, draftPr, openPr, overlaps } from "./ship.js";
+import { trustFolder, isTrusted } from "./claude-trust.js";
 import { preflight } from "../scripts/preflight.js";
 import { ensureDeps, ensureFreshBuild, serverVersion, bundleVersion } from "./self-check.js";
 
@@ -333,11 +336,27 @@ app.delete("/api/dormant/:id", (req, res) => {
   res.status(204).end();
 });
 
-app.post("/api/panes", (req, res) => {
+app.post("/api/panes", async (req, res) => {
   // `remote` is only meaningful for kind:"agent" (a chat-view session
   // running claude/codex over ssh — see ssh-remote-agent.js); PtyManager.create
   // ignores the extra field harmlessly for kind:"pty".
-  const { cwd, cmd, session, kind, remote } = req.body || {};
+  let { cwd, cmd, session, kind, remote } = req.body || {};
+  // "Own branch": a git worktree on fleet/<slug>, so parallel sessions on one
+  // repo don't trample each other (worktrees.js). The session simply runs in
+  // the worktree's folder — everything else (resume, flip, Changes) follows.
+  let worktree = null;
+  if (req.body?.worktree && !remote) {
+    try {
+      worktree = await createWorktree(String(cwd || "").replace(/^~/, homedir()), req.body.prompt || req.body.name || "");
+      cwd = worktree.path;
+      // A terminal claude would stop on "trust this folder?" in the new path.
+      // Inherit trust from the repo it came from — never grant it fresh.
+      const profile = String(cmd || "").trim().split(/\s+/)[0];
+      if (profile.startsWith("claude") && isTrusted(profile, worktree.root)) trustFolder(profile, worktree.path);
+    } catch (e) {
+      return res.status(400).json({ error: `Couldn't create a branch: ${String(e.stderr || e.message).split("\n")[0]}` });
+    }
+  }
   let pane;
   try {
     pane = registry.create({ cwd, cmd, session, kind, remote });
@@ -352,7 +371,8 @@ app.post("/api/panes", (req, res) => {
   // it straight away, so you land in a conversation that's already started.
   const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
   if (prompt && info.kind === "agent") agents.sendMessage(pane.id, prompt.slice(0, 20000));
-  res.json(info);
+  if (worktree) panesGitCache.data = null; // a new branch chip to show
+  res.json(worktree ? { ...info, worktree: { branch: worktree.branch, base: worktree.base, envCopied: worktree.envCopied } } : info);
 });
 
 // ---- Session titles ----------------------------------------------------------
@@ -792,6 +812,110 @@ app.post("/api/inbox/act", async (req, res) => {
     }
   } catch (e) {
     return done(false, e.message);
+  }
+});
+
+// ---- Branches & shipping (worktrees.js / ship.js) -----------------------------
+/** What ship/git routes need to know about a pane. */
+function paneCtx(id) {
+  const info = registry.info(id);
+  if (!info) return null;
+  const profile = String(info.cmd || "").trim().split(/\s+/)[0];
+  const env = { ...process.env, ...(profile.endsWith("-work") ? { CLAUDE_CONFIG_DIR: workConfigDir } : {}) };
+  delete env.ANTHROPIC_API_KEY;
+  delete env.FLEET_PANE_ID;
+  return {
+    info,
+    cwd: info.cwd,
+    remote: !!info.remote,
+    configDir: profile.endsWith("-work") ? workConfigDir : join(homedir(), ".claude"),
+    sdkSessionId: info.kind === "agent" ? agents.sdkSessionIdOf(id) : ptys.sdkSessionIdOf(id),
+    env,
+  };
+}
+
+// Is this folder a git repo (and on what branch)? — the new-session sheet asks
+// before offering "Own branch".
+app.get("/api/git-info", async (req, res) => {
+  const path = String(req.query.path || "").replace(/^~/, homedir());
+  res.json((path && (await gitInfo(path).catch(() => null))) || { repo: false });
+});
+
+// Branch chips: every pane's branch / worktree, derived from its folder.
+let panesGitCache = { at: 0, data: null };
+app.get("/api/panes-git", async (_req, res) => {
+  if (panesGitCache.data && Date.now() - panesGitCache.at < 10000) return res.json(panesGitCache.data);
+  const out = {};
+  await Promise.all(
+    registry.list().map(async (p) => {
+      if (p.remote) return;
+      const g = await gitInfo(p.cwd).catch(() => null);
+      if (g) out[p.id] = { branch: g.branch, worktree: g.worktree, base: g.base };
+    })
+  );
+  panesGitCache = { at: Date.now(), data: out };
+  res.json(out);
+});
+
+// Sessions that edited the same file in the same repo.
+app.get("/api/overlaps", async (_req, res) => {
+  const panes = registry
+    .list()
+    .map((p) => paneCtx(p.id))
+    .filter(Boolean)
+    .map((c) => ({ id: c.info.id, name: c.info.name || basename(c.cwd), cwd: c.cwd, remote: c.remote, configDir: c.configDir, sdkSessionId: c.sdkSessionId }));
+  res.json(await overlaps(panes).catch(() => ({})));
+});
+
+app.get("/api/panes/:id/ship", async (req, res) => {
+  const ctx = paneCtx(req.params.id);
+  if (!ctx) return res.status(404).json({ error: "no such pane" });
+  if (ctx.remote) return res.json({ repo: false, note: "This session runs on another machine." });
+  try {
+    res.json(await shipStatus(ctx));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/panes/:id/ship", async (req, res) => {
+  const id = req.params.id;
+  const ctx = paneCtx(id);
+  if (!ctx) return res.status(404).json({ ok: false, reason: "no such pane" });
+  if (ctx.remote) return res.status(400).json({ ok: false, reason: "This session runs on another machine." });
+  const b = req.body || {};
+  try {
+    switch (b.action) {
+      case "draft-commit":
+        return res.json(await draftCommit(ctx, Array.isArray(b.files) ? b.files : []));
+      case "commit":
+        return res.json(await commit(ctx, { files: b.files, message: b.message, newBranch: b.newBranch || null }));
+      case "push":
+        return res.json(await push(ctx));
+      case "draft-pr":
+        return res.json(await draftPr(ctx));
+      case "pr":
+        return res.json(await openPr(ctx, { title: b.title, body: b.body }));
+      case "finish": {
+        // The deliberate cleanup step for an own-branch session: remove the
+        // worktree (refused if anything is uncommitted), delete the branch if
+        // it's merged (kept otherwise), and close the session that lived there.
+        if (ctx.info.working) return res.json({ ok: false, reason: "Wait for the session to finish its turn." });
+        const r = await finishWorktree(ctx.cwd);
+        if (r.ok) {
+          const session = registry.sessionOf(id);
+          secrets.releaseAllForPane(id);
+          registry.kill(id);
+          broadcast(session, { t: "closed", pane: id });
+          panesGitCache.data = null;
+        }
+        return res.json(r);
+      }
+      default:
+        return res.status(400).json({ ok: false, reason: "unknown action" });
+    }
+  } catch (e) {
+    res.status(500).json({ ok: false, reason: e.message });
   }
 });
 
