@@ -38,6 +38,7 @@ import { trustFolder, isTrusted } from "./claude-trust.js";
 import { preflight } from "../scripts/preflight.js";
 import { ensureDeps, ensureFreshBuild, serverVersion, bundleVersion } from "./self-check.js";
 import { startAutoUpdate } from "./auto-update.js";
+import { createSummaries } from "./summary.js";
 
 // Check for tmux / curl / claude / codex FIRST, so any missing-dependency warning is the
 // most prominent thing the user sees — not buried under later startup logs.
@@ -78,6 +79,13 @@ ensureCodexHooks(PORT);
 const codexWorkConfigDir = join(homedir(), ".codex-work");
 if (existsSync(codexWorkConfigDir)) ensureCodexHooks(PORT, codexWorkConfigDir);
 
+// "What did that session just do?" — one digest per finished turn (server/summary.js).
+// Created BEFORE the managers: they can broadcast during construction, and
+// broadcast() uses this. Its callbacks only resolve agents/paneCtx when called.
+const summaries = createSummaries({
+  ctxOf: (id) => paneCtx(id),
+  fallbackReply: (id) => agents.inboxOf?.(id)?.lastReply || "",
+});
 const ptys = new PtyManager(PORT, join(ROOT, "sessions.json"));
 // SDK-driven "chat" panes (see the plan) — `broadcast` is a hoisted function
 // declaration (defined further down), safe to pass here since AgentManager
@@ -169,6 +177,11 @@ function broadcast(session, msg) {
   // Fire-and-forget — never await, this function is hot for `work` events on a
   // pane streaming megabytes.
   if (msg && msg.t === "attention") {
+    // A turn ended: start its summary now (server/summary.js) — the "finished"
+    // push waits briefly for it, and the inbox refreshes when it lands.
+    if (msg.kind === "done" || msg.kind === "aborted") {
+      summaries.ensure(msg.pane, () => broadcastAll({ t: "inbox" }));
+    }
     try {
       pushes?.onAttention(msg.pane, msg.kind, session);
     } catch (e) {
@@ -221,6 +234,7 @@ function scheduleSecretRelease(session) {
 
 // Web Push fan-out, now that broadcast() and the stores all exist.
 pushes = createPushNotifier({
+  summarize: (id) => summaries.summarize(id),
   registry,
   prefs: () => layouts.prefs(),
   store: pushStore,
@@ -771,13 +785,18 @@ function inboxItems() {
     if (info.kind === "agent") {
       const box = agents.inboxOf(info.id);
       for (const ev of box?.pending || []) items.push({ ...base, type: ev.t === "question" ? "question" : "permission", ev });
-      if (!box?.pending?.length && att.waiting && att.kind !== "question")
-        items.push({ ...base, type: att.kind === "aborted" ? "aborted" : "done", lastReply: box?.lastReply || "" });
+      if (!box?.pending?.length && att.waiting && att.kind !== "question") {
+        summaries.ensure(info.id, () => broadcastAll({ t: "inbox" }));
+        items.push({ ...base, type: att.kind === "aborted" ? "aborted" : "done", lastReply: box?.lastReply || "", summary: summaries.peek(info.id) });
+      }
     } else if (att.waiting) {
       if (att.kind === "question") {
         const prompt = parsePrompt(ptys.screen(info.id));
         items.push(prompt ? { ...base, type: "term-prompt", prompt } : { ...base, type: "term-waiting" });
-      } else items.push({ ...base, type: att.kind === "aborted" ? "aborted" : "done" });
+      } else {
+        summaries.ensure(info.id, () => broadcastAll({ t: "inbox" }));
+        items.push({ ...base, type: att.kind === "aborted" ? "aborted" : "done", summary: summaries.peek(info.id) });
+      }
     }
   }
   const rank = { permission: 0, question: 0, "term-prompt": 0, "term-waiting": 1, aborted: 2, done: 3 };

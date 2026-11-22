@@ -39,6 +39,8 @@ type Item = {
   ev?: PermissionEv | QuestionEv;
   prompt?: TermPrompt;
   lastReply?: string;
+  /** server/summary.js — what the finished turn did. Arrives a few seconds after the turn ends. */
+  summary?: { headline: string; changed: string[]; needsYou: string | null } | null;
 };
 
 type LocalPane = { id: string; name: string; cwd: string };
@@ -375,7 +377,26 @@ function card(it: Item): HTMLElement {
   status.textContent =
     it.type === "term-waiting" ? "Waiting for your reply" : it.type === "aborted" ? "Cut off before finishing" : "Finished";
   body.append(status);
-  const said = it.lastReply ? snippet(it.lastReply) : it.lastInput ? `You: ${snippet(it.lastInput, 140)}` : "";
+  const sum = it.type !== "term-waiting" ? it.summary : null;
+  if (sum) {
+    // The digest: what it did, what it touched, and anything it needs from you.
+    const h = el("div", "ic-summary");
+    h.textContent = sum.headline;
+    body.append(h);
+    if (sum.changed?.length) {
+      const c = el("div", "ic-changed");
+      const shown = sum.changed.slice(0, 3).map((f) => f.split("/").pop()).join(", ");
+      c.textContent = `Changed ${shown}${sum.changed.length > 3 ? ` +${sum.changed.length - 3} more` : ""}`;
+      c.title = sum.changed.join("\n");
+      body.append(c);
+    }
+    if (sum.needsYou) {
+      const n = el("div", "ic-needs");
+      n.textContent = `Needs you: ${sum.needsYou}`;
+      body.append(n);
+    }
+  }
+  const said = sum ? "" : it.lastReply ? snippet(it.lastReply) : it.lastInput ? `You: ${snippet(it.lastInput, 140)}` : "";
   if (said) {
     const s = el("div", "ic-snippet");
     s.textContent = said;

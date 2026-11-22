@@ -33,6 +33,7 @@ export interface Settings {
    *  follow you across devices like every other setting here. */
   pushQuestion: boolean;
   pushDone: boolean;
+  pushSummary: boolean;
   confirmClose: boolean;
   /** Name new sessions from their first message (server/auto-title.js). */
   autoTitle: boolean;
@@ -47,6 +48,7 @@ const DEFAULTS: Settings = {
   notify: false,
   pushQuestion: true,
   pushDone: false,
+  pushSummary: true,
   confirmClose: false,
   autoTitle: true,
 };
@@ -71,6 +73,7 @@ function coerce(raw: any): Settings {
     // everyone who upgrades. Any default-true field needs this form.
     pushQuestion: r.pushQuestion === undefined ? DEFAULTS.pushQuestion : !!r.pushQuestion,
     pushDone: r.pushDone === undefined ? DEFAULTS.pushDone : !!r.pushDone,
+    pushSummary: r.pushSummary === undefined ? DEFAULTS.pushSummary : !!r.pushSummary,
     confirmClose: !!r.confirmClose,
     // Default-true: needs the `=== undefined` form (see pushQuestion above).
     autoTitle: r.autoTitle === undefined ? DEFAULTS.autoTitle : !!r.autoTitle,

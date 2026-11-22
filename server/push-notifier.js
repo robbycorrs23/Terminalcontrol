@@ -53,7 +53,7 @@ function textFor(name, kind) {
  * @param {import("./push-store.js").PushStore} deps.store
  * @param {(row: object, body: string, opts?: object) => Promise<any>} deps.send
  */
-export function createPushNotifier({ registry, prefs, store, send, apns = null, apnsDevices = null }) {
+export function createPushNotifier({ registry, prefs, store, send, apns = null, apnsDevices = null, summarize = null }) {
   const lastSent = new Map(); // `${paneId}:${kind}` -> timestamp
 
   function allowed(kind) {
@@ -95,9 +95,21 @@ export function createPushNotifier({ registry, prefs, store, send, apns = null, 
     const name = label(info);
     const { title, body } = textFor(name, kind);
     const count = waitingCount();
+    const p = prefs() || {};
 
-    void fanOut({ paneId, kind, name, title, body, count, session });
-    if (appDevices) void fanOutApp({ paneId, kind, title, body, count });
+    void (async () => {
+      let text = body;
+      // "Finished": say WHAT it did (server/summary.js) — waits a few seconds
+      // at most, then falls back to the plain text. "Needs you" never waits.
+      // Off via the pushSummary pref: a summary puts what the session did on
+      // the lock screen, and APNs payloads (unlike Web Push) are readable by Apple.
+      if (kind !== "question" && summarize && p.pushSummary !== false) {
+        const s = await Promise.race([summarize(paneId).catch(() => null), new Promise((r) => setTimeout(() => r(null), 8000))]);
+        if (s?.headline) text = s.needsYou ? `${s.headline} — Needs you: ${s.needsYou}` : s.headline;
+      }
+      void fanOut({ paneId, kind, name, title, body: text, count, session });
+      if (appDevices) void fanOutApp({ paneId, kind, title, body: text, count });
+    })();
   }
 
   /** The iOS app (server/apns.js). Same text and the same rules as Web Push. */

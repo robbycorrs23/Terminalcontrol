@@ -82,6 +82,7 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
 | `client/src/new-session.ts` / `server/auto-title.js` | phone new-session sheet / auto session titles |
 | `client/src/changes-panel.ts` / `server/changes.js` | per-session Changes panel (transcript-attributed files × git diff) |
 | `client/src/rewind-editor.ts` | edit-and-resend editor (rewind logic lives in agent-manager.js) |
+| `server/summary.js` | session summaries: one digest per finished turn (headline / changed / needs you) for pushes + the inbox |
 | `client/src/review.ts` | review mode: commentable numbered diffs in the Changes panel → one review message |
 | `server/self-check.js` | startup: fix deps vs lockfile, rebuild a stale bundle, version info |
 | `client/src/chat-question.ts` / `chat-tasks.ts` / `chat-queue.ts` / `chat-attachments.ts` | chat pane components: AskUserQuestion card / background-task tray / queued messages / composer attachments |
@@ -289,9 +290,13 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
      testing it, and the manifest must stay in `gate.js`'s `PUBLIC_PWA` allowlist
      *and* carry `crossorigin="use-credentials"` — browsers fetch a manifest with
      credentials omitted, so a gated manifest makes the app un-installable.
-  Notification text is pane name + kind only: no cwd path, command, or prompt
-  text reaches a lock screen. Payloads are RFC 8291 encrypted, so the push
-  service relays ciphertext it can't read.
+  Notification text is pane name + kind, plus — for "finished" pushes only, and
+  only while the `pushSummary` pref is on (default on; Settings → Notifications
+  "Say what it did") — the one-line session summary below. No cwd path,
+  command, or prompt text otherwise. Web Push payloads are RFC 8291 encrypted,
+  so the push service relays ciphertext it can't read; APNs payloads (the iOS
+  app) are NOT end-to-end encrypted — Apple can read them — which is why the
+  summary has an off switch.
 - **Per-machine identity** (`server/identity.js`): name + Home Screen icon,
   because one-workspace-per-machine means several installs coexist and
   identical tiles full of real shells are a hazard. The icon is a SYMBOL
@@ -530,6 +535,17 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   code reads them) but hidden by CSS; `#barChips` only shows for the two
   transient notices (`#updateNote`, `#viewNote`). Dormant panes must stay
   visible somewhere — that's what the badge dot is for.
+- **Session summaries** (`server/summary.js`). When a turn ends (`done` /
+  `aborted` attention, seen in `broadcast()`), its LAST turn — everything after
+  the last user message in the session's transcript, so chat AND terminal panes
+  — becomes `{headline, changed, needsYou}` via one `oneShot()` Haiku call (JSON
+  out, plain-text heuristic fallback). Cached per pane, keyed on the transcript's
+  size+mtime: the notifier (`summarize`) and the inbox (`peek`/`ensure`) share
+  one call per turn. `ensure()` never re-fires for a turn it already tried — the
+  inbox calls it on every listing and a null result must not loop into
+  refreshes. The notifier waits ≤8s for it on "finished" pushes only (needs-you
+  never waits). `summaries` is created BEFORE the pane managers because they
+  can broadcast during construction. Measured 1.5–2.6s on real sessions.
 - **Parallel-safe sessions** (`server/worktrees.js`, `server/ship.js`,
   `git-status.ts`, `ship-panel.ts`). "Own branch" (new-session sheet's Branch
   row, the picker's checkbox → `POST /api/panes {worktree:true}`) runs `git

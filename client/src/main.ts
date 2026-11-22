@@ -2393,6 +2393,7 @@ const pushNote = document.getElementById("pushNote")!;
 const pushCats = document.getElementById("pushCats")!;
 const pushQuestionEl = document.getElementById("setPushQuestion") as HTMLInputElement;
 const pushDoneEl = document.getElementById("setPushDone") as HTMLInputElement;
+const pushSummaryEl = document.getElementById("setPushSummary") as HTMLInputElement;
 
 /** Mark the selected button in a segmented control. */
 function seg(id: string, value: string) {
@@ -2437,6 +2438,8 @@ function applySettings() {
   autoTitleEl.checked = s.autoTitle;
   pushQuestionEl.checked = s.pushQuestion;
   pushDoneEl.checked = s.pushDone;
+  pushSummaryEl.checked = s.pushSummary;
+  pushSummaryEl.disabled = !s.pushDone; // only meaningful when "finished" pushes are on
   // The device switch is NOT a pref — it reflects whether this device actually
   // holds a push subscription, which only push.ts knows.
   pushDeviceEl.checked = pushActive();
@@ -2526,6 +2529,10 @@ pushQuestionEl.addEventListener("change", () => {
 });
 pushDoneEl.addEventListener("change", () => {
   patchSettings({ pushDone: pushDoneEl.checked });
+  applySettings();
+});
+pushSummaryEl.addEventListener("change", () => {
+  patchSettings({ pushSummary: pushSummaryEl.checked });
   applySettings();
 });
 

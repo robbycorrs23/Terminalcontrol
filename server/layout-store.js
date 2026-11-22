@@ -30,6 +30,7 @@ const DEFAULT_PREFS = {
   // it's whether the device has a row in ~/.fleetview/push-subscriptions.json.
   pushQuestion: true, // a terminal needs an approval or an answer
   pushDone: false, // a turn finished, or was cut off — off by default, it's noisy on a busy fleet
+  pushSummary: true, // say WHAT the session did in a "finished" push (server/summary.js) — off = name + kind only
   // Safety
   confirmClose: false, // ask before ✕ kills a terminal
   // Sessions
