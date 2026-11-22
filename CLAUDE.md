@@ -39,6 +39,10 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   FIRST at startup (warn-only) so missing-dep warnings are the most prominent output.
 - `npm run go` — build client + start server (this also **restarts** it). Re-runs
   Vite every time; use `npm start` for a plain restart without rebuilding.
+- `npm run service:install-gate` — the passkey gate as its own auto-start service
+  (`com.fleetview.gate` / `fleetview-gate.service`, Restart=always). Needs
+  `FLEET_GATE_RP_ID` + `FLEET_GATE_ORIGIN` in the shell (refuses the localhost
+  defaults). Supervision is what lets the gate restart itself after an update.
 - `npm run service:install` / `service:uninstall` — opt-in auto-start on login
   (launchd on macOS, systemd --user on Linux). `scripts/install-service.js` captures
   a working PATH into the service env (launchd/systemd give a minimal PATH, which
@@ -83,6 +87,7 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
 | `client/src/changes-panel.ts` / `server/changes.js` | per-session Changes panel (transcript-attributed files × git diff) |
 | `client/src/rewind-editor.ts` | edit-and-resend editor (rewind logic lives in agent-manager.js) |
 | `server/summary.js` | session summaries: one digest per finished turn (headline / changed / needs you) for pushes + the inbox |
+| `server/scheduler.js` / `client/src/schedules.ts` | scheduled sessions: saved prompt + days + time → a fresh chat session at that time / the Settings → Scheduled sessions sheet |
 | `client/src/review.ts` | review mode: commentable numbered diffs in the Changes panel → one review message |
 | `server/self-check.js` | startup: fix deps vs lockfile, rebuild a stale bundle, version info |
 | `client/src/chat-question.ts` / `chat-tasks.ts` / `chat-queue.ts` / `chat-attachments.ts` | chat pane components: AskUserQuestion card / background-task tray / queued messages / composer attachments |
@@ -546,6 +551,18 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   refreshes. The notifier waits ≤8s for it on "finished" pushes only (needs-you
   never waits). `summaries` is created BEFORE the pane managers because they
   can broadcast during construction. Measured 1.5–2.6s on real sessions.
+- **Scheduled sessions** (`server/scheduler.js`, `schedules.ts`, `/api/schedules*`).
+  A job = name, cwd, agent profile, prompt, days, "HH:MM" in the MACHINE's
+  local time; per machine in `~/.fleetview/schedules.json` (0600). Due when the
+  latest slot ≤ now is newer than BOTH `lastRunAt` and `armedAt` (set on every
+  save / re-enable) — so creating or editing a job never fires a slot that
+  already passed today; a miss (sleep, restart) runs ONCE if under 6h old,
+  older ones are skipped, never stacked. `startRun` (index.js) makes a fresh
+  CHAT pane named after the job and sends the prompt; it first retires the
+  previous run's pane only if idle, unflagged and not waiting on you. A
+  scheduled run's "finished" push ALWAYS fires (`forceDone`, even with
+  pushDone off — the result is the point), with its summary. Agent must match
+  `^(claude|codex)(-…)?$`; the folder must exist.
 - **Parallel-safe sessions** (`server/worktrees.js`, `server/ship.js`,
   `git-status.ts`, `ship-panel.ts`). "Own branch" (new-session sheet's Branch
   row, the picker's checkbox → `POST /api/panes {worktree:true}`) runs `git

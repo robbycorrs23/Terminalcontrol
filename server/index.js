@@ -39,6 +39,7 @@ import { preflight } from "../scripts/preflight.js";
 import { ensureDeps, ensureFreshBuild, serverVersion, bundleVersion } from "./self-check.js";
 import { startAutoUpdate } from "./auto-update.js";
 import { createSummaries } from "./summary.js";
+import { createScheduler } from "./scheduler.js";
 
 // Check for tmux / curl / claude / codex FIRST, so any missing-dependency warning is the
 // most prominent thing the user sees — not buried under later startup logs.
@@ -235,6 +236,9 @@ function scheduleSecretRelease(session) {
 // Web Push fan-out, now that broadcast() and the stores all exist.
 pushes = createPushNotifier({
   summarize: (id) => summaries.summarize(id),
+  // A scheduled run's result is the whole point — notify even with "finished" pushes off.
+  // (The set is per process; a schedule's latest run is also known from its job, so this survives restarts.)
+  forceDone: (id) => scheduledPanes.has(id) || scheduler.list().some((j) => j.lastPane === id),
   registry,
   prefs: () => layouts.prefs(),
   store: pushStore,
@@ -394,6 +398,53 @@ app.post("/api/panes", async (req, res) => {
   if (prompt && info.kind === "agent") agents.sendMessage(pane.id, prompt.slice(0, 20000));
   if (worktree) panesGitCache.data = null; // a new branch chip to show
   res.json(worktree ? { ...info, worktree: { branch: worktree.branch, base: worktree.base, envCopied: worktree.envCopied } } : info);
+});
+
+// ---- Scheduled sessions (server/scheduler.js) ----------------------------------
+// Panes started by a schedule: their "finished" push always fires (forceDone).
+const scheduledPanes = new Set();
+const scheduler = createScheduler({
+  startRun: (job) => {
+    // Retire the previous run's session — but only if you're done with it:
+    // idle, not flagged, not waiting on you. Otherwise it stays, untouched.
+    const prev = job.lastPane && registry.info(job.lastPane);
+    if (prev && !prev.working && !prev.followUp && !prev.attention?.waiting) {
+      const session = registry.sessionOf(prev.id);
+      secrets.releaseAllForPane(prev.id);
+      registry.kill(prev.id);
+      scheduledPanes.delete(prev.id);
+      broadcast(session, { t: "closed", pane: prev.id });
+    }
+    const pane = registry.create({ cwd: job.cwd, cmd: job.cmd, kind: "agent" });
+    registry.setName(pane.id, job.name);
+    scheduledPanes.add(pane.id);
+    const info = registry.info(pane.id);
+    broadcast(info.session, { t: "created", pane: info });
+    agents.sendMessage(pane.id, job.prompt);
+    return pane.id;
+  },
+});
+app.get("/api/schedules", (_req, res) => res.json({ jobs: scheduler.list(), now: Date.now() }));
+app.post("/api/schedules", (req, res) => {
+  try {
+    res.json(scheduler.upsert(req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.post("/api/schedules/:id/enabled", (req, res) => {
+  const job = scheduler.setEnabled(req.params.id, !!req.body?.on);
+  job ? res.json(job) : res.status(404).json({ error: "no such schedule" });
+});
+app.post("/api/schedules/:id/run", async (req, res) => {
+  try {
+    res.json(await scheduler.runNow(req.params.id));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.delete("/api/schedules/:id", (req, res) => {
+  scheduler.remove(req.params.id) ? res.status(204).end() : res.status(404).json({ error: "no such schedule" });
 });
 
 // ---- Session titles ----------------------------------------------------------

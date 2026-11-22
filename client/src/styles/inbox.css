@@ -396,3 +396,104 @@ body.light .inbox-mini + .inbox-mini {
   line-height: 1.35;
   color: var(--text);
 }
+
+/* ---- Scheduled sessions (schedules.ts) — reuses the inbox drawer + cards ---- */
+.sched-intro {
+  margin: 6px 4px 12px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+.ib.sched-new {
+  width: 100%;
+  min-height: 40px;
+  margin-bottom: 4px;
+}
+.sched-card.paused {
+  opacity: 0.6;
+}
+.sched-prompt {
+  margin-top: 6px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sched-last {
+  margin-top: 4px;
+}
+.sched-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sched-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.sched-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.sched-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.sched-form input,
+.sched-form select,
+.sched-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--term-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px; /* no iOS focus-zoom */
+}
+.sched-form textarea {
+  resize: vertical;
+  line-height: 1.4;
+}
+.sched-form input:focus,
+.sched-form select:focus,
+.sched-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.sched-days {
+  display: flex;
+  gap: 6px;
+}
+.sched-day {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-dim);
+  font: 600 13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  cursor: pointer;
+}
+.sched-day.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.sched-presets {
+  display: flex;
+  gap: 8px;
+  margin-top: -6px;
+}
+.sched-card .ic-actions {
+  margin-top: 12px;
+}

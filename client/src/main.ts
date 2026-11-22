@@ -1,5 +1,6 @@
 import { openNewSession } from "./new-session";
 import { initAppBridge } from "./app-bridge";
+import { initSchedules, openSchedules } from "./schedules";
 import { initGitStatus, decorateGit, scheduleGitRefresh } from "./git-status";
 import { checkVersion } from "./version-check";
 import { initInbox, openInbox, closeInbox, inboxOpen, refreshInbox } from "./inbox";
@@ -2242,6 +2243,22 @@ async function deleteSshProfile(name: string) {
   await fetch(`/api/ssh-profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
   await loadSshProfiles();
 }
+
+// Scheduled sessions (schedules.ts / server/scheduler.js).
+initSchedules({
+  openPane: (id) => {
+    const t = panes.get(id);
+    if (t) zoom(t);
+    return !!t;
+  },
+  recents: () => fetch("/api/recents").then((r) => r.json()),
+  // Chat-capable agents only: a scheduled run is a chat session.
+  agents: () => newSessionAgents().filter((a) => a.chat && a.value),
+});
+document.getElementById("schedBtn")!.addEventListener("click", () => {
+  closeSettings();
+  openSchedules();
+});
 
 document.getElementById("sshManageBtn")!.addEventListener("click", () => {
   closeSettings();

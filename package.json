@@ -37,7 +37,8 @@
     "build": "vite build",
     "start": "node server/index.js",
     "go": "npm run build && npm start",
-    "gate": "node server/gate.js"
+    "gate": "node server/gate.js",
+    "service:install-gate": "node scripts/install-gate-service.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.318",

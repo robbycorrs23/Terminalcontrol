@@ -53,7 +53,7 @@ function textFor(name, kind) {
  * @param {import("./push-store.js").PushStore} deps.store
  * @param {(row: object, body: string, opts?: object) => Promise<any>} deps.send
  */
-export function createPushNotifier({ registry, prefs, store, send, apns = null, apnsDevices = null, summarize = null }) {
+export function createPushNotifier({ registry, prefs, store, send, apns = null, apnsDevices = null, summarize = null, forceDone = () => false }) {
   const lastSent = new Map(); // `${paneId}:${kind}` -> timestamp
 
   function allowed(kind) {
@@ -74,7 +74,8 @@ export function createPushNotifier({ registry, prefs, store, send, apns = null, 
    *  `work` events on streaming panes. */
   function onAttention(paneId, kind, session) {
     if (!paneId) return;
-    if (!allowed(kind)) return;
+    // A scheduled run (server/scheduler.js) always reports when it finishes.
+    if (!allowed(kind) && !(kind !== "question" && forceDone(paneId))) return;
     const appDevices = apns?.enabled ? apnsDevices?.count() || 0 : 0;
     if (!store.count() && !appDevices) return; // nobody subscribed — costs nothing
 
