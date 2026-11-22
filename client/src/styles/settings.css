@@ -456,3 +456,31 @@ body.light #bar #settings .set-card > *:not([hidden]) + *:not([hidden]) {
 #settings .mc-swatch.on:disabled {
   opacity: 1;
 }
+
+/* ---- Inside the iOS app (app-bridge.ts) ----
+   The app delivers notifications natively; the browser-only switches would
+   do nothing there. The push CATEGORIES still apply to the app's alerts. */
+body.in-app #settings label:has(#setPushDevice),
+body.in-app #settings label:has(#setNotify),
+body.in-app #settings #notifyNote,
+body.in-app #settings #pushNote {
+  display: none;
+}
+body.in-app #settings #pushCats {
+  padding-left: 0;
+}
+/* The machine name opens the app's machine switcher. */
+body.in-app .brand.app-switch {
+  cursor: pointer;
+}
+body.in-app .brand.app-switch::after {
+  content: "";
+  display: inline-block;
+  width: 0.38em;
+  height: 0.38em;
+  margin-left: 0.4em;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-0.18em) rotate(45deg);
+  opacity: 0.6;
+}

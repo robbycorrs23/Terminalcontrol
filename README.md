@@ -381,3 +381,19 @@ real server for a test; it reads/writes live `sessions.json` / `layouts.json` /
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## iOS app
+
+`ios/` is FleetView for iPhone/iPad: one app holding every machine you run
+FleetView on (work and personal side by side), full screen, with native
+notifications. It shows the same pages as the browser, so features land in both.
+
+- Sign-in goes through a Safari sheet (passkeys can't run inside the app for a
+  tailnet host); the gate hands the app a one-time code.
+- Notifications need an APNs key on each machine: put a team APNs auth key
+  (`.p8`) somewhere private and describe it in `~/.fleetview/apns.json`:
+  `{"keyPath": "~/.fleetview/AuthKey_XXXXXXXXXX.p8", "keyId": "XXXXXXXXXX", "teamId": "Z778754952"}`,
+  then restart the server.
+- Build/ship: `cd ios && xcodegen generate` to open it in Xcode, or
+  `ios/scripts/testflight.sh` to test, archive and upload to TestFlight.
+

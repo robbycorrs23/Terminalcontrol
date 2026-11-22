@@ -20,6 +20,7 @@ import { PushStore } from "./push-store.js";
 import { VapidKeys } from "./push-vapid.js";
 import { createSender } from "./push-send.js";
 import { createPushNotifier } from "./push-notifier.js";
+import { createApns, ApnsDevices } from "./apns.js";
 import { createIdentity, ICON_COLORS, ICON_MARKS } from "./identity.js";
 import { SshProfileStore } from "./ssh-profiles.js";
 import { listSshConfigHosts } from "./ssh-hosts.js";
@@ -126,6 +127,9 @@ const sshProfiles = new SshProfileStore(join(ROOT, "ssh-profiles.json"));
 // to your devices, so both belong with passkeys.json rather than layouts.json.
 const FLEET_DIR = join(homedir(), ".fleetview");
 const pushStore = new PushStore(join(FLEET_DIR, "push-subscriptions.json"));
+// The iOS app's native push (server/apns.js) — inert until ~/.fleetview/apns.json exists.
+const apns = createApns();
+const apnsDevices = new ApnsDevices(join(FLEET_DIR, "apns-devices.json"));
 const vapid = new VapidKeys(join(FLEET_DIR, "vapid.json"));
 // Which machine this is, for the app name / icon colour / in-app label. Reads
 // from DIST because that's where vite copies client/public/icons/.
@@ -220,6 +224,8 @@ pushes = createPushNotifier({
   prefs: () => layouts.prefs(),
   store: pushStore,
   send: createSender(vapid),
+  apns,
+  apnsDevices,
 });
 
 ptys.on("attention", (pane, kind) => broadcast(registry.sessionOf(pane), { t: "attention", pane, kind }));
@@ -549,6 +555,17 @@ app.post("/api/push/subscribe", (req, res) => {
   const row = pushStore.upsert(req.body || {});
   if (!row) return res.status(400).json({ error: "not a valid push subscription" });
   res.json({ ok: true, devices: pushStore.count() });
+});
+// The iOS app registers its APNs token here — from inside this machine's own
+// page (so it rides the gate cookie and the same-origin guard), every launch.
+app.post("/api/push/apns", (req, res) => {
+  const row = apnsDevices.upsert(req.body || {});
+  if (!row) return res.status(400).json({ error: "not a valid device token" });
+  res.json({ ok: true, enabled: apns.enabled, env: apns.env, devices: apnsDevices.count() });
+});
+app.delete("/api/push/apns/:token", (req, res) => {
+  apnsDevices.remove(req.params.token);
+  res.json({ ok: true });
 });
 app.post("/api/push/unsubscribe", (req, res) => {
   pushStore.remove(req.body?.endpoint);

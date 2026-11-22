@@ -99,6 +99,13 @@
         msg.className = ok ? "ok" : "";
       }
 
+      // Where to go after signing in. Only same-site paths, and only the app
+      // handoff or the app itself — never an arbitrary redirect target.
+      function nextUrl() {
+        const n = new URLSearchParams(location.search).get("next") || "/";
+        return n === "/gate/app-login" ? n : "/";
+      }
+
       async function api(path, body) {
         const res = await fetch(path, {
           method: "POST",
@@ -117,7 +124,7 @@
           const response = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: options });
           await api("/gate/login/finish", response);
           say("Signed in — loading FleetView…", true);
-          location.href = "/";
+          location.href = nextUrl();
         } catch (e) {
           say(e.message || "Sign-in failed");
         }
@@ -131,7 +138,7 @@
           const response = await SimpleWebAuthnBrowser.startRegistration({ optionsJSON: options });
           await api("/gate/register/finish", { response, label });
           say("Passkey registered — loading FleetView…", true);
-          location.href = "/";
+          location.href = nextUrl();
         } catch (e) {
           say(e.message || "Registration failed");
         }
@@ -145,7 +152,7 @@
           const res = await fetch("/gate/status");
           const status = await res.json();
           if (status.loggedIn) {
-            location.href = "/";
+            location.href = nextUrl();
             return;
           }
           if (status.hasPasskeys) {

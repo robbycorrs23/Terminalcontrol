@@ -15,3 +15,8 @@ ssh-profiles.json
 # Local tooling / backups
 .playwright-mcp/
 *.bak-*
+
+# iOS app: the .xcodeproj is generated from ios/project.yml (xcodegen)
+ios/FleetView.xcodeproj/
+ios/build/
+*.xcresult

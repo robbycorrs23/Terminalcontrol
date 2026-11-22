@@ -53,7 +53,7 @@ function textFor(name, kind) {
  * @param {import("./push-store.js").PushStore} deps.store
  * @param {(row: object, body: string, opts?: object) => Promise<any>} deps.send
  */
-export function createPushNotifier({ registry, prefs, store, send }) {
+export function createPushNotifier({ registry, prefs, store, send, apns = null, apnsDevices = null }) {
   const lastSent = new Map(); // `${paneId}:${kind}` -> timestamp
 
   function allowed(kind) {
@@ -75,7 +75,8 @@ export function createPushNotifier({ registry, prefs, store, send }) {
   function onAttention(paneId, kind, session) {
     if (!paneId) return;
     if (!allowed(kind)) return;
-    if (!store.count()) return; // nobody subscribed — costs nothing
+    const appDevices = apns?.enabled ? apnsDevices?.count() || 0 : 0;
+    if (!store.count() && !appDevices) return; // nobody subscribed — costs nothing
 
     const key = `${paneId}:${kind}`;
     const now = Date.now();
@@ -96,6 +97,35 @@ export function createPushNotifier({ registry, prefs, store, send }) {
     const count = waitingCount();
 
     void fanOut({ paneId, kind, name, title, body, count, session });
+    if (appDevices) void fanOutApp({ paneId, kind, title, body, count });
+  }
+
+  /** The iOS app (server/apns.js). Same text and the same rules as Web Push. */
+  async function fanOutApp(msg) {
+    await Promise.allSettled(
+      apnsDevices.list().map(async (row) => {
+        const res = await apns.send(
+          row.token,
+          {
+            aps: {
+              alert: { title: msg.title, body: msg.body },
+              sound: msg.kind === "question" ? "default" : undefined,
+              badge: msg.count,
+              "thread-id": msg.paneId, // the app groups one pane's alerts together
+            },
+            // Where a tap goes: this machine (as the app knows it) + the pane.
+            origin: row.origin,
+            pane: msg.paneId,
+            kind: msg.kind,
+          },
+          { collapseId: `${msg.paneId}:${msg.kind}`, priority: msg.kind === "question" ? 10 : 5 }
+        );
+        if (res.ok) return;
+        if (res.gone) return apnsDevices.remove(row.token);
+        // 403 InvalidProviderToken / TopicDisallowed etc. = configuration: say so plainly, once per send.
+        console.warn(`[fleetview] app push failed (${res.status || "network"} ${res.reason}) — check ~/.fleetview/apns.json`);
+      })
+    );
   }
 
   async function fanOut(msg) {

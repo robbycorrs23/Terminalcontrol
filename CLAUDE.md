@@ -93,6 +93,9 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
 | `client/src/styles.css` + `client/src/styles/*.css` | styles, split by area; `styles.css` only `@import`s them in the ORIGINAL cascade order — keep that order |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
 | `client/src/push.ts` / `client/public/sw.js` | Web Push subscribe/badge / the service worker that shows notifications |
+| `server/apns.js` | native push for the iOS app: APNs sender (HTTP/2 + ES256, no deps) + `~/.fleetview/apns-devices.json` |
+| `client/src/app-bridge.ts` | the web side of the iOS app: brand → machine switcher, `fleetOpenPane()`, `body.in-app` |
+| `ios/` | FleetView for iOS (SwiftUI + WKWebView). `project.yml` is the source (xcodegen); `scripts/testflight.sh` ships it; `scripts/asc.mjs` is a no-deps App Store Connect client |
 | `server/gate.js` | optional passkey-auth reverse proxy (`fleetview-gate` service) that `tailscale serve` fronts instead of the app directly — a SEPARATE process from `server/index.js`, own port (`FLEET_GATE_PORT`, default 4290), own launchd/systemd unit (`com.fleetview.gate`). See Gotchas. |
 
 ## Key invariants / model (don't break these)
@@ -311,6 +314,38 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   build time; it also writes `favicon.svg` and the white `badge-96.png`. The
   tile is flat on purpose (a gradient doubled the bytes across 30 sets). iOS
   caches name+icon at install, so changes need a delete + re-add.
+
+- **The iOS app** (`ios/`, bundle `com.robertcorrado.fleetview`, team
+  Z778754952, TestFlight). ONE app for every machine — a switcher (tap the
+  machine name in the top bar → `app-bridge.ts` → `{t:"machines"}`) replaces
+  one Home Screen icon per machine. It hosts the SAME pages in a WKWebView, so
+  there is one UI, not two; each machine gets its own
+  `WKWebsiteDataStore(forIdentifier:)` so sessions never mix (why iOS 17+).
+  Three things are load-bearing:
+  1. **Sign-in can't happen in the WKWebView.** WebAuthn there needs an
+     associated domain, which Apple verifies over the PUBLIC internet — a
+     tailnet host never passes, and TestFlight can't use the developer-mode
+     bypass. So a page landing on `/gate/login` is intercepted and
+     `ASWebAuthenticationSession` opens `/gate/app-login` (Safari sheet,
+     passkeys work); the gate redirects to `fleetview://auth?code=…` — a
+     single-use, 2-minute code only minted for an already-valid session — and
+     the app loads `/gate/app-token?code=…`, which sets ITS cookie. The login
+     page's `?next=` accepts only `/gate/app-login`.
+  2. **Push is APNs, not Web Push** (no service-worker push in a WKWebView).
+     The app POSTs its token to `/api/push/apns` FROM INSIDE each machine's
+     page (rides the gate cookie, passes the same-origin guard) on every
+     `ready`; `push-notifier.js` fans out to Web Push AND `server/apns.js`
+     with the same text/rules/categories, `origin`+`pane` in the payload so a
+     tap opens the right machine and session. Inert until
+     `~/.fleetview/apns.json` (`keyPath`, `keyId`, `teamId`) exists — the
+     .p8 is a team-wide APNs key; TestFlight = `production`.
+  3. **The web side detects the app by CAPABILITY**
+     (`window.webkit.messageHandlers.fleetApp`), not the UA, and hides the
+     browser-only notification rows via `body.in-app`.
+  Releasing: `ios/scripts/testflight.sh` (tests need this Mac's server on
+  :4280; `SKIP_TESTS=1` to skip; `--no-upload` to only export). Export signs
+  manually with the "FleetView App Store" profile + local Apple Distribution
+  cert — the API key can't use cloud signing.
 
 ## Rich chat view (agent panes)
 

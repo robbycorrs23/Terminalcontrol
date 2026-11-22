@@ -1,4 +1,5 @@
 import { openNewSession } from "./new-session";
+import { initAppBridge } from "./app-bridge";
 import { initGitStatus, decorateGit, scheduleGitRefresh } from "./git-status";
 import { checkVersion } from "./version-check";
 import { initInbox, openInbox, closeInbox, inboxOpen, refreshInbox } from "./inbox";
@@ -1755,6 +1756,17 @@ let pendingDeepLink: string | null = (() => {
   const m = /(?:^|[#&])pane=([^&]+)/.exec(location.hash);
   return m ? decodeURIComponent(m[1]) : null;
 })();
+
+// The iOS app (app-bridge.ts): machine switcher on the brand, and a way for a
+// notification tap to open a pane in an already-loaded page.
+initAppBridge({
+  brand: brandEl,
+  openPane: (id) => {
+    const t = panes.get(id);
+    if (t) zoom(t);
+    return !!t;
+  },
+});
 
 function consumeDeepLink() {
   if (!pendingDeepLink) return;

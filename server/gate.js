@@ -1,5 +1,6 @@
 import express from "express";
 import { createServer } from "node:http";
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -218,6 +219,40 @@ gate.post("/stepup/finish", async (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// ---- Native app sign-in handoff (the iOS app in ios/) ---------------------
+// Passkeys can't run inside the app's WKWebView: WebAuthn there needs an
+// associated-domains entitlement, which Apple verifies by fetching
+// apple-app-site-association from the PUBLIC internet — a tailnet host never
+// passes that, and TestFlight builds can't use the developer-mode bypass. So
+// the app signs in through ASWebAuthenticationSession (a Safari sheet, where
+// passkeys work normally) and is handed a ONE-TIME code over its fleetview://
+// callback, which it trades for its own session cookie inside the WKWebView.
+//
+// The code is single-use, expires in 2 minutes, and is only ever minted for an
+// already-valid passkey session — it grants nothing a signed-in Safari doesn't
+// already have. ASWebAuthenticationSession hands the callback straight back to
+// the app that opened it, so another app claiming fleetview:// can't catch it.
+const appCodes = new Map(); // code -> expiry
+const APP_CODE_MS = 2 * 60 * 1000;
+
+gate.get("/app-login", (req, res) => {
+  if (!isLoggedIn(req)) return res.redirect("/gate/login?next=" + encodeURIComponent("/gate/app-login"));
+  const now = Date.now();
+  for (const [c, exp] of appCodes) if (exp < now) appCodes.delete(c);
+  const code = randomBytes(24).toString("base64url");
+  appCodes.set(code, now + APP_CODE_MS);
+  res.redirect(`fleetview://auth?code=${code}`);
+});
+
+gate.get("/app-token", (req, res) => {
+  const code = String(req.query.code || "");
+  const exp = appCodes.get(code);
+  appCodes.delete(code); // single use, even when expired or wrong
+  if (!exp || exp < Date.now()) return res.redirect("/gate/login");
+  setSessionCookie(res);
+  res.redirect("/");
 });
 
 gate.post("/logout", (_req, res) => {
