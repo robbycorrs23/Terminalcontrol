@@ -799,6 +799,19 @@ initInbox({
     closeInbox();
     zoom(t);
   },
+  // The chip row under the bar is gone; dormant + flagged panes live in the inbox.
+  dormant: () => [...dormant.values()].map((d) => ({ id: d.id, name: displayName(d), cwd: d.cwd, sessionAlive: !!d.sessionAlive })),
+  respawn: (id) => void respawnPane(id),
+  discard: (id) => void discardPane(id),
+  flagged: () =>
+    [...flagged]
+      .map((id) => panes.get(id))
+      .filter((t): t is PaneView => !!t)
+      .map((t) => ({ id: t.id, name: displayName(t.info), cwd: t.info.cwd })),
+  unflag: (id) => {
+    const t = panes.get(id);
+    if (t) host.onToggleFollowUp(t);
+  },
 });
 document.getElementById("inboxBtn")!.addEventListener("click", (e) => {
   e.stopPropagation();
@@ -1009,13 +1022,7 @@ function renderQueue() {
     queueEl.append(chip);
   }
   nextBtn.hidden = queue.length === 0;
-  // The inbox badge: how many panes need you right now.
-  const ic = document.getElementById("inboxCount");
-  if (ic) {
-    ic.textContent = queue.length > 99 ? "99+" : String(queue.length);
-    ic.hidden = queue.length === 0;
-  }
-  refreshInbox();
+  updateInboxBadge();
   syncBarHeightVar();
 
   // Mirror the waiting state in the browser tab (title + favicon dot) so it's
@@ -1036,6 +1043,23 @@ nextBtn.onclick = () => {
   if (t) zoom(t);
 };
 
+/**
+ * The inbox badge: how many panes need you right now — or, with none, a dot
+ * when sessions are waiting to be recovered or are flagged (those used to be
+ * chips under the bar; the inbox is now the only place they show).
+ */
+function updateInboxBadge() {
+  const ic = document.getElementById("inboxCount");
+  if (ic) {
+    const n = queue.length;
+    const quiet = dormant.size > 0 || [...flagged].some((id) => panes.has(id));
+    ic.textContent = n > 99 ? "99+" : n ? String(n) : "";
+    ic.classList.toggle("dot", !n && quiet);
+    ic.hidden = !n && !quiet;
+  }
+  refreshInbox();
+}
+
 function setFlagged(id: string, on: boolean) {
   if (on) flagged.add(id);
   else flagged.delete(id);
@@ -1054,6 +1078,7 @@ function renderFollowups() {
     chip.onclick = () => zoom(t);
     followupsEl.append(chip);
   }
+  updateInboxBadge();
   syncBarHeightVar();
 }
 
@@ -1086,6 +1111,7 @@ async function discardPane(id: string) {
 }
 function renderRecovery() {
   recoveryEl.innerHTML = "";
+  updateInboxBadge();
   if (dormant.size === 0) return syncBarHeightVar();
   const label = document.createElement("span");
   label.className = "rec-label";

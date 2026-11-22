@@ -10,8 +10,15 @@
  * re-reads the screen and refuses if the prompt changed. Actions go to
  * POST /api/inbox/act. Finished / cut-off sessions follow, with a quick reply.
  *
+ * It also REPLACED the chip row that used to sit under the top bar: dormant
+ * sessions ("Recover") and flagged follow-ups ("Flagged") live here now, fed
+ * from main.ts's own state via deps (they're client-side facts, not server
+ * inbox items). Recovery stays impossible to miss — the badge shows a dot
+ * whenever something is waiting to be recovered, even with nothing needing you.
+ *
  * Desktop: a drawer on the right. Phone: a full-screen sheet. Opened from the
- * inbox button in the top bar (badge = how many need you).
+ * inbox button in the top bar (badge = how many need you; a dot = only
+ * recover/flagged items).
  *
  * All text via textContent; previews reuse chat-steps / chat-question.
  */
@@ -34,7 +41,15 @@ type Item = {
   lastReply?: string;
 };
 
-export type InboxDeps = { openPane: (id: string) => void };
+type LocalPane = { id: string; name: string; cwd: string };
+export type InboxDeps = {
+  openPane: (id: string) => void;
+  dormant: () => (LocalPane & { sessionAlive: boolean })[];
+  respawn: (id: string) => void;
+  discard: (id: string) => void;
+  flagged: () => LocalPane[];
+  unflag: (id: string) => void;
+};
 
 let deps: InboxDeps;
 let panel: HTMLElement | null = null;
@@ -96,23 +111,27 @@ function build() {
 }
 
 async function load() {
-  let items: Item[];
+  let items: Item[] = [];
+  let error = "";
   try {
     const res = await fetch("/api/inbox", { cache: "no-store" });
     if (!res.ok) throw new Error(res.status === 404 ? "The inbox needs a server restart to work." : "Couldn't load the inbox.");
     items = await res.json();
   } catch (e) {
-    list.textContent = "";
-    const n = el("div", "inbox-empty");
-    n.textContent = (e as Error).message;
-    list.append(n);
-    return;
+    error = (e as Error).message;
   }
   // Don't wipe a card someone is typing into — only re-render when idle.
   const typing = list.contains(document.activeElement) && /^(TEXTAREA|INPUT)$/.test(document.activeElement!.tagName);
   if (typing) return refreshInbox();
   list.textContent = "";
-  if (!items.length) {
+  if (error) {
+    const n = el("div", "inbox-empty");
+    n.textContent = error;
+    list.append(n);
+  }
+  const dormant = deps.dormant();
+  const flagged = deps.flagged();
+  if (!error && !items.length && !dormant.length && !flagged.length) {
     const n = el("div", "inbox-empty");
     n.textContent = "All clear — nothing needs you.";
     list.append(n);
@@ -121,7 +140,69 @@ async function load() {
   const needs = items.filter((i) => i.type !== "done" && i.type !== "aborted");
   const rest = items.filter((i) => i.type === "done" || i.type === "aborted");
   if (needs.length) list.append(section("Needs you", needs));
+  if (dormant.length) list.append(recoverSection(dormant));
   if (rest.length) list.append(section("Finished", rest));
+  if (flagged.length) list.append(flaggedSection(flagged));
+}
+
+function where(cwd: string) {
+  return cwd.split("/").filter(Boolean).slice(-2).join("/");
+}
+
+/** A compact row: name + folder on the left, actions on the right. */
+function miniRow(p: LocalPane, note: string, actions: HTMLElement[]) {
+  const r = el("div", "inbox-mini");
+  const who = el("span", "ic-who");
+  const name = el("span", "ic-name");
+  name.textContent = p.name;
+  const sub = el("span", "ic-where");
+  sub.textContent = note ? `${note} · ${where(p.cwd)}` : where(p.cwd);
+  sub.title = p.cwd;
+  who.append(name, sub);
+  const acts = el("span", "mini-acts");
+  acts.append(...actions);
+  r.append(who, acts);
+  return r;
+}
+
+function recoverSection(list: (LocalPane & { sessionAlive: boolean })[]) {
+  const s = el("div", "inbox-sec");
+  const h = el("div", "inbox-sec-h");
+  h.textContent = `Recover · ${list.length}`;
+  if (list.length > 1) {
+    const all = btn("Recover all", "ghost sec-act", () => {
+      for (const p of list) deps.respawn(p.id);
+    });
+    h.append(all);
+  }
+  s.append(h);
+  const card = el("div", "inbox-card inbox-minis");
+  for (const p of list) {
+    card.append(
+      miniRow(p, p.sessionAlive ? "Set aside" : "Stopped", [
+        btn(p.sessionAlive ? "Restore" : "Respawn", "primary", () => deps.respawn(p.id)),
+        btn("Discard", "ghost", () => deps.discard(p.id)),
+      ])
+    );
+  }
+  card.title = "Sessions that stopped (sleep, crash) or were set aside by a layout. Set-aside ones come back intact; stopped ones get a fresh shell in the same folder.";
+  s.append(card);
+  return s;
+}
+
+function flaggedSection(list: LocalPane[]) {
+  const s = el("div", "inbox-sec");
+  const h = el("div", "inbox-sec-h");
+  h.textContent = `Flagged · ${list.length}`;
+  s.append(h);
+  const card = el("div", "inbox-card inbox-minis");
+  for (const p of list) {
+    card.append(
+      miniRow(p, "", [btn("Open", "", () => deps.openPane(p.id)), btn("Unflag", "ghost", () => deps.unflag(p.id))])
+    );
+  }
+  s.append(card);
+  return s;
 }
 
 function section(label: string, items: Item[]) {

@@ -2,8 +2,8 @@
 
 A single browser window holding a **grid of real terminals** (one `node-pty` shell
 per box), each typically running `claude` or `codex`. Click a box to zoom it; when
-an agent needs approval or finishes, its box glows/dings and a chip appears in the
-top bar. Local-only tool: a Node server on `localhost` spawns the shells.
+an agent needs approval or finishes, its box glows/dings and the inbox badge in the
+top bar counts it. Local-only tool: a Node server on `localhost` spawns the shells.
 
 ## Prerequisites (on any machine that runs this)
 - **Node.js** (project uses ESM; `node-pty` ships prebuilds for macOS/Linux x64/arm64).
@@ -463,7 +463,14 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   screen and refuses (409) if the question/label changed, so a stale card can
   never press keys on a different prompt. Question cards reuse
   chat-question.ts; their `.term .q-*` rules are extended to `.inbox-card`.
-  Badge = the attention queue length (`renderQueue`).
+  Badge = the attention queue length (`updateInboxBadge`); a dot when only
+  Recover/Flagged items wait. **The inbox replaced the chip row under the
+  bar**: dormant panes ("Recover", with Restore/Respawn/Discard/Recover all)
+  and flagged follow-ups ("Flagged") render in it from main.ts state via
+  `InboxDeps`. `#queue`/`#followups`/`#recovery` are still rendered (other
+  code reads them) but hidden by CSS; `#barChips` only shows for the two
+  transient notices (`#updateNote`, `#viewNote`). Dormant panes must stay
+  visible somewhere — that's what the badge dot is for.
 - **Parallel-safe sessions** (`server/worktrees.js`, `server/ship.js`,
   `git-status.ts`, `ship-panel.ts`). "Own branch" (new-session sheet's Branch
   row, the picker's checkbox → `POST /api/panes {worktree:true}`) runs `git
