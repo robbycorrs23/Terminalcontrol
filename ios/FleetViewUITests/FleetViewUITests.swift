@@ -40,6 +40,10 @@ final class FleetViewUITests: XCTestCase {
         XCTAssertTrue(other.waitForExistence(timeout: 20), "quick-switch buttons never appeared")
         XCTAssertTrue(any["did2200 (current)"].exists)
         attach(app, "q1-two-machines")
+        // Icons arrive as embedded images (not a bare-letter fallback): give the
+        // native fetch a moment, then no two-letter fallback chip should exist.
+        sleep(3)
+        XCTAssertFalse(any.staticTexts["DI"].exists, "an icon fell back to its letters")
         XCTAssertFalse(any["Switch machine"].isHittable, "the machine name should be hidden when quick switch shows")
         any["All machines"].tap()
         XCTAssertTrue(app.navigationBars["Machines"].waitForExistence(timeout: 5), "'more' didn't open the switcher")

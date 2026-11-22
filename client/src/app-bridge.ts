@@ -65,7 +65,9 @@ export function initAppBridge(deps: { brand: HTMLElement; openPane: (id: string)
       b.title = m.name;
       b.setAttribute("aria-label", m.current ? `${m.name} (current)` : `Switch to ${m.name}`);
       b.setAttribute("aria-pressed", String(!!m.current));
-      if (m.icon && /^https?:\/\//.test(m.icon)) {
+      // The app sends icons as data: URLs (fetched natively, so a page never has
+      // to load another machine's image); a plain https URL still works.
+      if (m.icon && /^(https?:\/\/|data:image\/png;base64,)/.test(m.icon)) {
         const img = document.createElement("img");
         img.src = m.icon;
         img.alt = "";
@@ -95,11 +97,12 @@ export function initAppBridge(deps: { brand: HTMLElement; openPane: (id: string)
   post({ t: "ready" });
 }
 
-/** Fallback when a machine's icon can't load: its first letter. */
+/** Fallback when a machine's icon can't load: its first TWO letters — "did2200"
+ *  and "DocHolliday" would both have been just "D". */
 function initial(name: string) {
   const s = document.createElement("span");
   s.className = "app-machine-initial";
-  s.textContent = (name.trim()[0] || "?").toUpperCase();
+  s.textContent = (name.trim().slice(0, 2) || "?").toUpperCase();
   return s;
 }
 

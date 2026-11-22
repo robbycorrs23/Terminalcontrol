@@ -88,8 +88,17 @@ final class MachineWeb: NSObject, ObservableObject {
     /// (app-bridge.ts fleetSetMachines). This page's own machine is "current".
     func sendMachines() {
         guard ready, let list = machineList?() else { return }
+        // Icons go in as data: URLs fetched by the app, so this page never has
+        // to load another machine's image (which failed on a real phone: one
+        // machine's tile showed as a bare letter inside the other's page).
+        // Not fetched yet → the URL now, and a re-send once it arrives.
         let items: [[String: Any]] = list.map {
-            ["id": $0.id.uuidString, "name": $0.name, "icon": $0.icon?.absoluteString ?? NSNull(), "current": $0.id == machine.id]
+            ["id": $0.id.uuidString, "name": $0.name,
+             "icon": IconCache.shared.dataURL(for: $0.icon) ?? $0.icon?.absoluteString ?? NSNull(),
+             "current": $0.id == machine.id]
+        }
+        for m in list where IconCache.shared.dataURL(for: m.icon) == nil {
+            IconCache.shared.fetch(m.icon) { [weak self] in self?.sendMachines() }
         }
         guard let json = try? JSONSerialization.data(withJSONObject: items),
               let str = String(data: json, encoding: .utf8) else { return }
@@ -300,3 +309,28 @@ struct MachineWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView { web.webView }
     func updateUIView(_ view: WKWebView, context: Context) {}
 }
+
+/// Machine icons as data: URLs, fetched once per run by the app (the icons are
+/// public — no sign-in needed) and handed to every page's quick switch.
+@MainActor
+final class IconCache {
+    static let shared = IconCache()
+    private var cache: [URL: String] = [:]
+    private var inFlight: Set<URL> = []
+
+    func dataURL(for url: URL?) -> String? { url.flatMap { cache[$0] } }
+
+    func fetch(_ url: URL?, then done: @escaping () -> Void) {
+        guard let url, cache[url] == nil, !inFlight.contains(url) else { return }
+        inFlight.insert(url)
+        Task {
+            defer { inFlight.remove(url) }
+            guard let (data, resp) = try? await URLSession.shared.data(from: url),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  data.count < 512 * 1024, data.starts(with: [0x89, 0x50, 0x4E, 0x47]) else { return } // PNG only
+            cache[url] = "data:image/png;base64," + data.base64EncodedString()
+            done()
+        }
+    }
+}
+
