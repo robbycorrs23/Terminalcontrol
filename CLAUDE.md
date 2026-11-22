@@ -349,6 +349,19 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
      tap opens the right machine and session. Inert until
      `~/.fleetview/apns.json` (`keyPath`, `keyId`, `teamId`) exists — the
      .p8 is a team-wide APNs key; TestFlight = `production`.
+  4. **Lock-screen Allow/Deny.** A "needs you" APNs push for a plain approval
+     carries `aps.category = FLEET_APPROVE` and a ONE-TIME token (15 min,
+     `approvalTokens` in index.js) — never the request itself. The token maps to
+     what `approvalFor()` saw when the push was sent: a chat pane's pending
+     `permission_request` (not ExitPlanMode — plans want reading), or a terminal
+     prompt with a /^Yes/ and a /^No/ option (re-parsed off the screen). Both
+     actions are `authenticationRequired` (Face ID first). The app redeems it
+     with POST `/api/push/action` using the machine's own WKWebsiteDataStore
+     cookies (works from a background launch — `Approvals` in Push.swift reads
+     the machine list from UserDefaults, not the UI), and `inboxAct()` — the
+     SAME function the inbox's cards use — refuses if it was already answered
+     or the screen changed. A failure posts a local notification; it never
+     fails silently. The body says what you'd approve only with `pushSummary` on.
   3. **The web side detects the app by CAPABILITY**
      (`window.webkit.messageHandlers.fleetApp`), not the UA, and hides the
      browser-only notification rows via `body.in-app`.
@@ -562,7 +575,10 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   previous run's pane only if idle, unflagged and not waiting on you. A
   scheduled run's "finished" push ALWAYS fires (`forceDone`, even with
   pushDone off — the result is the point), with its summary. Agent must match
-  `^(claude|codex)(-…)?$`; the folder must exist.
+  `^(claude|codex)(-…)?$`; the folder must exist. `worktree: true` runs each
+  run in a fresh git worktree (validated as a repo at SAVE time, not at 7am);
+  retiring a previous run calls `finishWorktree`, which removes the folder only
+  if that run changed nothing and keeps any unmerged branch.
 - **Parallel-safe sessions** (`server/worktrees.js`, `server/ship.js`,
   `git-status.ts`, `ship-panel.ts`). "Own branch" (new-session sheet's Branch
   row, the picker's checkbox → `POST /api/panes {worktree:true}`) runs `git

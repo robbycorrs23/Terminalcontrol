@@ -20,7 +20,9 @@ import { randomBytes } from "node:crypto";
  *    if the slot is under CATCH_UP_MS old; older misses are skipped, never
  *    stacked.
  *  - Each run is a fresh session (startRun in index.js), which also retires
- *    the previous run's session if you're done with it.
+ *    the previous run's session if you're done with it. With `worktree`, each
+ *    run gets its own branch + folder; retiring a run removes its worktree only
+ *    if it changed nothing (git's safe commands — finishWorktree).
  *
  * Per-machine (paths are this machine's): ~/.fleetview/schedules.json, 0600.
  */
@@ -94,6 +96,9 @@ export function cleanJob(input, existing = null) {
     time,
     days,
     enabled: input.enabled === undefined ? existing?.enabled ?? true : !!input.enabled,
+    // Own branch: each run in a fresh git worktree (startRun, index.js), so an
+    // unattended run never touches the checkout you work in.
+    worktree: input.worktree === undefined ? !!existing?.worktree : !!input.worktree,
     createdAt: existing?.createdAt || now,
     // (Re)armed on every save: an edit never fires a slot that already passed today.
     armedAt: now,

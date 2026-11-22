@@ -53,7 +53,17 @@ function textFor(name, kind) {
  * @param {import("./push-store.js").PushStore} deps.store
  * @param {(row: object, body: string, opts?: object) => Promise<any>} deps.send
  */
-export function createPushNotifier({ registry, prefs, store, send, apns = null, apnsDevices = null, summarize = null, forceDone = () => false }) {
+export function createPushNotifier({
+  registry,
+  prefs,
+  store,
+  send,
+  apns = null,
+  apnsDevices = null,
+  summarize = null,
+  forceDone = () => false,
+  approval = () => null,
+}) {
   const lastSent = new Map(); // `${paneId}:${kind}` -> timestamp
 
   function allowed(kind) {
@@ -109,7 +119,20 @@ export function createPushNotifier({ registry, prefs, store, send, apns = null, 
         if (s?.headline) text = s.needsYou ? `${s.headline} — Needs you: ${s.needsYou}` : s.headline;
       }
       void fanOut({ paneId, kind, name, title, body: text, count, session });
-      if (appDevices) void fanOutApp({ paneId, kind, title, body: text, count });
+      if (!appDevices) return;
+      // Lock-screen Allow/Deny (iOS app only — Web Push on iOS has no actions).
+      // A one-time token, never the request; the label says WHAT you'd approve,
+      // shown only with pushSummary on (same lock-screen privacy switch).
+      let approve = null;
+      if (kind === "question") {
+        approve = approval(paneId);
+        if (!approve) {
+          await new Promise((r) => setTimeout(r, 700)); // a terminal may still be drawing its prompt
+          approve = approval(paneId);
+        }
+      }
+      const appText = approve && p.pushSummary !== false ? `Allow ${approve.label}?` : text;
+      void fanOutApp({ paneId, kind, title, body: appText, count, approve: approve?.token || null });
     })();
   }
 
@@ -125,7 +148,9 @@ export function createPushNotifier({ registry, prefs, store, send, apns = null, 
               sound: msg.kind === "question" ? "default" : undefined,
               badge: msg.count,
               "thread-id": msg.paneId, // the app groups one pane's alerts together
+              ...(msg.approve ? { category: "FLEET_APPROVE" } : {}),
             },
+            ...(msg.approve ? { approve: msg.approve } : {}),
             // Where a tap goes: this machine (as the app knows it) + the pane.
             origin: row.origin,
             pane: msg.paneId,

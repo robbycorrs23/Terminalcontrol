@@ -39,6 +39,7 @@ import { preflight } from "../scripts/preflight.js";
 import { ensureDeps, ensureFreshBuild, serverVersion, bundleVersion } from "./self-check.js";
 import { startAutoUpdate } from "./auto-update.js";
 import { createSummaries } from "./summary.js";
+import { randomBytes } from "node:crypto";
 import { createScheduler } from "./scheduler.js";
 
 // Check for tmux / curl / claude / codex FIRST, so any missing-dependency warning is the
@@ -236,6 +237,8 @@ function scheduleSecretRelease(session) {
 // Web Push fan-out, now that broadcast() and the stores all exist.
 pushes = createPushNotifier({
   summarize: (id) => summaries.summarize(id),
+  // Lock-screen Allow/Deny for the iOS app (see mintApproval below).
+  approval: (id) => mintApproval(id),
   // A scheduled run's result is the whole point — notify even with "finished" pushes off.
   // (The set is per process; a schedule's latest run is also known from its job, so this survives restarts.)
   forceDone: (id) => scheduledPanes.has(id) || scheduler.list().some((j) => j.lastPane === id),
@@ -404,7 +407,7 @@ app.post("/api/panes", async (req, res) => {
 // Panes started by a schedule: their "finished" push always fires (forceDone).
 const scheduledPanes = new Set();
 const scheduler = createScheduler({
-  startRun: (job) => {
+  startRun: async (job) => {
     // Retire the previous run's session — but only if you're done with it:
     // idle, not flagged, not waiting on you. Otherwise it stays, untouched.
     const prev = job.lastPane && registry.info(job.lastPane);
@@ -414,8 +417,20 @@ const scheduler = createScheduler({
       registry.kill(prev.id);
       scheduledPanes.delete(prev.id);
       broadcast(session, { t: "closed", pane: prev.id });
+      // Its own-branch folder goes too — only if that run changed nothing:
+      // finishWorktree refuses uncommitted work and keeps an unmerged branch.
+      if (job.worktree) {
+        const g = await gitInfo(prev.cwd).catch(() => null);
+        if (g?.worktree) await finishWorktree(prev.cwd).catch(() => null);
+      }
     }
-    const pane = registry.create({ cwd: job.cwd, cmd: job.cmd, kind: "agent" });
+    let cwd = job.cwd;
+    if (job.worktree) {
+      const wt = await createWorktree(cwd, job.name); // throws → recorded as the run's error
+      cwd = wt.path;
+      panesGitCache.data = null;
+    }
+    const pane = registry.create({ cwd, cmd: job.cmd, kind: "agent" });
     registry.setName(pane.id, job.name);
     scheduledPanes.add(pane.id);
     const info = registry.info(pane.id);
@@ -425,9 +440,13 @@ const scheduler = createScheduler({
   },
 });
 app.get("/api/schedules", (_req, res) => res.json({ jobs: scheduler.list(), now: Date.now() }));
-app.post("/api/schedules", (req, res) => {
+app.post("/api/schedules", async (req, res) => {
   try {
-    res.json(scheduler.upsert(req.body || {}));
+    const b = req.body || {};
+    // "Own branch" needs a git repo — say so now, not at 7am when the run fails.
+    if (b.worktree && !(await gitInfo(String(b.cwd || "").replace(/^~(?=\/|$)/, homedir())).catch(() => null)))
+      throw new Error("“Run on its own branch” needs a git repository — that folder isn't one.");
+    res.json(scheduler.upsert(b));
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -856,13 +875,18 @@ function inboxItems() {
 
 app.get("/api/inbox", (_req, res) => res.json(inboxItems()));
 
-app.post("/api/inbox/act", async (req, res) => {
-  const { pane: id, action } = req.body || {};
+/**
+ * Carry out one inbox action on a pane — the inbox's cards AND the iOS app's
+ * lock-screen Allow/Deny (/api/push/action) both come through here, so they
+ * share every check: "already answered", and the terminal screen re-read that
+ * refuses if the prompt changed. Returns { ok, reason? }.
+ */
+async function inboxAct(id, action) {
   const info = id && registry.info(id);
-  if (!info || !action || typeof action !== "object") return res.status(400).json({ ok: false, reason: "bad request" });
-  const done = (ok, reason) => {
+  if (!info || !action || typeof action !== "object") return { ok: false, reason: "bad request" };
+  const result = (ok, reason) => {
     broadcastAll({ t: "inbox" });
-    res.status(ok ? 200 : 409).json({ ok, ...(reason ? { reason } : {}) });
+    return { ok, ...(reason ? { reason } : {}) };
   };
   const clear = () => {
     registry.clearAttention(id);
@@ -872,16 +896,16 @@ app.post("/api/inbox/act", async (req, res) => {
   try {
     switch (action.type) {
       case "approve": {
-        if (info.kind !== "agent") return done(false, "not a chat pane");
+        if (info.kind !== "agent") return result(false, "not a chat pane");
         const decision = ["allow", "deny", "always"].includes(action.decision) ? action.decision : "deny";
         const ok = agents.approve(id, String(action.requestId), decision, text || undefined);
         if (ok && action.mode && decision !== "deny") await agents.setMode(id, String(action.mode));
-        return done(ok, ok ? null : "That request was already answered.");
+        return result(ok, ok ? null : "That request was already answered.");
       }
       case "answer": {
-        if (info.kind !== "agent" || !action.answers || typeof action.answers !== "object") return done(false, "bad answer");
+        if (info.kind !== "agent" || !action.answers || typeof action.answers !== "object") return result(false, "bad answer");
         const ok = agents.answer(id, String(action.requestId), action.answers);
-        return done(ok, ok ? null : "That question was already answered.");
+        return result(ok, ok ? null : "That question was already answered.");
       }
       case "choose": {
         // Re-read the screen and make sure it's still the prompt the card was
@@ -889,28 +913,87 @@ app.post("/api/inbox/act", async (req, res) => {
         const prompt = parsePrompt(ptys.screen(id));
         const opt = prompt?.options[action.index];
         if (!prompt || !opt || opt.label !== action.label || prompt.question !== action.question)
-          return done(false, "That prompt has changed — refresh and try again.");
+          return result(false, "That prompt has changed — refresh and try again.");
         ptys.sendKeys(id, { keys: keysFor(prompt, action.index) });
         if (text) setTimeout(() => ptys.sendKeys(id, { text, keys: ["Enter"] }), 900); // "No" + what to do instead
         clear();
-        return done(true);
+        return result(true);
       }
       case "reply": {
-        if (!text) return done(false, "empty reply");
+        if (!text) return result(false, "empty reply");
         if (info.kind === "agent") agents.sendMessage(id, text);
         else ptys.sendKeys(id, { text, keys: ["Enter"] });
         clear();
-        return done(true);
+        return result(true);
       }
       case "dismiss":
         clear();
-        return done(true);
+        return result(true);
       default:
-        return done(false, "unknown action");
+        return result(false, "unknown action");
     }
   } catch (e) {
-    return done(false, e.message);
+    return result(false, e.message);
   }
+}
+
+app.post("/api/inbox/act", async (req, res) => {
+  const { pane: id, action } = req.body || {};
+  const r = await inboxAct(id, action);
+  res.status(r.ok ? 200 : r.reason === "bad request" ? 400 : 409).json(r);
+});
+
+// ---- Lock-screen approvals (the iOS app) ---------------------------------------
+// A "needs you" push for an approval carries a ONE-TIME token, never the request
+// itself. Long-press → Allow/Deny (Face ID first — authenticationRequired) and
+// the app redeems the token here, signed in as you (the gate cookie of that
+// machine). The token maps to exactly what was pending when the push was sent;
+// inboxAct() then refuses if it's since been answered or the screen changed.
+const approvalTokens = new Map(); // token -> { pane, allow, deny, exp }
+const APPROVAL_TTL = 15 * 60 * 1000;
+
+/** What an Allow/Deny on this pane's push would do right now, plus a label for the notification. Null if not an approval. */
+function approvalFor(paneId) {
+  const info = registry.info(paneId);
+  if (!info) return null;
+  if (info.kind === "agent") {
+    const ev = (agents.inboxOf(paneId)?.pending || []).find((e) => e.t === "permission_request");
+    if (!ev || ev.tool === "ExitPlanMode") return null; // plans want reading, not a blind tap
+    const target = String(ev.input?.command || ev.input?.file_path || ev.input?.url || ev.input?.pattern || "").replace(/\s+/g, " ");
+    return {
+      allow: { type: "approve", requestId: ev.requestId, decision: "allow" },
+      deny: { type: "approve", requestId: ev.requestId, decision: "deny" },
+      label: `${ev.tool}${target ? `: ${target}` : ""}`.slice(0, 140),
+    };
+  }
+  const prompt = parsePrompt(ptys.screen(paneId));
+  if (!prompt) return null;
+  const yes = prompt.options.find((o) => /^yes\b/i.test(o.label));
+  const no = prompt.options.find((o) => /^no\b/i.test(o.label));
+  if (!yes || !no) return null; // not a plain yes/no — needs the full card
+  const choose = (o) => ({ type: "choose", index: o.index, label: o.label, question: prompt.question });
+  const detail = (prompt.detail || "").split("\n")[0] || prompt.title;
+  return { allow: choose(yes), deny: choose(no), label: `${prompt.title}${detail && detail !== prompt.title ? `: ${detail}` : ""}`.slice(0, 140) };
+}
+
+function mintApproval(paneId) {
+  const a = approvalFor(paneId);
+  if (!a) return null;
+  const now = Date.now();
+  for (const [t, v] of approvalTokens) if (v.exp < now) approvalTokens.delete(t);
+  const token = randomBytes(18).toString("base64url");
+  approvalTokens.set(token, { pane: paneId, allow: a.allow, deny: a.deny, exp: now + APPROVAL_TTL });
+  return { token, label: a.label };
+}
+
+app.post("/api/push/action", async (req, res) => {
+  const { token, action } = req.body || {};
+  const entry = approvalTokens.get(String(token || ""));
+  approvalTokens.delete(String(token || "")); // single use, whatever happens next
+  if (!entry || entry.exp < Date.now()) return res.status(410).json({ ok: false, reason: "That request has expired — open FleetView." });
+  if (action !== "allow" && action !== "deny") return res.status(400).json({ ok: false, reason: "unknown action" });
+  const r = await inboxAct(entry.pane, action === "allow" ? entry.allow : entry.deny);
+  res.status(r.ok ? 200 : 409).json(r);
 });
 
 // ---- Branches & shipping (worktrees.js / ship.js) -----------------------------

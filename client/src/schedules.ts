@@ -18,6 +18,7 @@ type Job = {
   days: number[];
   time: string;
   enabled: boolean;
+  worktree?: boolean;
   lastRunAt: number;
   lastPane: string | null;
   lastError: string | null;
@@ -148,7 +149,7 @@ function card(j: Job) {
   const name = el("span", "ic-name");
   name.textContent = j.name;
   const where = el("span", "ic-where");
-  where.textContent = `${describe(j)} · ${j.cwd.split("/").filter(Boolean).slice(-2).join("/")}`;
+  where.textContent = `${describe(j)} · ${j.cwd.split("/").filter(Boolean).slice(-2).join("/")}${j.worktree ? " · own branch" : ""}`;
   where.title = j.cwd;
   who.append(name, where);
   head.append(who);
@@ -289,6 +290,15 @@ async function showForm(j: Job | null) {
   time.type = "time";
   time.value = j?.time || "07:00";
 
+  // Own branch: each run in its own git worktree (server/worktrees.js).
+  const own = document.createElement("input");
+  own.type = "checkbox";
+  own.checked = !!j?.worktree;
+  const ownRow = el("label", "sched-check");
+  const ownText = el("span", "");
+  ownText.textContent = "Run on its own branch";
+  ownRow.append(own, ownText);
+
   const err = el("div", "inbox-err");
   err.hidden = true;
   const acts = el("div", "ic-actions");
@@ -304,6 +314,7 @@ async function showForm(j: Job | null) {
         prompt: prompt.value,
         days: [...days],
         time: time.value,
+        worktree: own.checked,
       });
       await showList();
     } catch (e) {
@@ -329,6 +340,13 @@ async function showForm(j: Job | null) {
     field("Days", dayRow),
     presets,
     field("Time", time, "This machine's local time."),
+    ownRow,
+    (() => {
+      const h = el("span", "sched-hint");
+      h.textContent =
+        "Each run works on a new branch in its own folder, so it never touches the checkout you're working in. A run that changed nothing is cleaned up by the next one; anything it did is kept. Needs a git repo.";
+      return h;
+    })(),
     err,
     acts
   );

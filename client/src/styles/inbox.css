@@ -497,3 +497,20 @@ body.light .inbox-mini + .inbox-mini {
 .sched-card .ic-actions {
   margin-top: 12px;
 }
+.sched-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  color: var(--text);
+  cursor: pointer;
+}
+.sched-check input {
+  width: 20px !important;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.sched-check + .sched-hint {
+  margin-top: -6px;
+}
