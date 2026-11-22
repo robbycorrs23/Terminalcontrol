@@ -313,3 +313,60 @@ body.light .inbox-card {
 .inbox-card .q-opt:disabled {
   cursor: default;
 }
+
+/* ---- The chip row under the bar is retired: the inbox holds it all ----
+   Waiting / flagged / recoverable sessions now live only in the inbox
+   (Needs you / Recover / Flagged). The row survives solely for the two rare,
+   transient notices: "updated — reload" and a refused view flip. The chip
+   containers stay in the DOM (main.ts still renders into them) but never show. */
+#barChips #queue,
+#barChips #followups,
+#barChips #recovery {
+  display: none !important;
+}
+#barChips:not(:has(#viewNote:not([hidden]), #updateNote:not([hidden]))) {
+  display: none !important;
+}
+/* Nothing needs you, but something waits to be recovered or is flagged. */
+.inbox-count.dot {
+  top: -2px;
+  right: -2px;
+  min-width: 9px;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  background: var(--accent);
+}
+.inbox-sec-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.inbox-sec-h .sec-act {
+  margin-left: auto;
+  padding: 2px 8px;
+  min-height: 0;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.inbox-minis {
+  padding: 0;
+}
+.inbox-mini {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+.inbox-mini + .inbox-mini {
+  border-top: 1px solid var(--line);
+}
+body.light .inbox-mini + .inbox-mini {
+  border-color: #e5e5ea;
+}
+.mini-acts {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
