@@ -21,7 +21,7 @@
  *    notifications — are hidden via body.in-app; the categories still apply.
  */
 type Handler = { postMessage: (m: unknown) => void };
-export type AppMachine = { id: string; name: string; icon: string | null; current: boolean };
+export type AppMachine = { id: string; name: string; icon: string | null; iconData?: string | null; current: boolean };
 type AppWindow = Window & {
   webkit?: { messageHandlers?: { fleetApp?: Handler } };
   fleetOpenPane?: (id: string) => boolean;
@@ -65,11 +65,12 @@ export function initAppBridge(deps: { brand: HTMLElement; openPane: (id: string)
       b.title = m.name;
       b.setAttribute("aria-label", m.current ? `${m.name} (current)` : `Switch to ${m.name}`);
       b.setAttribute("aria-pressed", String(!!m.current));
-      // The app sends icons as data: URLs (fetched natively, so a page never has
-      // to load another machine's image); a plain https URL still works.
-      if (m.icon && /^(https?:\/\/|data:image\/png;base64,)/.test(m.icon)) {
+      // Prefer the app's natively fetched copy (iconData, a data: URL) so this
+      // page never has to load another machine's image; else the https URL.
+      const src = m.iconData && /^data:image\/png;base64,/.test(m.iconData) ? m.iconData : m.icon && /^https?:\/\//.test(m.icon) ? m.icon : "";
+      if (src) {
         const img = document.createElement("img");
-        img.src = m.icon;
+        img.src = src;
         img.alt = "";
         img.addEventListener("error", () => img.replaceWith(initial(m.name)));
         b.append(img);

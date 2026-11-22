@@ -93,8 +93,13 @@ final class MachineWeb: NSObject, ObservableObject {
         // machine's tile showed as a bare letter inside the other's page).
         // Not fetched yet → the URL now, and a re-send once it arrives.
         let items: [[String: Any]] = list.map {
+            // `icon` stays the plain https URL — pages from before iconData only
+            // accept that, and a machine may not have updated yet (sending a
+            // data: URL there turned every tile into a letter). Newer pages
+            // prefer `iconData`.
             ["id": $0.id.uuidString, "name": $0.name,
-             "icon": IconCache.shared.dataURL(for: $0.icon) ?? $0.icon?.absoluteString ?? NSNull(),
+             "icon": $0.icon?.absoluteString ?? NSNull(),
+             "iconData": IconCache.shared.dataURL(for: $0.icon) ?? NSNull(),
              "current": $0.id == machine.id]
         }
         for m in list where IconCache.shared.dataURL(for: m.icon) == nil {
