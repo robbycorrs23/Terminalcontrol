@@ -85,9 +85,13 @@
   background: var(--btn);
   color: var(--text);
 }
+/* No opacity here: the select is the INVISIBLE half of a chipSelect (the
+   label beside it is what you see). "opacity: 1" on :disabled outranked the
+   chip's opacity:0, so until the SDK reported its model list (the picker is
+   disabled with <2 models — i.e. until you'd sent a message) the real select
+   showed through and the model name was drawn twice, overlapping. */
 .term .composer-row .model-sel:disabled {
   cursor: default;
-  opacity: 1;
   appearance: none;
   -webkit-appearance: none;
 }

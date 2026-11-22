@@ -555,3 +555,45 @@ body.in-app.app-quick #bar .brand {
   fill: currentColor;
   stroke: none;
 }
+/* Wider quick-switch buttons: a pill about twice the old width, filled with
+   the icons' own tile colour (#1c2027, see scripts/make-icons.mjs) so the
+   square icon reads as one wide tile, with room either side and a small gap. */
+.app-machines {
+  gap: 6px;
+  padding: 0;
+  background: none;
+}
+#bar .app-machines .app-machine {
+  width: 64px;
+  min-width: 64px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 11px;
+  background: #1c2027;
+  display: grid;
+  place-items: center;
+}
+#bar .app-machines .app-machine.on {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.app-machine img {
+  width: auto;
+  height: 100%;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 0;
+}
+#bar .app-machines .app-machines-more {
+  width: 40px;
+  min-width: 40px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.06);
+}
+/* A fixed icon size inside the pill: a percentage height has nothing definite
+   to resolve against in a grid item, and the image escaped the button. */
+#bar .app-machines .app-machine img {
+  width: 34px;
+  height: 34px;
+  max-width: none;
+}
