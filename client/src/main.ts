@@ -1,5 +1,5 @@
 import { openNewSession } from "./new-session";
-import { initAppBridge, reportWaiting } from "./app-bridge";
+import { initAppBridge, reportWaiting, inApp } from "./app-bridge";
 import { initSchedules, openSchedules } from "./schedules";
 import { initTemplates, openTemplates, listTemplates, showForm as showTemplateForm } from "./templates";
 import { initGitStatus, decorateGit, scheduleGitRefresh } from "./git-status";
@@ -2477,7 +2477,10 @@ function applySettings() {
   // The device switch is NOT a pref — it reflects whether this device actually
   // holds a push subscription, which only push.ts knows.
   pushDeviceEl.checked = pushActive();
-  pushCats.setAttribute("aria-disabled", pushActive() ? "false" : "true");
+  // Which kinds to push only matters once this device receives pushes: a Web
+  // Push subscription in a browser — or always, inside the iOS app, which gets
+  // them natively (server/apns.js) and never holds a Web Push subscription.
+  pushCats.setAttribute("aria-disabled", pushActive() || inApp() ? "false" : "true");
 
   renderQueue(); // favicon colours come from CSS vars — repaint after a theme flip
 }
