@@ -1358,7 +1358,24 @@ export class AgentChat implements PaneView {
   /** The Changes panel over this pane's chat (changes-panel.ts). */
   private showChanges() {
     const chat = this.el.querySelector(".chat") as HTMLElement | null;
-    if (chat) openChanges(chat, this.id);
+    if (chat) openChanges(chat, this.id, (text) => this.sendExternal(text));
+  }
+
+  /**
+   * Send a message composed elsewhere (a review from the Changes panel) as if
+   * typed here: mid-turn it joins the visible queue, otherwise it goes now.
+   * Never touches whatever is half-typed in the composer.
+   */
+  sendExternal(text: string) {
+    if (!text.trim()) return;
+    if (this.busy) {
+      this.queue.push(text);
+      this.syncSend();
+      return;
+    }
+    this.stick = true;
+    this.wsSend({ t: "send", text });
+    this.syncSend();
   }
 
   // ---- Connection, retries, compaction, context, background tasks ---------------

@@ -1,0 +1,212 @@
+/* Review mode in the Changes panel (review.ts): numbered, commentable diff
+   rows; inline comment cards; the "Send review" bar. */
+.term .rv-diff {
+  max-height: 70vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 8px;
+  background: var(--term-bg);
+  font: 11.5px/1.55 ui-monospace, Menlo, monospace;
+}
+.term .rv-row {
+  display: flex;
+  min-width: max-content;
+  cursor: pointer;
+  outline: none;
+}
+.term .rv-row.hunk {
+  cursor: default;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.term .rv-ln {
+  position: sticky;
+  left: 0;
+  flex: none;
+  width: 3.4em;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--text-dim);
+  opacity: 0.7;
+  background: var(--term-bg);
+  user-select: none;
+}
+.term .rv-code {
+  flex: 1;
+  padding-right: 12px;
+  white-space: pre;
+}
+.term .rv-row.add {
+  color: #3fb950;
+  background: rgba(46, 160, 67, 0.15);
+}
+.term .rv-row.del {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.15);
+}
+.term .rv-row.ctx {
+  color: var(--text-dim);
+}
+body.light .term .rv-row.add {
+  color: #1a7f37;
+}
+body.light .term .rv-row.del {
+  color: #cf222e;
+}
+/* The "+" affordance: an outline on the row you're about to comment on. */
+.term .rv-row:not(.hunk):hover,
+.term .rv-row:not(.hunk):focus-visible {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.term .rv-row:not(.hunk):hover .rv-ln {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.term .rv-editor,
+.term .rv-comment {
+  margin: 4px 8px 6px 3.4em;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel);
+  font: 13.5px/1.4 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  color: var(--text);
+  white-space: normal;
+  position: sticky;
+  left: 0;
+  max-width: min(560px, calc(100% - 4em));
+  cursor: default;
+}
+.term .rv-editor textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--term-bg);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+.term .rv-editor textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.term .rv-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.term .rv-moved {
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.term .rv-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+.term .rv-btn {
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--btn);
+  color: var(--text);
+  font: 500 13px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  cursor: pointer;
+}
+.term .rv-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.term .rv-btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+}
+.term .rv-btn.ghost.danger {
+  color: var(--use-crit);
+}
+.term .rv-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Comment count on a file row's summary. */
+.term .chg-rv {
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font: 700 11px/18px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  text-align: center;
+}
+.term .chg-rv[hidden] {
+  display: none;
+}
+
+/* The review bar: pinned under the list while there are comments. */
+.term .rv-bar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+.term .rv-bar[hidden] {
+  display: none;
+}
+.term .rv-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.term .rv-count {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.term .rv-note {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--term-bg);
+  color: var(--text);
+  font: 13.5px/1.4 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  resize: none;
+}
+.term .rv-note:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+@media (max-width: 640px) {
+  .term .rv-diff {
+    font-size: 12px;
+  }
+  .term .rv-editor textarea,
+  .term .rv-note {
+    font-size: 16px; /* iOS zooms on focus below 16px */
+  }
+  .term .rv-btn {
+    min-height: 36px;
+    font-size: 15px;
+  }
+}

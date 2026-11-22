@@ -82,6 +82,7 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
 | `client/src/new-session.ts` / `server/auto-title.js` | phone new-session sheet / auto session titles |
 | `client/src/changes-panel.ts` / `server/changes.js` | per-session Changes panel (transcript-attributed files × git diff) |
 | `client/src/rewind-editor.ts` | edit-and-resend editor (rewind logic lives in agent-manager.js) |
+| `client/src/review.ts` | review mode: commentable numbered diffs in the Changes panel → one review message |
 | `server/self-check.js` | startup: fix deps vs lockfile, rebuild a stale bundle, version info |
 | `client/src/chat-question.ts` / `chat-tasks.ts` / `chat-queue.ts` / `chat-attachments.ts` | chat pane components: AskUserQuestion card / background-task tray / queued messages / composer attachments |
 | `client/src/chip-select.ts` / `clipboard-images.ts` / `event-keys.ts` / `chat-usage.ts` | small helpers: invisible-select chips / paste & clipboard images / history anchors / usage rings + the ONE usage ramp |
@@ -426,6 +427,17 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   execFile (argv, no shell, timeout, output cap); read-only. Opened from the
   + menu or the "N files changed" link under a turn (`turnFiles`, saved and
   restored around history pages like the other turn state).
+- **Review mode** (`client/src/review.ts`, used by `changes-panel.ts`): every
+  Changes diff renders as numbered rows (`parseDiffRows` reads the hunk
+  headers; an untracked file's all-`+` diff counts from 1; non-git edit diffs
+  get no numbers). Click/tap a row → inline comment; drafts persist per pane in
+  localStorage (`fleet-review:<paneId>`) and each stores the line's TEXT, so on
+  re-render it re-anchors by line+text, then text alone, else shows at the end
+  of the file as "moved" — never silently dropped. "Send review" sends ONE
+  message (file:line + the quoted code + comment, optional overall note)
+  through `AgentChat.sendExternal()`, i.e. the composer's own path: mid-turn it
+  joins the visible queue. It never touches what's half-typed in the composer.
+  Client-only: no server changes.
 - **Edit & resend (rewind)** (`client/src/rewind-editor.ts`, `rewind*` /
   `undoRewind` in agent-manager.js). Prerequisites, both load-bearing:
   `enableFileCheckpointing: true` on every chat session (without it a session

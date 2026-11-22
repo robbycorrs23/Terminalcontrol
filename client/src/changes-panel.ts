@@ -10,11 +10,15 @@
  *                     make (collapsed) — including anything edited through
  *                     shell commands, which a transcript can't attribute
  *
- * Diffs render with the same code the chat's steps use. All text via
+ * Review mode (review.ts): tap any diff line to comment; the comments go back
+ * to the session as one message from the bar at the bottom.
+ *
+ * Non-git edit diffs render with the same code the chat's steps use. All text via
  * textContent / chat-steps' renderers — nothing here touches innerHTML.
  */
 import { el, renderDiff, inputDiff } from "./chat-steps";
 import { renderShip } from "./ship-panel";
+import { ReviewStore, renderReviewDiff, reviewBar } from "./review";
 
 type FileChange = {
   path: string;
@@ -38,7 +42,7 @@ const STATUS_TITLE: Record<string, string> = {
   clean: "No changes now — committed or changed back",
 };
 
-function fileRow(f: FileChange): HTMLElement {
+function fileRow(f: FileChange, store: ReviewStore): HTMLElement {
   const row = el("details", `chg-file ${f.status === "clean" ? "clean" : ""}`) as HTMLDetailsElement;
   const sum = document.createElement("summary");
   const badge = el("span", `chg-badge s-${f.status}`);
@@ -60,7 +64,17 @@ function fileRow(f: FileChange): HTMLElement {
     d.textContent = `−${f.del ?? 0}`;
     stat.append(a, d);
   }
-  sum.append(badge, text, stat);
+  // How many review comments this file carries (drafts survive a closed panel).
+  const rv = el("span", "chg-rv");
+  const syncRv = () => {
+    const n = store.forFile(f.rel).length;
+    rv.hidden = n === 0;
+    rv.textContent = String(n);
+    rv.title = `${n} review comment${n === 1 ? "" : "s"}`;
+  };
+  syncRv();
+  store.onChange(() => rv.isConnected && syncRv());
+  sum.append(badge, text, rv, stat);
   sum.title = f.path;
   row.append(sum);
 
@@ -68,13 +82,13 @@ function fileRow(f: FileChange): HTMLElement {
   row.addEventListener("toggle", () => {
     if (!row.open || row.querySelector(".chg-body")) return;
     const body = el("div", "chg-body");
-    if (f.diff) body.append(renderDiff(f.diff));
+    if (f.diff) body.append(renderReviewDiff(f.diff, f.rel, store, true));
     else if (f.edits?.length) {
       const joined = f.edits
         .map((e) => inputDiff(e.tool, e.input))
         .filter(Boolean)
         .join("\n…\n");
-      if (joined) body.append(renderDiff(joined));
+      if (joined) body.append(renderReviewDiff(joined, f.rel, store, false));
       const n = el("div", "chg-note");
       n.textContent = "The edits this session made (not compared with the file on disk).";
       body.append(n);
@@ -85,6 +99,7 @@ function fileRow(f: FileChange): HTMLElement {
     }
     row.append(body);
   });
+  if (store.forFile(f.rel).length) row.open = true; // show the drafts where they were left
   return row;
 }
 
@@ -99,7 +114,8 @@ function totals(list: FileChange[]) {
 }
 
 /** Open the panel over `host` (the pane's .chat element) for pane `paneId`. */
-export function openChanges(host: HTMLElement, paneId: string) {
+export function openChanges(host: HTMLElement, paneId: string, send?: (text: string) => void) {
+  const store = new ReviewStore(paneId);
   host.querySelector(".chg-panel")?.remove();
   const panel = el("div", "chg-panel");
   panel.addEventListener("click", (e) => e.stopPropagation()); // not a click-to-zoom
@@ -122,6 +138,14 @@ export function openChanges(host: HTMLElement, paneId: string) {
   head.append(back, titles, refresh);
   const body = el("div", "chg-list");
   panel.append(head, body);
+  if (send) {
+    panel.append(
+      reviewBar(store, send, (sent) => {
+        if (sent) panel.remove(); // back to the chat, where the review just landed
+        else void load();
+      })
+    );
+  }
   host.append(panel);
 
   const keyClose = (e: KeyboardEvent) => {
@@ -177,7 +201,7 @@ export function openChanges(host: HTMLElement, paneId: string) {
     body.append(h1);
     if (data.session.length) {
       const card = el("div", "chg-card");
-      for (const f of data.session) card.append(fileRow(f));
+      for (const f of data.session) card.append(fileRow(f, store));
       body.append(card);
     } else {
       const n = el("div", "chg-empty");
@@ -193,13 +217,14 @@ export function openChanges(host: HTMLElement, paneId: string) {
       s.textContent = `Other uncommitted changes · ${data.other.length}`;
       s.title = `+${o.add} −${o.del}`;
       const card = el("div", "chg-card");
-      for (const f of data.other) card.append(fileRow(f));
+      for (const f of data.other) card.append(fileRow(f, store));
       wrap.append(s, card);
       body.append(wrap);
     }
     if (data.repo) {
       const foot = el("div", "chg-foot");
       foot.textContent =
+        (send ? "Tap any line to comment on it — your comments go back to the session as one review. " : "") +
         "\"This session\" is what Claude edited with its file tools, compared with the last commit. Changes made through shell commands, by another session or by you appear under Other.";
       body.append(foot);
     }
