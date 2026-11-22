@@ -11,3 +11,7 @@ ssh-profiles.json
 
 # local AI-tooling working dir
 .superpowers/
+
+# Local tooling / backups
+.playwright-mcp/
+*.bak-*
