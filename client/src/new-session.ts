@@ -106,7 +106,7 @@ export async function openNewSession(deps: NewSessionDeps) {
     folders.append(row);
   }
   const browse = el("button", "ns-folder ns-browse") as HTMLButtonElement;
-  browse.append(el("span", "ns-folder-name", "Browse other folders…"));
+  browse.append(el("span", "ns-folder-name", "Browse or create a folder…"));
   browse.addEventListener("click", () => {
     closeNewSession();
     deps.browse();

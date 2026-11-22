@@ -65,6 +65,13 @@ body.light .ns-panel {
   flex-direction: column;
   gap: 6px;
 }
+/* Sections must NEVER shrink: .ns-body is a scrolling flex column, and with
+   the default flex-shrink a tall folder list squashed every card — whose
+   overflow:hidden then silently cut off "Browse or create a folder…" and the
+   Branch note on a phone. Fixed-size children + overflow-y:auto = it scrolls. */
+.ns-body > * {
+  flex-shrink: 0;
+}
 .ns-label {
   margin: 12px 4px 0;
   font-size: 12px;
