@@ -1,5 +1,5 @@
 import { openNewSession } from "./new-session";
-import { initAppBridge } from "./app-bridge";
+import { initAppBridge, reportWaiting } from "./app-bridge";
 import { initSchedules, openSchedules } from "./schedules";
 import { initTemplates, openTemplates, listTemplates, showForm as showTemplateForm } from "./templates";
 import { initGitStatus, decorateGit, scheduleGitRefresh } from "./git-status";
@@ -1125,9 +1125,12 @@ function renderQueue() {
     head ? displayName(head.info) : "",
     head ? head.waitingKind() : null
   );
-  // Same count on the installed app's home-screen icon. Piggybacks on the tab
-  // indicator's choke point so the two can't drift.
-  setBadge(queue.length);
+  // The icon badge counts prompts WAITING FOR YOUR REPLY (approvals,
+  // questions) — finished sessions are informational, not a to-do. Same rule
+  // as the server's pushes (push-notifier.js waitingCount), so they can't drift.
+  const needsReply = queue.filter((id) => panes.get(id)?.waitingKind() === "question").length;
+  setBadge(needsReply);
+  reportWaiting(needsReply); // the iOS app sums this across machines
 }
 nextBtn.onclick = () => {
   const t = queue[0] && panes.get(queue[0]);

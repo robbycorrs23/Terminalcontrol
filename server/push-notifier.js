@@ -73,9 +73,11 @@ export function createPushNotifier({
     return kind === "question" ? p.pushQuestion !== false : !!p.pushDone;
   }
 
+  /** The badge number: prompts WAITING FOR YOUR REPLY (approvals, questions) —
+   *  not finished sessions, which are informational, not a to-do. */
   function waitingCount() {
     try {
-      return registry.list().filter((p) => p?.attention?.waiting).length;
+      return registry.list().filter((p) => p?.attention?.waiting && (p.attention.kind || "question") === "question").length;
     } catch {
       return 0;
     }
@@ -229,7 +231,30 @@ export function createPushNotifier({
     );
   }
 
-  return { onAttention };
+  /**
+   * Keep the iOS app's icon badge current as prompts are answered anywhere
+   * (the inbox, the desktop, another phone) — not just when a new alert is
+   * sent. A tiny poll of the same count, and a badge-only APNs push ONLY when
+   * it changes (low priority, collapsed, so a burst is one update).
+   */
+  function startBadgeSync(everyMs = 4000) {
+    let last = waitingCount();
+    const t = setInterval(() => {
+      if (!apns?.enabled || !apnsDevices?.count()) return;
+      const n = waitingCount();
+      if (n === last) return;
+      last = n;
+      for (const row of apnsDevices.list()) {
+        void apns.send(row.token, { aps: { badge: n }, origin: row.origin, badgeOnly: true }, { collapseId: "fleet-badge", priority: 5 }).then((r) => {
+          if (!r.ok && r.gone) apnsDevices.remove(row.token);
+        });
+      }
+    }, everyMs);
+    t.unref?.();
+    return () => clearInterval(t);
+  }
+
+  return { onAttention, startBadgeSync, waitingCount };
 }
 
 /** A stable, header-safe Topic for a pane id (base64url, <=32 chars). */

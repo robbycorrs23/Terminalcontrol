@@ -88,16 +88,18 @@ struct RootView: View {
         .onChange(of: push.pendingOpen?.origin) { _, _ in openPendingNotification() }
         .onChange(of: phase) { _, p in
             if p == .active {
-                push.clearBadge()
+                push.refreshBadge()
                 push.visibleOrigin = store.current?.origin
                 openPendingNotification()
             } else {
                 push.visibleOrigin = nil
+                push.refreshBadge() // leave the icon showing the true total
             }
         }
         .onAppear {
             push.visibleOrigin = store.current?.origin
             pool.machines = { [weak store] in store?.machines ?? [] }
+            push.badgeSources = { [weak pool] in pool?.all.reduce(0) { $0 + $1.waiting } ?? 0 }
             pool.switchTo = { [weak store] id in store?.currentID = id }
         }
         // Names/icons/order changed (or a machine was added/removed): every

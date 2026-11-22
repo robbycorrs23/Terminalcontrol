@@ -51,8 +51,13 @@ final class PushCenter: NSObject, ObservableObject {
         token = deviceToken.map { String(format: "%02x", $0) }.joined()
     }
 
-    func clearBadge() {
-        UNUserNotificationCenter.current().setBadgeCount(0)
+    /// Badge = prompts waiting for a reply, summed over every machine whose page
+    /// is loaded. Each machine also pushes its own count as it changes
+    /// (push-notifier.js startBadgeSync); this corrects to the true total
+    /// whenever the app is in use.
+    var badgeSources: () -> Int = { 0 }
+    func refreshBadge() {
+        UNUserNotificationCenter.current().setBadgeCount(badgeSources())
     }
 }
 
@@ -60,6 +65,11 @@ extension PushCenter: UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
         let origin = notification.request.content.userInfo["origin"] as? String
+        // A badge-only update (push-notifier.js startBadgeSync): just the badge.
+        if notification.request.content.title.isEmpty && notification.request.content.body.isEmpty {
+            done([.badge])
+            return
+        }
         Task { @MainActor in
             // The open machine already shows it (glow, chip, sound) — don't double up.
             if let origin, origin == self.visibleOrigin, UIApplication.shared.applicationState == .active {

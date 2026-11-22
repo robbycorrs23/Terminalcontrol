@@ -367,6 +367,16 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
      action; the note rides on the deny) and **Reply** on "finished" pushes
      (`FLEET_REPLY`, `mintReply`, `inboxAct({type:"reply"})`). Each token only
      accepts the actions it was minted for. All require Face ID.
+  5. **Icon badge = prompts waiting for a reply** (question attention only —
+     finished sessions don't count), one rule everywhere: `waitingCount()` in
+     push-notifier.js and `needsReply` in main.ts. Each server's
+     `startBadgeSync()` polls that count and sends a badge-only APNs push
+     (priority 5, collapse id `fleet-badge`) ONLY when it changes, so answering
+     anywhere clears the phone's badge. A server knows only its own count; the
+     app corrects to the SUM over machines (pages report `{t:"waiting"}` via
+     app-bridge `reportWaiting`) whenever it's used and when it backgrounds.
+     Exact cross-machine sums while the app is closed would need a Notification
+     Service Extension + App Group — not built.
   3. **The web side detects the app by CAPABILITY**
      (`window.webkit.messageHandlers.fleetApp`), not the UA, and hides the
      browser-only notification rows via `body.in-app`.

@@ -252,6 +252,9 @@ pushes = createPushNotifier({
   apnsDevices,
 });
 
+// The app's icon badge follows "waiting for your reply" as it changes anywhere.
+pushes.startBadgeSync();
+
 ptys.on("attention", (pane, kind) => broadcast(registry.sessionOf(pane), { t: "attention", pane, kind }));
 // A pane started/stopped working (see PtyManager's work-detection notes). Edge-
 // triggered, so this is cheap even while a pane is streaming output.

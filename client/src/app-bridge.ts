@@ -96,6 +96,7 @@ export function initAppBridge(deps: { brand: HTMLElement; openPane: (id: string)
     quick.append(more);
   };
   post({ t: "ready" });
+  if (lastWaiting >= 0) post({ t: "waiting", n: lastWaiting }); // a count from before init
 }
 
 /** Fallback when a machine's icon can't load: its first TWO letters — "did2200"
@@ -105,5 +106,14 @@ function initial(name: string) {
   s.className = "app-machine-initial";
   s.textContent = (name.trim().slice(0, 2) || "?").toUpperCase();
   return s;
+}
+
+/** Tell the app how many prompts on THIS machine wait for a reply; it sums
+ *  machines for the icon badge. No-op in a browser. Deduplicated. */
+let lastWaiting = -1;
+export function reportWaiting(n: number) {
+  if (!inApp() || n === lastWaiting) return;
+  lastWaiting = n;
+  w.webkit!.messageHandlers!.fleetApp!.postMessage({ t: "waiting", n });
 }
 

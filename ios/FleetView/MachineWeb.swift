@@ -23,6 +23,8 @@ final class MachineWeb: NSObject, ObservableObject {
     /// The page finished loading AND is FleetView itself (not the gate) — safe
     /// to talk to: register for push, open panes.
     private(set) var ready = false
+    /// Prompts on this machine waiting for a reply (app-bridge.ts reportWaiting).
+    @Published private(set) var waiting = 0
 
     var onRequestSwitcher: (() -> Void)?
     /// Quick switch (the machine buttons in the page's top bar).
@@ -283,6 +285,9 @@ extension MachineWeb: WKScriptMessageHandler {
             problem = nil
             if let token = PushCenter.shared.token { registerPush(token: token) }
             sendMachines()
+        case "waiting":
+            waiting = max(0, (body["n"] as? Int) ?? 0)
+            PushCenter.shared.refreshBadge()
         case "machines":
             onRequestSwitcher?()
         case "switch":
