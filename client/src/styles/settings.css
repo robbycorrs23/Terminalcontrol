@@ -368,3 +368,91 @@ body.light #bar #settings .seg button.on {
 body.light #bar #settings .set-card > *:not([hidden]) + *:not([hidden]) {
   border-top-color: #e5e5ea;
 }
+
+/* ---- Home Screen icon picker (main.ts renderIconPicker) ---- */
+#settings .set-row.mc-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 12px 14px;
+}
+#settings .mc-icon[hidden] {
+  display: none;
+}
+#settings .mc-icon-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+#settings .mc-icon-preview {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 13px; /* iOS-ish squircle stand-in; the PNG itself is full-bleed */
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+#settings .mc-icon-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+#settings .mc-icon-hint {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+#settings .mc-icon-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+#settings .mc-mark {
+  padding: 0;
+  width: 46px;
+  height: 46px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  cursor: pointer;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+#settings .mc-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 11px;
+}
+#settings .mc-mark.on {
+  outline-color: var(--accent);
+}
+#settings .mc-icon-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+#settings .mc-swatch {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--sw);
+  cursor: pointer;
+  outline: 2px solid transparent;
+  outline-offset: 3px;
+}
+#settings .mc-swatch.on {
+  outline-color: var(--text);
+}
+#settings .mc-mark:disabled,
+#settings .mc-swatch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+#settings .mc-mark.on:disabled,
+#settings .mc-swatch.on:disabled {
+  opacity: 1;
+}

@@ -202,10 +202,9 @@
               <span class="set-label">Name</span>
               <input type="text" id="mcLabel" class="set-text" maxlength="40" placeholder="hostname" />
             </div>
-            <div class="set-row">
-              <span class="set-label">Icon colour</span>
-              <select id="mcColor"></select>
-            </div>
+            <!-- Home Screen icon: a symbol AND a colour (main.ts renderIconPicker;
+                 why both: scripts/make-icons.mjs). Built in JS. -->
+            <div class="set-row mc-icon" id="mcIcon"></div>
             <div class="set-row">
               <span class="set-label">Version</span>
               <span id="mcVersion" class="set-value">…</span>

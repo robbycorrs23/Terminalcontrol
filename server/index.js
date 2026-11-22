@@ -20,7 +20,7 @@ import { PushStore } from "./push-store.js";
 import { VapidKeys } from "./push-vapid.js";
 import { createSender } from "./push-send.js";
 import { createPushNotifier } from "./push-notifier.js";
-import { createIdentity, ICON_COLORS } from "./identity.js";
+import { createIdentity, ICON_COLORS, ICON_MARKS } from "./identity.js";
 import { SshProfileStore } from "./ssh-profiles.js";
 import { listSshConfigHosts } from "./ssh-hosts.js";
 import { UsageMonitor } from "./usage-monitor.js";
@@ -472,20 +472,30 @@ app.post("/api/mkdir", async (req, res) => {
 // calls itself. Deliberately not in the repo: the same checkout runs on several
 // machines and they want different answers, which is exactly what went wrong
 // when the account list was hardcoded.
-app.get("/api/machine", (_req, res) => {
-  const cfg = machine.ensureSeeded();
-  res.json({
+/** What Settings → This machine shows: the saved config plus the catalogue and what's in effect. */
+function machinePayload(cfg) {
+  return {
     ...cfg,
     profiles: machine.ALL_PROFILES, // the catalogue, for the settings checkboxes
     installed: machine.installedProfiles(), // which are actually logged in here
     iconColors: ICON_COLORS,
+    iconMarks: ICON_MARKS,
+    // What's actually in effect (an unset colour is derived from the name) and
+    // whether env pins it — Settings shows the real icon and disables what env owns.
+    icon: (({ color, mark, envColor, envMark }) => ({ color, mark, envColor, envMark }))(identity.current()),
     logoUrl: machine.badgeLogoPath() ? "/api/machine/logo?v=" + Date.now() : null,
-  });
+  };
+}
+
+app.get("/api/machine", (_req, res) => {
+  res.json(machinePayload(machine.ensureSeeded()));
 });
 
 app.put("/api/machine", (req, res) => {
-  const cfg = machine.update(req.body || {});
-  res.json(cfg);
+  const b = req.body || {};
+  if ("iconMark" in b && b.iconMark && !ICON_MARKS.includes(b.iconMark)) return res.status(400).json({ error: "unknown icon mark" });
+  if ("iconColor" in b && b.iconColor && !ICON_COLORS.includes(b.iconColor)) return res.status(400).json({ error: "unknown icon colour" });
+  res.json(machinePayload(machine.update(b)));
 });
 
 // Same base64 data-URL shape as the pane file drop, so the client needs no new
@@ -1218,12 +1228,13 @@ for (const file of ["icon-192.png", "badge-96.png", "apple-touch-icon.png"]) {
  * Cached in memory against the file's mtime so this isn't a read per request,
  * but still picks up a rebuild without a restart.
  */
-let indexCache = { mtime: 0, html: "" };
+let indexCache = { mtime: "", html: "" };
 function sendIndexHtml(res) {
   const file = join(DIST, "index.html");
   res.setHeader("Cache-Control", "no-store"); // see noStoreIndexHtml's comment
   try {
-    const mtime = statSync(file).mtimeMs;
+    // Keyed on the icon too: the choice can change live from Settings.
+    const mtime = `${statSync(file).mtimeMs}:${identity.iconHref("apple-touch-icon.png")}`;
     if (mtime !== indexCache.mtime) {
       const html = readFileSync(file, "utf8").replace(
         /(<link\s+rel="apple-touch-icon"\s+href=")[^"]*(")/,

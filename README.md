@@ -265,6 +265,7 @@ shows up in the app name, the icon colour, and the in-app top bar and tab title:
 |---|---|---|
 | `FLEET_LABEL` | the machine's short hostname, lowercased | Home Screen caption, top bar, tab title. |
 | `FLEET_ICON_COLOR` | picked from the palette by hashing the label | One of `blue`, `violet`, `green`, `amber`, `red`, `teal`. The default already differs between machines; set it to choose deliberately. |
+| `FLEET_ICON_MARK` | `fleet` | The icon's symbol: `fleet`, `terminal`, `briefcase`, `house` or `code`. Overrides Settings → This machine. |
 | `FLEET_PUSH_CONTACT` | this repo's URL | The VAPID `sub` — who a push service contacts about this app server. Must be a `mailto:` or `https:` URL; Apple rejects anything else with `403 BadJwtToken`. |
 
 Set them where the server actually runs — for the auto-start service that means
@@ -275,9 +276,13 @@ inherits nothing from your shell (`scripts/install-service.js` bakes them in).
 either means deleting the app from the Home Screen and re-adding it on that
 device; a running server can't push the change.
 
-To change the palette itself, edit and re-run `scripts/make-icons.sh` (needs
-macOS `sips`, or swap in `rsvg-convert`) — the PNGs are committed artifacts, not
-a build step.
+Each install's Home Screen icon is a **symbol** (fleet, terminal, briefcase,
+house, code) and a **colour** — pick both in Settings → This machine, or pin them
+with `FLEET_ICON_MARK` / `FLEET_ICON_COLOR`. Give each machine a different
+symbol: iOS's tinted Home Screen mode recolours every icon, so the shape is what
+tells them apart. To change the artwork itself, edit and re-run
+`node scripts/make-icons.mjs` (needs macOS `sips` or `rsvg-convert`) — the PNGs
+are committed artifacts, not a build step.
 
 The identity keypair is generated once at `~/.fleetview/vapid.json` (0600), and
 subscriptions live beside it in `~/.fleetview/push-subscriptions.json`. ⚠ Deleting

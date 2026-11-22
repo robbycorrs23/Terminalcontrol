@@ -96,6 +96,7 @@ export function read() {
   return {
     label: raw.label || null,
     iconColor: raw.iconColor || null,
+    iconMark: raw.iconMark || null,
     accounts,
     badgeLogo: typeof raw.badgeLogo === "string" ? raw.badgeLogo : null,
     seeded, // true = never saved; the UI shows it as a suggestion to confirm
@@ -117,6 +118,7 @@ export function update(patch) {
   }
   if (patch && "label" in patch) next.label = patch.label ? String(patch.label).slice(0, 40) : null;
   if (patch && "iconColor" in patch) next.iconColor = patch.iconColor || null;
+  if (patch && "iconMark" in patch) next.iconMark = patch.iconMark || null;
   if (patch && "badgeLogo" in patch) next.badgeLogo = patch.badgeLogo || null;
   writeRaw(next);
   return read();

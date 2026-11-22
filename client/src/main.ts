@@ -288,7 +288,7 @@ function reflow() {
 // property rather than per-pane plumbing, so changing the badge updates every
 // box at once — including ones created before the fetch resolved.
 const mcLabel = document.getElementById("mcLabel") as HTMLInputElement;
-const mcColor = document.getElementById("mcColor") as HTMLSelectElement;
+const mcIcon = document.getElementById("mcIcon")!;
 const mcAccounts = document.getElementById("mcAccounts")!;
 const mcLogoPick = document.getElementById("mcLogoPick") as HTMLButtonElement;
 const mcLogoClear = document.getElementById("mcLogoClear") as HTMLButtonElement;
@@ -344,22 +344,111 @@ function applyMachineBadge() {
   mcLogoClear.hidden = !url;
 }
 
+// Swatch colours for the picker — the DEEP stop of each mark gradient in
+// scripts/make-icons.mjs. Only for the swatches; the icons themselves are PNGs.
+const ICON_SWATCH: Record<string, string> = {
+  blue: "#2f74ff",
+  violet: "#8a4dff",
+  green: "#16a352",
+  amber: "#f08c00",
+  red: "#e0262b",
+  teal: "#0c9c8c",
+};
+let iconChanged = false; // show the "re-add it" hint only after a change here
+
+/**
+ * Home Screen icon: a preview, the symbols (each drawn in the current colour)
+ * and the colours. Symbol AND colour because iOS's tinted Home Screen erases
+ * colour — two installs stay distinct only if their shapes differ. Anything
+ * the service's environment pins (FLEET_ICON_*) is shown but disabled.
+ */
+function renderIconPicker() {
+  mcIcon.textContent = "";
+  const icon = machine.icon;
+  if (!icon || !machine.iconMarks?.length) {
+    mcIcon.hidden = true; // older server
+    return;
+  }
+  mcIcon.hidden = false;
+  const set = (mark: string, color: string) => `/icons/${mark}-${color}/icon-192.png`;
+
+  const head = document.createElement("div");
+  head.className = "mc-icon-head";
+  const preview = document.createElement("img");
+  preview.className = "mc-icon-preview";
+  preview.alt = "";
+  preview.src = `/icons/${icon.mark}-${icon.color}/apple-touch-icon.png`;
+  const text = document.createElement("div");
+  text.className = "mc-icon-text";
+  const title = document.createElement("span");
+  title.className = "set-label";
+  title.textContent = "Home Screen icon";
+  const hint = document.createElement("span");
+  hint.className = "mc-icon-hint";
+  hint.textContent = iconChanged
+    ? "Saved. Delete FleetView from your Home Screen and add it again to see it — iOS keeps the icon it was added with."
+    : "Pick a different symbol for each machine — in iOS's tinted mode the shape is all that tells them apart.";
+  text.append(title, hint);
+  head.append(preview, text);
+
+  const marks = document.createElement("div");
+  marks.className = "mc-icon-marks";
+  marks.setAttribute("role", "radiogroup");
+  marks.setAttribute("aria-label", "Icon symbol");
+  for (const m of machine.iconMarks) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mc-mark" + (m === icon.mark ? " on" : "");
+    b.title = m;
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String(m === icon.mark));
+    b.setAttribute("aria-label", m);
+    b.disabled = icon.envMark;
+    const img = document.createElement("img");
+    img.src = set(m, icon.color);
+    img.alt = "";
+    b.append(img);
+    b.addEventListener("click", () => {
+      iconChanged = true;
+      void saveMachine({ iconMark: m });
+    });
+    marks.append(b);
+  }
+
+  const colors = document.createElement("div");
+  colors.className = "mc-icon-colors";
+  colors.setAttribute("role", "radiogroup");
+  colors.setAttribute("aria-label", "Icon colour");
+  for (const c of machine.iconColors) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mc-swatch" + (c === icon.color ? " on" : "");
+    b.style.setProperty("--sw", ICON_SWATCH[c] || "#888");
+    b.title = c;
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String(c === icon.color));
+    b.setAttribute("aria-label", c);
+    b.disabled = icon.envColor;
+    b.addEventListener("click", () => {
+      iconChanged = true;
+      void saveMachine({ iconColor: c });
+    });
+    colors.append(b);
+  }
+  mcIcon.append(head, marks, colors);
+  if (icon.envColor || icon.envMark) {
+    const env = document.createElement("div");
+    env.className = "mc-icon-hint";
+    env.textContent = `${[icon.envMark && "Symbol", icon.envColor && "Colour"].filter(Boolean).join(" and ")} set by this machine's service (FLEET_ICON_${icon.envColor && icon.envMark ? "MARK / COLOR" : icon.envColor ? "COLOR" : "MARK"}) — change it there.`;
+    mcIcon.append(env);
+  }
+}
+
 function renderMachineSettings() {
   mcLabel.value = machine.label || "";
   mcLabel.placeholder = brandEl.textContent?.replace(/^▦\s*/, "") || "hostname";
 
-  mcColor.innerHTML = "";
-  const auto = document.createElement("option");
-  auto.value = "";
-  auto.textContent = "automatic";
-  mcColor.append(auto);
-  for (const c of machine.iconColors) {
-    const o = document.createElement("option");
-    o.value = c;
-    o.textContent = c;
-    mcColor.append(o);
-  }
-  mcColor.value = machine.iconColor || "";
+  renderIconPicker();
 
   mcAccounts.innerHTML = "";
   for (const p of machine.profiles) {
@@ -431,7 +520,6 @@ async function loadMachine() {
 }
 
 mcLabel.addEventListener("change", () => void saveMachine({ label: mcLabel.value.trim() || null }));
-mcColor.addEventListener("change", () => void saveMachine({ iconColor: mcColor.value || null }));
 mcLogoPick.addEventListener("click", () => mcLogoFile.click());
 mcLogoFile.addEventListener("change", () => {
   const f = mcLogoFile.files?.[0];
@@ -1194,6 +1282,9 @@ type MachineProfile = { id: string; provider: string; account: string; label: st
 type MachineInfo = {
   label: string | null;
   iconColor: string | null;
+  iconMark?: string | null;
+  iconMarks?: string[];
+  icon?: { color: string; mark: string; envColor: boolean; envMark: boolean };
   accounts: string[];
   badgeLogo: string | null;
   seeded: boolean;
