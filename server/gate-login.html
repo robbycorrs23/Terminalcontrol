@@ -2,8 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>FleetView — sign in</title>
+    <!-- The SAME app identity as index.html. A fresh Home Screen install has no
+         cookie, so this page is often what's on screen when you tap "Add to
+         Home Screen" — and without a manifest here, iOS guessed the app's scope
+         from this URL (/gate/), so the real app at / opened as "outside the
+         app" under Safari's X / address / toolbar chrome. The manifest pins
+         scope "/" and start_url "/" no matter which page you add from. All
+         three URLs are in gate.js's PUBLIC_PWA allowlist. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#0d1117" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <style>
       :root { color-scheme: dark; }
       body {
