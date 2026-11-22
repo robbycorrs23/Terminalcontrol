@@ -570,6 +570,35 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * The pane's screen as text (tmux capture-pane, wrapped lines joined) — what
+   * the fleet inbox parses a pending prompt from (term-prompt.js). Null
+   * without tmux or for a pane that isn't live.
+   */
+  screen(id) {
+    const pane = this.panes.get(id);
+    if (!pane || !this.tmux) return null;
+    const r = spawnSync(this.tmuxBin, this._tx(["capture-pane", "-p", "-J", "-t", "fleet_" + id], pane.sock), {
+      encoding: "utf8",
+      timeout: 3000,
+    });
+    return r.status === 0 ? r.stdout : null;
+  }
+
+  /**
+   * Press keys in a pane from the inbox. `keys` are tmux key names ("Down",
+   * "Enter"); `text`, if given, is typed literally first (-l, so nothing in it
+   * is interpreted as a key name). Returns false without tmux.
+   */
+  sendKeys(id, { keys = [], text = "" } = {}) {
+    const pane = this.panes.get(id);
+    if (!pane || !this.tmux) return false;
+    const t = (args) => spawnSync(this.tmuxBin, this._tx(["send-keys", "-t", "fleet_" + id, ...args], pane.sock), { stdio: "ignore", timeout: 3000 });
+    if (text) t(["-l", text]);
+    for (const k of keys) t([k]); // one at a time: the TUI redraws between moves
+    return true;
+  }
+
+  /**
    * The hook-driven half of the working signal (UserPromptSubmit ⇒ true). Sticky:
    * it stays true through long silent tool calls, until a Stop/Notification hook
    * lands in `setAttention` (or the pane is closed). See WORK_IDLE_MS above.

@@ -85,6 +85,7 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
 | `server/self-check.js` | startup: fix deps vs lockfile, rebuild a stale bundle, version info |
 | `client/src/chat-question.ts` / `chat-tasks.ts` / `chat-queue.ts` / `chat-attachments.ts` | chat pane components: AskUserQuestion card / background-task tray / queued messages / composer attachments |
 | `client/src/chip-select.ts` / `clipboard-images.ts` / `event-keys.ts` / `chat-usage.ts` | small helpers: invisible-select chips / paste & clipboard images / history anchors / usage rings + the ONE usage ramp |
+| `client/src/inbox.ts` / `server/term-prompt.js` | fleet inbox / reading + answering a terminal pane's prompt |
 | `client/src/phone-nav.ts` / `version-check.ts` | phone swipe + session switcher + header subline / "updated — reload" chip + Settings version row |
 | `client/src/styles.css` + `client/src/styles/*.css` | styles, split by area; `styles.css` only `@import`s them in the ORIGINAL cascade order — keep that order |
 | `client/src/charts.ts` | dependency-free SVG charts (bar/hbar/line/area/donut/stat) |
@@ -443,6 +444,24 @@ top bar. Local-only tool: a Node server on `localhost` spawns the shells.
   mid-turn, for codex, and for remote panes. Verified against the real SDK:
   rewindFiles works on a resumed session before any new message, and inside a
   fork. The replay after a rewind/undo goes to every attached window.
+- **Fleet inbox** (`client/src/inbox.ts`, `GET /api/inbox` + `POST
+  /api/inbox/act` in index.js, `server/term-prompt.js`): every pending
+  approval/question across ALL panes, answerable in place, then finished /
+  cut-off sessions with a quick reply. Chat panes: `agent-manager.inboxOf()`
+  (pending map kept from permission/question events, cleared on resolve or
+  turn end; `lastReply` from assistant_done), broadcast `{t:"inbox"}` on
+  change. Terminal panes: the prompt is READ OFF THE SCREEN (`ptys.screen()` =
+  tmux capture-pane) and answered with keys (`ptys.sendKeys()`), verified
+  against the real Claude Code CLI: options are NOT always numbered (the
+  folder-trust prompt isn't), so an answer = arrow keys to move the ❯ cursor +
+  Enter (`keysFor`). Options are found by alignment with the ❯ line's label
+  column — prompt text is indented one space and would otherwise read as
+  options. "No" cancels and Claude asks what to do instead, so a reason is
+  typed as the next message (~0.9s later). The act endpoint RE-PARSES the
+  screen and refuses (409) if the question/label changed, so a stale card can
+  never press keys on a different prompt. Question cards reuse
+  chat-question.ts; their `.term .q-*` rules are extended to `.inbox-card`.
+  Badge = the attention queue length (`renderQueue`).
 - **Settings outside-click uses `settingsBtn.contains(target)`** — the button
   holds an SVG, so `target === settingsBtn` closed the panel as it opened.
 - **Account badges use `.acct-slot`, not `.badge-slot`.** They sit in the
