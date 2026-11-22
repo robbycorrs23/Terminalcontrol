@@ -24,10 +24,16 @@ struct FleetViewApp: App {
 final class WebPool: ObservableObject {
     private var webs: [UUID: MachineWeb] = [:]
 
+    /// Wired once by RootView: the machine list and how to switch.
+    var machines: () -> [Machine] = { [] }
+    var switchTo: (UUID) -> Void = { _ in }
+
     func web(for m: Machine, onSwitcher: @escaping () -> Void) -> MachineWeb {
         if let w = webs[m.id], w.machine.base == m.base { return w }
         let w = MachineWeb(machine: m)
         w.onRequestSwitcher = onSwitcher
+        w.machineList = { [weak self] in self?.machines() ?? [] }
+        w.onSwitch = { [weak self] id in self?.switchTo(id) }
         webs[m.id] = w
         return w
     }
@@ -60,6 +66,8 @@ struct RootView: View {
                     MachinePage(web: web) { showSwitcher = true }
                         .opacity(m.id == store.currentID ? 1 : 0)
                         .allowsHitTesting(m.id == store.currentID)
+                        // Hidden machines stay loaded but must not be reachable by VoiceOver.
+                        .accessibilityHidden(m.id != store.currentID)
                         .onAppear { opened.insert(m.id) }
                 }
             }
@@ -87,12 +95,29 @@ struct RootView: View {
                 push.visibleOrigin = nil
             }
         }
-        .onAppear { push.visibleOrigin = store.current?.origin }
+        .onAppear {
+            push.visibleOrigin = store.current?.origin
+            pool.machines = { [weak store] in store?.machines ?? [] }
+            pool.switchTo = { [weak store] id in store?.currentID = id }
+        }
+        // Names/icons/order changed (or a machine was added/removed): every
+        // open page redraws its quick-switch buttons.
+        .onChange(of: store.machines) { _, _ in
+            for w in pool.all { w.sendMachines() }
+        }
         #if DEBUG
         // Simulator testing: launch with `-FLEET_ADD_MACHINE <address>` to add one.
         .task {
-            if let a = UserDefaults.standard.string(forKey: "FLEET_ADD_MACHINE"), store.machine(forOrigin: MachineStore.normalise(a)?.absoluteString ?? "") == nil {
+            if UserDefaults.standard.bool(forKey: "FLEET_RESET") {
+                for m in store.machines { pool.drop(m.id); store.remove(m.id) }
+            }
+            // Comma-separated adds several; the first one ends up current.
+            let list = (UserDefaults.standard.string(forKey: "FLEET_ADD_MACHINE") ?? "").split(separator: ",").map(String.init)
+            for a in list where store.machine(forOrigin: MachineStore.normalise(a)?.absoluteString ?? "") == nil {
                 try? await store.add(a)
+            }
+            if let first = list.first, let m = store.machine(forOrigin: MachineStore.normalise(first)?.absoluteString ?? "") {
+                store.currentID = m.id
             }
         }
         #endif

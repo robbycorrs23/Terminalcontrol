@@ -25,6 +25,9 @@ final class MachineWeb: NSObject, ObservableObject {
     private(set) var ready = false
 
     var onRequestSwitcher: (() -> Void)?
+    /// Quick switch (the machine buttons in the page's top bar).
+    var onSwitch: ((UUID) -> Void)?
+    var machineList: (() -> [Machine])?
     private var authSession: ASWebAuthenticationSession?
 
     init(machine: Machine) {
@@ -79,6 +82,18 @@ final class MachineWeb: NSObject, ObservableObject {
         } else {
             load(fragment: "pane=\(safe)")
         }
+    }
+
+    /// Give the page the machine list for its quick-switch buttons
+    /// (app-bridge.ts fleetSetMachines). This page's own machine is "current".
+    func sendMachines() {
+        guard ready, let list = machineList?() else { return }
+        let items: [[String: Any]] = list.map {
+            ["id": $0.id.uuidString, "name": $0.name, "icon": $0.icon?.absoluteString ?? NSNull(), "current": $0.id == machine.id]
+        }
+        guard let json = try? JSONSerialization.data(withJSONObject: items),
+              let str = String(data: json, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.fleetSetMachines && window.fleetSetMachines(\(str))")
     }
 
     /// Tell this machine where to send notifications. Runs INSIDE the page, so
@@ -253,8 +268,11 @@ extension MachineWeb: WKScriptMessageHandler {
             ready = true
             problem = nil
             if let token = PushCenter.shared.token { registerPush(token: token) }
+            sendMachines()
         case "machines":
             onRequestSwitcher?()
+        case "switch":
+            if let s = body["id"] as? String, let id = UUID(uuidString: s) { onSwitch?(id) }
         default:
             break
         }

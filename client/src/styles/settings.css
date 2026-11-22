@@ -484,3 +484,55 @@ body.in-app .brand.app-switch::after {
   transform: translateY(-0.18em) rotate(45deg);
   opacity: 0.6;
 }
+/* Quick machine switch (app-bridge.ts): one button per machine, its own icon. */
+body.in-app .brand {
+  min-width: 0;
+  flex-shrink: 1;
+}
+.app-machines {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.app-machines[hidden] {
+  display: none;
+}
+#bar .app-machines .app-machine {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  opacity: 0.5;
+  filter: saturate(0.6);
+  transition: opacity 0.15s, filter 0.15s;
+  cursor: pointer;
+}
+#bar .app-machines .app-machine.on {
+  opacity: 1;
+  filter: none;
+  box-shadow: 0 0 0 2px var(--accent);
+  cursor: default;
+}
+.app-machine img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 9px;
+}
+.app-machine-initial {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  font: 700 15px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
