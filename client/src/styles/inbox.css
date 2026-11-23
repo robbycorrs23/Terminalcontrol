@@ -514,3 +514,11 @@ body.light .inbox-mini + .inbox-mini {
 .sched-check + .sched-hint {
   margin-top: -6px;
 }
+
+/* Live preview (previews.ts) — reuses the schedules sheet's cards. */
+.preview-card .preview-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  user-select: text;
+}

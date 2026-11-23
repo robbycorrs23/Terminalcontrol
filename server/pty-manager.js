@@ -598,6 +598,19 @@ export class PtyManager extends EventEmitter {
     return true;
   }
 
+  /** Paste multi-line text as ONE input (bracketed paste — newlines don't submit), then Enter. */
+  pasteText(id, text) {
+    const pane = this.panes.get(id);
+    if (!pane || !this.tmux) return false;
+    const buf = "fleet_paste_" + id;
+    const t = (args, input) =>
+      spawnSync(this.tmuxBin, this._tx(args, pane.sock), { input, stdio: [input ? "pipe" : "ignore", "ignore", "ignore"], timeout: 3000 });
+    t(["load-buffer", "-b", buf, "-"], text);
+    t(["paste-buffer", "-p", "-d", "-b", buf, "-t", "fleet_" + id]);
+    setTimeout(() => t(["send-keys", "-t", "fleet_" + id, "Enter"]), 300);
+    return true;
+  }
+
   /**
    * The hook-driven half of the working signal (UserPromptSubmit ⇒ true). Sticky:
    * it stays true through long silent tool calls, until a Stop/Notification hook

@@ -26,6 +26,7 @@ type AppWindow = Window & {
   webkit?: { messageHandlers?: { fleetApp?: Handler } };
   fleetOpenPane?: (id: string) => boolean;
   fleetSetMachines?: (list: AppMachine[]) => void;
+  fleetAppCaps?: { browser?: boolean };
 };
 
 const w = window as AppWindow;
@@ -117,3 +118,14 @@ export function reportWaiting(n: number) {
   w.webkit!.messageHandlers!.fleetApp!.postMessage({ t: "waiting", n });
 }
 
+
+/** Open a web page (a Live preview) — in the app, as an in-app browser sheet
+ *  (SFSafariViewController) when this build supports it; otherwise a new tab
+ *  (which older app builds hand to Safari). */
+export function appBrowser(): boolean {
+  return inApp() && !!w.fleetAppCaps?.browser;
+}
+export function openUrl(url: string) {
+  if (appBrowser()) w.webkit!.messageHandlers!.fleetApp!.postMessage({ t: "open", url });
+  else window.open(url, "_blank", "noopener");
+}

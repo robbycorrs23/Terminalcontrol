@@ -1,4 +1,5 @@
 import AuthenticationServices
+import SafariServices
 import SwiftUI
 import UIKit
 import WebKit
@@ -285,6 +286,9 @@ extension MachineWeb: WKScriptMessageHandler {
             problem = nil
             if let token = PushCenter.shared.token { registerPush(token: token) }
             sendMachines()
+            // Tell the page what this build can do (older builds never say, and
+            // the page falls back to window.open → Safari).
+            webView.evaluateJavaScript("window.fleetAppCaps = { browser: true }", completionHandler: nil)
         case "waiting":
             waiting = max(0, (body["n"] as? Int) ?? 0)
             PushCenter.shared.refreshBadge()
@@ -292,6 +296,15 @@ extension MachineWeb: WKScriptMessageHandler {
             onRequestSwitcher?()
         case "switch":
             if let s = body["id"] as? String, let id = UUID(uuidString: s) { onSwitch?(id) }
+        case "open": // Live preview (client/src/previews.ts): an in-app browser sheet
+            if let s = body["url"] as? String, let url = URL(string: s),
+               url.scheme == "https" || url.scheme == "http", let top = Self.topController() {
+                let vc = SFSafariViewController(url: url)
+                vc.preferredControlTintColor = .white
+                vc.preferredBarTintColor = UIColor(red: 0x0d / 255, green: 0x11 / 255, blue: 0x17 / 255, alpha: 1)
+                vc.dismissButtonStyle = .close
+                top.present(vc, animated: true)
+            }
         default:
             break
         }

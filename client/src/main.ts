@@ -1,6 +1,7 @@
 import { openNewSession } from "./new-session";
 import { initAppBridge, reportWaiting, inApp } from "./app-bridge";
 import { initSchedules, openSchedules } from "./schedules";
+import { openPreviews } from "./previews";
 import { initTemplates, openTemplates, listTemplates, showForm as showTemplateForm } from "./templates";
 import { initGitStatus, decorateGit, scheduleGitRefresh } from "./git-status";
 import { checkVersion } from "./version-check";
@@ -1862,6 +1863,11 @@ function connectControl() {
         const at = slot !== null && slot.id === m.replaces ? slot.at : undefined;
         addTerm(m.pane, at);
         scheduleGitRefresh();
+        if (openOnCreate === m.pane.id) {
+          openOnCreate = null;
+          const t = panes.get(m.pane.id);
+          if (t) zoom(t);
+        }
         break;
       }
       case "closed":
@@ -2287,6 +2293,16 @@ async function deleteSshProfile(name: string) {
   await loadSshProfiles();
 }
 
+// "Open this pane" from a component that just created it (e.g. Review with
+// Claude in the Changes panel): now if it's already here, else when `created` lands.
+let openOnCreate: string | null = null;
+window.addEventListener("fleet:open-pane", (e) => {
+  const id = (e as CustomEvent<string>).detail;
+  const t = panes.get(id);
+  if (t) zoom(t);
+  else openOnCreate = id;
+});
+
 // Scheduled sessions (schedules.ts / server/scheduler.js).
 initSchedules({
   openPane: (id) => {
@@ -2306,6 +2322,11 @@ initTemplates({
 document.getElementById("tplBtn")!.addEventListener("click", () => {
   closeSettings();
   openTemplates();
+});
+
+document.getElementById("previewsBtn")!.addEventListener("click", () => {
+  closeSettings();
+  openPreviews();
 });
 
 document.getElementById("schedBtn")!.addEventListener("click", () => {

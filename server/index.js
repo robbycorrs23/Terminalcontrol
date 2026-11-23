@@ -1,4 +1,5 @@
 import express from "express";
+import { execFile } from "node:child_process";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
@@ -42,6 +43,7 @@ import { createSummaries } from "./summary.js";
 import { randomBytes } from "node:crypto";
 import { createScheduler } from "./scheduler.js";
 import { createTemplates } from "./templates.js";
+import { createPreviews } from "./previews.js";
 
 // Check for tmux / curl / claude / codex FIRST, so any missing-dependency warning is the
 // most prominent thing the user sees — not buried under later startup logs.
@@ -1160,6 +1162,112 @@ app.post("/api/panes/:id/ship", async (req, res) => {
   }
 });
 
+// ---- Review with Claude --------------------------------------------------------
+// A second Claude reviews a session's uncommitted changes in a FRESH chat
+// session (same folder, same account), in Ask mode: reading is free, any edit
+// or command asks you first, and the prompt tells it not to change anything.
+// The diff goes IN the prompt so it starts from exactly what's on disk now.
+// Its findings go back to the original session only when you tap "Send".
+const gitOut = (cwd, args) =>
+  new Promise((res) =>
+    execFile("git", args, { cwd, timeout: 15000, maxBuffer: 16 * 1024 * 1024 }, (err, out) => res(err ? null : String(out)))
+  );
+const REVIEW_DIFF_MAX = 120000;
+app.post("/api/panes/:id/review", async (req, res) => {
+  const ctx = paneCtx(req.params.id);
+  if (!ctx) return res.status(404).json({ error: "no such pane" });
+  if (ctx.remote) return res.status(400).json({ error: "Reviews run on the machine the session is on." });
+  const profile = String(ctx.info.cmd || "").trim().split(/\s+/)[0];
+  if (!/^claude(-|$)/.test(profile)) return res.status(400).json({ error: "Reviews need a Claude session." });
+  const top = (await gitOut(ctx.cwd, ["rev-parse", "--show-toplevel"]))?.trim();
+  if (!top) return res.status(400).json({ error: "This folder isn't a git repository, so there's no diff to review." });
+  let diff = (await gitOut(top, ["diff", "HEAD", "--no-color", "--no-ext-diff"])) ?? "";
+  const untracked = ((await gitOut(top, ["ls-files", "--others", "--exclude-standard"])) || "").split("\n").filter(Boolean);
+  if (!diff.trim() && !untracked.length) return res.status(400).json({ error: "There are no uncommitted changes to review." });
+  const cut = diff.length > REVIEW_DIFF_MAX;
+  if (cut) diff = diff.slice(0, REVIEW_DIFF_MAX);
+  const name = ctx.info.name || basename(ctx.cwd);
+  const prompt = [
+    `You are reviewing uncommitted changes another Claude session ("${name}") made in ${top}.`,
+    "Do NOT edit, create or delete any files and don't run commands that change anything — this is a read-only review. Read any file you need for context.",
+    "",
+    "Look for: bugs and logic errors, missed edge cases, security problems, anything left unfinished (TODOs, stubs, dead code), and changes that look accidental or risky.",
+    "Reply with a prioritised list, most serious first. For each: `file:line`, what's wrong, and the fix. Skip style nitpicks. If it all looks good, say so in one line.",
+    "Your reply may be sent back to that session as-is, so write it to be acted on.",
+    "",
+    "## git diff HEAD" + (cut ? ` (first ${REVIEW_DIFF_MAX / 1000}k characters — read the files for the rest)` : ""),
+    "```diff",
+    diff.trim() || "(no changes to tracked files)",
+    "```",
+    ...(untracked.length ? ["", "## New (untracked) files — read them", ...untracked.slice(0, 200).map((f) => `- ${f}`)] : []),
+  ].join("\n");
+  let pane;
+  try {
+    pane = registry.create({ cwd: ctx.cwd, cmd: profile, kind: "agent", mode: "default", reviewOf: ctx.info.id });
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+  registry.setName(pane.id, `Review · ${name}`.slice(0, 80));
+  const info = registry.info(pane.id);
+  broadcast(info.session, { t: "created", pane: info });
+  agents.sendMessage(pane.id, prompt);
+  res.json(info);
+});
+// Send the reviewer's latest reply to the session it reviewed.
+app.post("/api/panes/:id/review/send", async (req, res) => {
+  const info = registry.info(req.params.id);
+  if (!info?.reviewOf) return res.status(404).json({ error: "Not a review session." });
+  const target = registry.info(info.reviewOf);
+  if (!target) return res.status(410).json({ error: "The session it reviewed has been closed." });
+  if (info.working) return res.status(409).json({ error: "The review is still running." });
+  // The client sends the turn it shows (exactly what you read); else the latest reply.
+  const given = typeof req.body?.text === "string" ? req.body.text.trim().slice(0, 60000) : "";
+  const findings = given || agents.lastReplyOf(info.id).trim();
+  if (!findings) return res.status(409).json({ error: "There's no review to send yet." });
+  const text = `A second Claude reviewed your uncommitted changes. Its findings are below — fix what's real, and say if you disagree with any.\n\n${findings}`;
+  if (target.kind === "agent") agents.sendMessage(target.id, text);
+  else if (!ptys.pasteText(target.id, text)) return res.status(409).json({ error: "Couldn't type into that terminal." });
+  res.json({ ok: true, pane: target.id });
+});
+
+// ---- Live preview (previews.js) ----------------------------------------------
+// Dev servers running in a session's folder, shareable to your tailnet with
+// one tap. Only ports FOUND in some local session's folder can be shared.
+const previews = createPreviews({ ownPorts: [PORT, Number(process.env.FLEET_GATE_PORT) || 4290] });
+const localFolders = () => registry.list().filter((p) => !p.remote).map((p) => p.cwd);
+app.get("/api/previews", async (req, res) => {
+  const id = req.query.pane ? String(req.query.pane) : null;
+  const info = id ? registry.info(id) : null;
+  if (id && !info) return res.status(404).json({ error: "no such pane" });
+  if (info?.remote) return res.json({ servers: [], remote: true });
+  try {
+    const servers = await previews.find(info ? [info.cwd] : localFolders());
+    // Name the session each server belongs to (Settings lists them all).
+    const panes = registry.list();
+    for (const s of servers) {
+      const owner = panes.filter((p) => !p.remote && p.cwd && (s.cwd === p.cwd || s.cwd.startsWith(p.cwd.replace(/\/+$/, "") + "/")))
+        .sort((a, b) => b.cwd.length - a.cwd.length)[0];
+      s.pane = owner ? { id: owner.id, name: owner.name || basename(owner.cwd) } : null;
+    }
+    res.json({ servers });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+app.post("/api/previews/:port/share", async (req, res) => {
+  const port = Number(req.params.port);
+  const hit = (await previews.find(localFolders())).find((s) => s.port === port);
+  if (!hit) return res.status(404).json({ error: "That port isn't a dev server in one of your sessions' folders." });
+  try {
+    res.json(await previews.share(port, hit.host));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+app.delete("/api/previews/:port", async (req, res) => {
+  res.json({ ok: await previews.unshare(Number(req.params.port)).catch(() => false) });
+});
+
 // What this session has changed: the files it edited (from its transcript) as
 // they are on disk now vs HEAD, plus other uncommitted changes in the repo,
 // kept apart. Read-only; see changes.js.
@@ -1596,6 +1704,7 @@ server.listen(PORT, HOST, () => {
   console.log(`[fleetview] pane snapshots: ${SNAPSHOT_DIR} (auto on shutdown, or \`npm run snapshot\`)`);
   // Started here, not at module load, so a slow/absent CLI can never delay boot.
   usage.start();
+  previews.restore().catch((e) => console.warn("[previews] restore:", e.message));
   // Pull + restart into new FleetView code by itself, only when every pane is
   // idle (server/auto-update.js). "Idle" = nothing working and nothing waiting
   // on an approval/answer: a restart would cut a live turn off mid-reply.

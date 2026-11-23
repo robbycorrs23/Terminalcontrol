@@ -17,6 +17,7 @@ import { ApprovalDock, DockAnswer, PermissionEvent } from "./chat-dock";
 import { CommandMenu } from "./chat-commands";
 import { wireLightbox } from "./lightbox";
 import { openChanges } from "./changes-panel";
+import { openPreviews } from "./previews";
 import { listTemplates } from "./templates";
 import { embedMediaPaths } from "./media-paths";
 import { createRewindEditor, RewindEditor, RewindPreview } from "./rewind-editor";
@@ -265,6 +266,14 @@ export class AgentChat implements PaneView {
     const pasteBtn = menuItem("paste-img", "image", "Paste image");
     // What this session has changed, as it is on disk now (changes-panel.ts).
     const changesBtn = menuItem("changes", "branch", "Changes");
+    // The app this session is building, on your phone (previews.ts).
+    const previewBtn = menuItem("preview", "monitor", "Preview app");
+    previewBtn.hidden = this.isRemote;
+    previewBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.plusMenu.hidden = true;
+      openPreviews(this.id, this.info.name || "");
+    });
     const secretBtn = menuItem("secret", "secret", "Give it a secret");
     secretBtn.title = "Give this chat a secret (never saved to chat memory)";
     // `.view` is what main.ts's flipView() looks up to disable during a flip.
@@ -283,7 +292,7 @@ export class AgentChat implements PaneView {
     this.plusMenu.hidden = true;
     this.infoEl = el("div", "menu-info");
     this.infoEl.hidden = true;
-    this.plusMenu.append(this.infoEl, changesBtn, templatesBtn, this.chromeBtn, attachBtn, pasteBtn, secretBtn, viewBtn);
+    this.plusMenu.append(this.infoEl, changesBtn, previewBtn, templatesBtn, this.chromeBtn, attachBtn, pasteBtn, secretBtn, viewBtn);
     this.setChromeState(!!info.chrome);
     templatesBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1695,6 +1704,34 @@ export class AgentChat implements PaneView {
       } catch {}
     });
     if (texts.length) meta.append(copy);
+    // A "Review with Claude" session: hand this turn's findings to the session
+    // it reviewed (server/index.js /api/panes/:id/review/send).
+    if (texts.length && this.info.reviewOf && !this.prepending) {
+      // Only the latest turn carries it — that's the review as it stands.
+      this.logEl.querySelectorAll(".review-send").forEach((b) => b.remove());
+      const send = el("button", "turn-files review-send") as HTMLButtonElement;
+      send.textContent = "Send findings back";
+      send.title = "Send this review to the session it reviewed, as a message";
+      send.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        send.disabled = true;
+        const text = texts.map((t) => t.dataset.raw || t.innerText).join("\n\n");
+        const r = await fetch(`/api/panes/${this.id}/review/send`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text }),
+        }).catch(() => null);
+        const j = r ? await r.json().catch(() => ({})) : {};
+        if (r?.ok) {
+          send.textContent = "Sent ✓";
+          window.dispatchEvent(new CustomEvent("fleet:open-pane", { detail: j.pane }));
+        } else {
+          send.disabled = false;
+          alert(j.error || "Couldn't send it.");
+        }
+      });
+      meta.append(send);
+    }
     if (files && !this.isRemote) {
       // Like the app's "Edited 3 files" — opens the Changes panel.
       const ch = el("button", "turn-files") as HTMLButtonElement;

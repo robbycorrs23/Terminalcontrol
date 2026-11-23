@@ -90,6 +90,8 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
 | `server/scheduler.js` / `client/src/schedules.ts` | scheduled sessions: saved prompt + days + time → a fresh chat session at that time / the Settings → Scheduled sessions sheet |
 | `server/templates.js` / `client/src/templates.ts` | prompt templates: saved prompts (+ optional folder/agent/view/own branch) → new-session chips, composer + → Templates, Settings sheet |
 | `client/src/review.ts` | review mode: commentable numbered diffs in the Changes panel → one review message |
+| `server/previews.js` / `client/src/previews.ts` | Live preview: dev servers in a session's folder → `tailscale serve` → opened on the phone |
+| `client/src/media-paths.ts` | embeds media files a reply names by path (relative/`~`/in inline code) as players |
 | `server/self-check.js` | startup: fix deps vs lockfile, rebuild a stale bundle, version info |
 | `client/src/chat-question.ts` / `chat-tasks.ts` / `chat-queue.ts` / `chat-attachments.ts` | chat pane components: AskUserQuestion card / background-task tray / queued messages / composer attachments |
 | `client/src/chip-select.ts` / `clipboard-images.ts` / `event-keys.ts` / `chat-usage.ts` | small helpers: invisible-select chips / paste & clipboard images / history anchors / usage rings + the ONE usage ramp |
@@ -647,6 +649,37 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   count together) whose transcripts edited the same repo-relative file; chip
   colour is `--use-warn`, never `--waiting`. Chips live in `.git-slot` (not
   `.badge-slot`) and are 18px so they never grow a title bar.
+- **Live preview** (`server/previews.js`, `previews.ts`, `/api/previews*`). Finds
+  TCP listeners whose process cwd is INSIDE a session's folder (macOS lsof /
+  Linux ss + /proc), drops agent/database sockets, ports ≥49152 and anything
+  that doesn't answer HTTP. "Open on phone" starts a per-preview RELAY on
+  127.0.0.1 (http-proxy, `changeOrigin` + ws) and `tailscale serve --bg
+  --https=<port>` in front of it → `https://<machine>.<tailnet>.ts.net:<port>/`.
+  The relay is load-bearing: Vite & co. reject a non-localhost Host ("Blocked
+  request"); it also carries HMR websockets. Tailnet-only (`serve`, never
+  `funnel`) and NOT behind the passkey gate — the sheet says so; nothing is
+  shared until tapped, only ports found in some local session's folder can be,
+  and 443/8443 (FleetView's own) map to +10000. Shares persist in
+  `~/.fleetview/previews.json`; on boot relays come back for live dev servers
+  and dead ones are unshared. In the iOS app the page opens in an
+  `SFSafariViewController` sheet (`{t:"open"}`), advertised by the app via
+  `window.fleetAppCaps.browser` — older builds don't set it and get a new tab
+  (→ Safari). In a browser the tab is opened INSIDE the tap, before the share
+  request: Safari blocks a `window.open` after an await.
+- **Review with Claude** (Changes panel → `POST /api/panes/:id/review`). A
+  fresh CHAT pane in the same folder/account, named "Review · <name>", mode
+  **Ask** (reads are free; any edit/command needs you — not plan mode, whose
+  ExitPlanMode card would get in the way), with `git diff HEAD` (capped 120k)
+  + the untracked list IN the prompt. It stores `reviewOf` (persisted, in
+  `info`). Its latest finished turn gets "Send findings back" →
+  `/review/send` with the turn's text → the original pane (chat: a message;
+  terminal: `ptys.pasteText`, a bracketed paste so newlines don't submit
+  early). Nothing goes back unless you tap it.
+- **Media mentioned by path** (`media-paths.ts`): replies name files as
+  `assets/video/x.mp4` (relative), `~/…`, or in inline code, often with spaces
+  — none of which markdown.ts's own media pass embeds. This resolves relative
+  ones against the pane cwd and appends a player under the paragraph (max 6,
+  never twice, never from a code block). `/api/file` expands `~`.
 - **Settings outside-click uses `settingsBtn.contains(target)`** — the button
   holds an SVG, so `target === settingsBtn` closed the panel as it opened.
 - **Account badges use `.acct-slot`, not `.badge-slot`.** They sit in the

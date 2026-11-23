@@ -28,6 +28,8 @@ export interface PaneInfo {
   model?: string | null;
   /** Claude in Chrome on for this (chat) session — server/agent-manager.js setChrome. */
   chrome?: boolean;
+  /** A "Review with Claude" session: the id of the pane whose changes it reviews. */
+  reviewOf?: string | null;
   /** Claude Agent SDK permission mode (agent panes only — see agent-chat.ts's mode selector). */
   mode?: "default" | "acceptEdits" | "auto" | "plan" | "bypassPermissions";
   /** Set only for an agent pane whose claude/codex runs over ssh on another host (see agent-chat.ts). */

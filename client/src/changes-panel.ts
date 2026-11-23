@@ -196,6 +196,32 @@ export function openChanges(host: HTMLElement, paneId: string, send?: (text: str
       body.append(n);
     }
 
+    // A second opinion: a fresh Claude session reviews everything uncommitted
+    // here (server/index.js /api/panes/:id/review) and can send its findings back.
+    if (data.repo && (data.session.length || data.other.length)) {
+      const ask = el("div", "chg-ask-review");
+      const b = el("button", "ship-btn primary") as HTMLButtonElement;
+      b.textContent = "Review with Claude";
+      const note = el("span", "chg-ask-note");
+      note.textContent = "A second Claude reads these changes for bugs and gaps, without editing. Send its findings back here when it's done.";
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        b.textContent = "Starting…";
+        const r = await fetch(`/api/panes/${paneId}/review`, { method: "POST" }).catch(() => null);
+        const j = r ? await r.json().catch(() => ({})) : {};
+        if (r?.ok && j.id) {
+          panel.remove();
+          window.dispatchEvent(new CustomEvent("fleet:open-pane", { detail: j.id }));
+        } else {
+          b.disabled = false;
+          b.textContent = "Review with Claude";
+          alert(j.error || (r?.status === 404 ? "This needs a server restart to work." : "Couldn't start a review."));
+        }
+      });
+      ask.append(b, note);
+      body.append(ask);
+    }
+
     const h1 = el("div", "chg-section");
     h1.textContent = "This session";
     body.append(h1);

@@ -141,6 +141,7 @@ export class AgentManager {
       resumeAt: p.resumeAt || null,
       rewindUndo: p.rewindUndo || null,
       chrome: !!p.chrome, // Claude in Chrome on for this session (setChrome)
+      reviewOf: p.reviewOf || null, // a "Review with Claude" session: the pane it reviews
     }));
     writeFileSync(this.stateFile, JSON.stringify(records, null, 2));
   }
@@ -270,6 +271,7 @@ export class AgentManager {
       inboxChanged = true;
     } else if (ev.t === "assistant_done" && ev.text) {
       pane.lastReply = ev.text.slice(0, 600);
+      pane.finalReply = ev.text.slice(0, 60000); // whole, for "Send findings" (Review with Claude)
     }
     if (inboxChanged) this.broadcast(pane.session, { t: "inbox" });
     if (!LIVE_ONLY.has(ev.t)) {
@@ -307,13 +309,14 @@ export class AgentManager {
 
   // ---- Creation / lifecycle, mirrors PtyManager's surface ---------------
 
-  create({ cwd, cmd, session, remote, order, sdkSessionId, mode, chrome }) {
+  create({ cwd, cmd, session, remote, order, sdkSessionId, mode, chrome, reviewOf }) {
     const provider = cmd.startsWith("codex") ? "codex" : "claude";
     const id = randomUUID().slice(0, 8);
     const home = homedir();
     const dir = cwd && String(cwd).trim() ? String(cwd).replace(/^~/, home) : home;
     const pane = {
       chrome: !!chrome && !remote, // Claude in Chrome (setChrome / carried across a flip)
+      reviewOf: reviewOf || null,
       id,
       kind: "agent",
       cwd: dir,
@@ -757,6 +760,11 @@ export class AgentManager {
   }
 
   /** Open approvals / questions, oldest first, plus the last reply — for the fleet inbox. */
+  /** The latest complete assistant reply (in memory only), or "". */
+  lastReplyOf(id) {
+    return this.panes.get(id)?.finalReply || "";
+  }
+
   inboxOf(id) {
     const pane = this.panes.get(id);
     if (!pane) return null;
@@ -772,6 +780,7 @@ export class AgentManager {
       cwd: p.cwd,
       cmd: p.cmd,
       chrome: !!p.chrome,
+      reviewOf: p.reviewOf || null,
       session: p.session,
       // See PtyManager.info — needed for registry.list()'s cross-manager sort.
       order: p.order,
