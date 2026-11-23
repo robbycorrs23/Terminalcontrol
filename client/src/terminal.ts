@@ -343,8 +343,14 @@ export class Term implements PaneView {
    */
   private wireRename(host: TermHost) {
     const pathEl = this.titleBar.querySelector(".path") as HTMLElement;
-    pathEl.addEventListener("click", (e) => {
-      e.stopPropagation(); // the name is an edit target, not a zoom trigger
+    // Rename = a deliberate DOUBLE-click, desktop only. A single tap on the
+    // name used to open the editor, and on a phone that's exactly where your
+    // thumb lands to open the session — constant accidental renames. A single
+    // tap now does what tapping anywhere else on the box does.
+    if (!matchMedia("(pointer: coarse)").matches) pathEl.title = `${this.info.cwd}\nDouble-click to rename`;
+    pathEl.addEventListener("dblclick", (e) => {
+      if (matchMedia("(pointer: coarse)").matches) return; // touch: no rename
+      e.stopPropagation();
       if (this.titleBar.querySelector(".rename")) return; // already editing
       const input = el("input", "rename") as HTMLInputElement;
       input.type = "text";

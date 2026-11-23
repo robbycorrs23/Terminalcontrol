@@ -249,11 +249,9 @@ body:not(.has-logo) .work-badge {
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
-  cursor: text; /* click to rename */
-}
-.term .title .path:hover {
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
+  /* A tap/click on the name now does what the rest of the title does; renaming
+     is a deliberate double-click, desktop only (wireRename) — so no "edit me"
+     cursor or underline inviting a click that no longer edits. */
 }
 /* Inline rename field — dresses like .path, plus a focus outline. */
 .term .title .rename {
