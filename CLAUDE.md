@@ -616,6 +616,12 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   `cmd` is the source of truth (`hasChrome`), and `resumeCommand` carries
   `--chrome` across a flip both ways. Refused mid-turn, before the first hook
   (no session id → a restart would lose the context), for codex/shells/remote.
+  A chat pane shows a globe beside its name while Chrome is on; it SPINS only
+  while a `mcp__claude-in-chrome__*` tool call is running (`setChromeBusy`,
+  cleared on its result or any turn end). Low-power by construction: the
+  animation exists only while `.busy` is set, animates `transform` alone
+  (compositor), `steps(12)`, and is off for reduced motion / `body.fx-off`.
+  Terminal panes can't see tool calls, so their globe button just stays lit.
 - **Parallel-safe sessions** (`server/worktrees.js`, `server/ship.js`,
   `git-status.ts`, `ship-panel.ts`). "Own branch" (new-session sheet's Branch
   row, the picker's checkbox → `POST /api/panes {worktree:true}`) runs `git

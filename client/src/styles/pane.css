@@ -419,3 +419,45 @@ body.big .term .pinned {
 .term .plus-menu .menu-item.chrome.on {
   color: var(--accent);
 }
+
+/* ---- Claude in Chrome indicator (agent-chat.ts setChromeBusy) ----
+   Low-power on purpose:
+   - the animation exists ONLY while .busy is on (a browser tool is running);
+     an idle globe has no animation at all — nothing ticks;
+   - it animates `transform` alone on its own layer, so the GPU compositor
+     rotates it without the page re-laying-out or repainting;
+   - steps(12) → ~12 frames a second instead of 60;
+   - off entirely for reduced motion, with FleetView's animations off (◍),
+     and the browser already stops it in a hidden tab. */
+.term .title .chrome-ind {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--accent);
+}
+.term .title .chrome-ind[hidden] {
+  display: none;
+}
+.term .title .chrome-ind .ico-svg {
+  width: 14px;
+  height: 14px;
+}
+.term .title .chrome-ind.busy .ico-svg {
+  will-change: transform;
+  animation: fv-globe-spin 2s steps(12) infinite;
+}
+@keyframes fv-globe-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term .title .chrome-ind.busy .ico-svg {
+    animation: none;
+    will-change: auto;
+  }
+}
+body.fx-off .term .title .chrome-ind.busy .ico-svg {
+  animation: none;
+  will-change: auto;
+}

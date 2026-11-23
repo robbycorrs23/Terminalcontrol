@@ -67,6 +67,8 @@ export class AgentChat implements PaneView {
   private inputEl: HTMLTextAreaElement;
   private plusMenu!: HTMLElement;
   private chromeBtn!: HTMLButtonElement;
+  /** claude-in-chrome tool calls still running — the globe spins while any are. */
+  private chromeCalls = new Set<string>();
   private toggleChromeFn: (on: boolean) => void = () => {};
   private sendBtn!: HTMLButtonElement;
   private jumpBtn!: HTMLButtonElement;
@@ -150,6 +152,8 @@ export class AgentChat implements PaneView {
       // Account/host badges live in their OWN slot, not in .badge-slot:
       // setWaiting() clears .badge-slot on every attention change, which would
       // wipe them permanently the first time the pane said "needs you".
+      // Claude in Chrome: shown while on, spinning while a browser tool runs.
+      `<span class="chrome-ind" hidden title="Claude in Chrome is on">${iconSvg("chrome")}</span>` +
       `<span class="acct-slot"></span>` +
       `<button class="ctl flag" title="Mark for follow-up">${iconSvg("flag")}</button>` +
       `<button class="ctl min" title="Minimize">–</button>` +
@@ -873,9 +877,11 @@ export class AgentChat implements PaneView {
       case "tool_call":
         this.closeThinking();
         this.appendToolCard(ev.id, ev.name, ev.input, ev.parent);
+        if (!this.prepending && /^mcp__claude-in-chrome__/.test(ev.name || "")) this.setChromeBusy(ev.id, true);
         break;
       case "tool_result":
         this.updateToolCard(ev.id, ev.output, ev.isError, ev.diff);
+        if (this.chromeCalls.size) this.setChromeBusy(ev.id, false);
         break;
       case "tool_progress": {
         const card = this.toolEls.get(ev.id);
@@ -901,6 +907,12 @@ export class AgentChat implements PaneView {
         break;
       case "status":
         this.setStatus(ev.state, ev.detail, ev.durationMs, ev.ts);
+        // A turn that ended can't still be driving the browser (a result that
+        // never arrived must not leave the globe spinning forever).
+        if (ev.state !== "working" && ev.state !== "waiting_permission" && this.chromeCalls.size) {
+          this.chromeCalls.clear();
+          this.setChromeBusy("", false);
+        }
         break;
       case "mode":
         this.setModeUI(ev.mode);
@@ -1857,9 +1869,25 @@ export class AgentChat implements PaneView {
     this.infoEl.hidden = !this.infoEl.childElementCount;
   }
 
+  /**
+   * The title-bar globe spins only while a claude-in-chrome tool call is
+   * running. Spinning = adding ONE class; the CSS animation (styles/pane.css)
+   * runs only while that class is on, so an idle globe costs nothing at all.
+   */
+  private setChromeBusy(id: string, on: boolean) {
+    if (id) on ? this.chromeCalls.add(id) : this.chromeCalls.delete(id);
+    const ind = this.titleBar.querySelector(".chrome-ind") as HTMLElement | null;
+    if (!ind) return;
+    const busy = this.chromeCalls.size > 0;
+    if (ind.classList.contains("busy") !== busy) ind.classList.toggle("busy", busy);
+    ind.title = busy ? "Claude is using Chrome" : "Claude in Chrome is on";
+  }
+
   /** Claude in Chrome state (info.chrome) → the + menu item's wording. */
   setChromeState(on: boolean) {
     this.info.chrome = on;
+    const ind = this.titleBar?.querySelector(".chrome-ind") as HTMLElement | null;
+    if (ind) ind.hidden = !on;
     if (this.chromeBtn) {
       const l = this.chromeBtn.querySelector(".menu-label");
       if (l) l.textContent = on ? "Turn off Chrome" : "Turn on Chrome";
