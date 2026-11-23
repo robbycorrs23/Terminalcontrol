@@ -36,8 +36,10 @@ targets:
         UILaunchScreen:
           UIColorName: LaunchBackground
         UIStatusBarStyle: UIStatusBarStyleLightContent
+        # iPhone: portrait only (landscape squeezed the UI into a short strip).
+        # iPad keeps every orientation — Apple expects that of iPad apps.
         UISupportedInterfaceOrientations:
-          [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+          [UIInterfaceOrientationPortrait]
         UISupportedInterfaceOrientations~ipad:
           [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         # Lets a machine on the local network (http://mymac.local:4280) load too.
