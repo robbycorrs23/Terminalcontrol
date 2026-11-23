@@ -18,6 +18,7 @@ import { CommandMenu } from "./chat-commands";
 import { wireLightbox } from "./lightbox";
 import { openChanges } from "./changes-panel";
 import { listTemplates } from "./templates";
+import { embedMediaPaths } from "./media-paths";
 import { createRewindEditor, RewindEditor, RewindPreview } from "./rewind-editor";
 import { wireFileDrop, wireFilePicker } from "./attach";
 import { renderMarkdown, mediaSrc } from "./markdown";
@@ -860,6 +861,7 @@ export class AgentChat implements PaneView {
         }
         bubble.dataset.raw = (bubble.dataset.raw || "") + ev.delta;
         bubble.innerHTML = renderMarkdown(bubble.dataset.raw);
+        embedMediaPaths(bubble, this.info.cwd); // videos/images it mentions by path
         break;
       }
       case "thinking_delta":
@@ -948,7 +950,10 @@ export class AgentChat implements PaneView {
     // Assistant text is Markdown (renderMarkdown escapes untrusted source
     // before adding any markup — see markdown.ts). User/error/aborted text
     // stays literal.
-    if (role === "assistant") bubble.innerHTML = renderMarkdown(text);
+    if (role === "assistant") {
+      bubble.innerHTML = renderMarkdown(text);
+      embedMediaPaths(bubble, this.info.cwd); // videos/images it mentions by path
+    }
     else if (role === "user") this.renderUserText(bubble, text);
     else bubble.textContent = text;
     this.logEl.append(bubble);

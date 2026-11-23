@@ -630,3 +630,16 @@ body.light .term .viz-tip {
   font-size: 11px;
   color: var(--aborted);
 }
+
+/* Media an agent mentioned by path (media-paths.ts), shown under that line. */
+.term .md-mention {
+  margin: 8px 0;
+}
+.term .md-mention .md-video {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  max-height: 60vh;
+  border-radius: 10px;
+  background: #000;
+}

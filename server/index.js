@@ -805,7 +805,10 @@ const MEDIA_TYPES = {
 app.get("/api/file", (req, res) => {
   const raw = String(req.query.path || "");
   if (!raw) return res.status(400).end("missing path");
-  const file = resolve(raw);
+  // "~/Movies/clip.mp4" — the client can't expand ~ (it doesn't know $HOME), so
+  // it's done here. (It used to be resolve("~/…") = a path under the server's
+  // cwd, so every ~ media path 404'd.)
+  const file = resolve(raw.replace(/^~(?=\/|$)/, homedir()));
   const type = MEDIA_TYPES[extname(file).toLowerCase()];
   // Unknown extension → 415, never a fallback to octet-stream. The client only
   // ever points this route at media it already decided was media.
