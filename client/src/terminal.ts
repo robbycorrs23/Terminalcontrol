@@ -26,6 +26,8 @@ export interface PaneInfo {
   order?: number;
   /** Which model an agent pane resolved to; null until its driver reports one. */
   model?: string | null;
+  /** Claude in Chrome on for this (chat) session — server/agent-manager.js setChrome. */
+  chrome?: boolean;
   /** Claude Agent SDK permission mode (agent panes only — see agent-chat.ts's mode selector). */
   mode?: "default" | "acceptEdits" | "auto" | "plan" | "bypassPermissions";
   /** Set only for an agent pane whose claude/codex runs over ssh on another host (see agent-chat.ts). */
@@ -52,6 +54,8 @@ export interface PaneView {
   isWaiting(): boolean;
   waitingKind(): "question" | "done" | "aborted";
   setWaiting(on: boolean, kind?: "question" | "done" | "aborted"): void;
+  /** Chat panes: reflect Claude in Chrome on/off (control-socket `chrome`). */
+  setChromeState?(on: boolean): void;
   setBusy(on: boolean): void;
   isFlagged(): boolean;
   setFollowUp(on: boolean): void;
@@ -104,6 +108,9 @@ export interface TermHost {
   // the same conversation by session id (server/pane-registry.js `flip`), so it
   // can be refused (mid-turn, plain shell, no conversation captured yet).
   onFlipView(t: PaneView): void;
+  // Claude in Chrome on/off, keeping the conversation (POST /api/panes/:id/chrome).
+  // A terminal pane is re-launched with --resume … --chrome; a chat pane reconnects.
+  onToggleChrome?(t: PaneView, on: boolean): void;
   onSetColor(t: PaneView, color: string): void; // ● → tint the border ("" = clear)
   onRename(t: PaneView, name: string): void; // title text edited ("" = revert to folder)
   // ⚿ → push a value into this pane's env for a bounded time. Never becomes
@@ -172,6 +179,7 @@ export class Term implements PaneView {
       `<span class="path"></span>` +
       `<span class="badge-slot"></span>` +
       `<span class="spacer"></span>` +
+      `<button class="ctl chrome" title="Claude in Chrome" hidden>${iconSvg("chrome")}</button>` +
       `<button class="ctl view" title="Switch this box to chat view">${iconSvg("chat")}</button>` +
       `<button class="ctl attach" title="Add file(s) to prompt">${iconSvg("attach")}</button>` +
       `<button class="ctl secret" title="Give this terminal a secret (never saved to chat memory)">${iconSvg("secret")}</button>` +
@@ -281,6 +289,17 @@ export class Term implements PaneView {
       e.stopPropagation();
       host.onToggleFollowUp(this);
     });
+    // Claude in Chrome: only for a claude terminal; lit when it was started with --chrome.
+    const chromeBtn = this.titleBar.querySelector(".chrome") as HTMLButtonElement;
+    const chromeOn = /(^|\s)--chrome(\s|$)/.test(info.cmd || "");
+    chromeBtn.hidden = !/^claude/.test(String(info.cmd || "").trim()) || !host.onToggleChrome;
+    chromeBtn.classList.toggle("active", chromeOn);
+    chromeBtn.title = chromeOn ? "Claude in Chrome is on — click to restart without it" : "Restart Claude with Chrome (keeps the conversation)";
+    chromeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      host.onToggleChrome?.(this, !chromeOn);
+    });
+    chromeBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
     this.titleBar.querySelector(".view")!.addEventListener("click", (e) => {
       e.stopPropagation();
       host.onFlipView(this);

@@ -553,6 +553,27 @@ app.post("/api/panes/:id/flip", (req, res) => {
   res.json({ ok: true, info: r.info, resumed: r.resumed });
 });
 
+// Claude in Chrome on/off for a session, keeping its conversation
+// (pane-registry.js setChrome). A terminal pane is replaced in its grid slot,
+// exactly like a flip; a chat pane just reconnects.
+app.post("/api/panes/:id/chrome", (req, res) => {
+  const before = registry.info(req.params.id);
+  if (!before) return res.status(404).json({ ok: false, reason: "no such pane" });
+  const order = registry.list(before.session).map((p) => p.id);
+  const r = registry.setChrome(req.params.id, req.body?.on !== false);
+  if (!r.ok) return res.status(409).json(r);
+  if (r.replaced) {
+    broadcast(before.session, { t: "closed", pane: r.id });
+    broadcast(r.info.session, { t: "created", pane: r.info, replaces: r.id });
+    const at = order.indexOf(r.id);
+    if (at !== -1) {
+      order[at] = r.info.id;
+      registry.reorder(before.session, order);
+    }
+  }
+  res.json({ ok: true, chrome: r.chrome, info: r.info || null });
+});
+
 // --- Filesystem browsing (for the folder picker) ---
 app.get("/api/dirs", async (req, res) => {
   try {

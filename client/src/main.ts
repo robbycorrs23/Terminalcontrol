@@ -155,6 +155,7 @@ const host: TermHost = {
   onFlipView: (t) => {
     void flipView(t);
   },
+  onToggleChrome: (t, on) => void toggleChrome(t, on),
   onToggleFollowUp: (t) => {
     const on = !t.isFlagged();
     t.setFollowUp(on); // optimistic; server broadcast confirms
@@ -614,6 +615,38 @@ async function flipView(t: PaneView) {
     showViewNote(`${label}: couldn't reach the server`);
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+
+/**
+ * Claude in Chrome on/off for a session WITHOUT losing it (pane-registry.js
+ * setChrome). A terminal pane is re-launched as `claude --resume <session>
+ * --chrome` — the box is replaced in place like a view flip, so ask first; a
+ * chat pane just reconnects. Refusals (mid-turn, no conversation captured yet)
+ * show in the same note as flip refusals.
+ */
+async function toggleChrome(t: PaneView, on: boolean) {
+  const label = displayName(t.info);
+  if (t.info.kind !== "agent") {
+    const ok = confirm(
+      on
+        ? `Restart Claude in "${label}" with Chrome?\n\nIt picks the same conversation back up (claude --resume … --chrome) — nothing is lost.`
+        : `Restart Claude in "${label}" without Chrome?\n\nIt picks the same conversation back up.`
+    );
+    if (!ok) return;
+  }
+  try {
+    const res = await fetch(`/api/panes/${t.info.id}/chrome`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ on }),
+    });
+    if (res.status === 404) return showViewNote(`${label}: server is running older code — restart it`);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.ok) return showViewNote(`${label}: ${body.reason || "couldn't switch Chrome"}`);
+    showViewNote(`${label}: Claude in Chrome ${on ? "on" : "off"} — same conversation`);
+  } catch {
+    showViewNote(`${label}: couldn't reach the server`);
   }
 }
 
@@ -1858,6 +1891,9 @@ function connectControl() {
       // A pane's driver reported which model it resolved to (agent-manager.js).
       case "model":
         panes.get(m.pane)?.setModel(m.model);
+        break;
+      case "chrome": // a chat pane's Claude in Chrome was switched (any window)
+        panes.get(m.pane)?.setChromeState?.(!!m.on);
         break;
       case "usage-reset":
         onUsageReset(m);

@@ -140,6 +140,7 @@ export class AgentManager {
       // what "Undo rewind" needs (the pre-rewind session + file backups).
       resumeAt: p.resumeAt || null,
       rewindUndo: p.rewindUndo || null,
+      chrome: !!p.chrome, // Claude in Chrome on for this session (setChrome)
     }));
     writeFileSync(this.stateFile, JSON.stringify(records, null, 2));
   }
@@ -203,6 +204,7 @@ export class AgentManager {
       resume: this._resumableSessionId(pane),
       resumeAt: pane.resumeAt || undefined,
       mode: pane.mode || "default",
+      chrome: !!pane.chrome,
       env: this._buildEnv(pane),
       remote: pane.remote ? { ...pane.remote, envPrefix: remoteEnvPrefix(pane.cmd, pane.provider) } : null,
       onEvent: (ev) => this._handleEvent(pane, ev),
@@ -305,12 +307,13 @@ export class AgentManager {
 
   // ---- Creation / lifecycle, mirrors PtyManager's surface ---------------
 
-  create({ cwd, cmd, session, remote, order, sdkSessionId, mode }) {
+  create({ cwd, cmd, session, remote, order, sdkSessionId, mode, chrome }) {
     const provider = cmd.startsWith("codex") ? "codex" : "claude";
     const id = randomUUID().slice(0, 8);
     const home = homedir();
     const dir = cwd && String(cwd).trim() ? String(cwd).replace(/^~/, home) : home;
     const pane = {
+      chrome: !!chrome && !remote, // Claude in Chrome (setChrome / carried across a flip)
       id,
       kind: "agent",
       cwd: dir,
@@ -693,6 +696,28 @@ export class AgentManager {
     return { ok: true, restored: backup ? backup.files.length : 0, removedTurns: t.laterTurns + 1 };
   }
 
+  /**
+   * Turn Claude in Chrome on/off for a chat session WITHOUT losing it: the
+   * driver is restarted resuming the same conversation (sdkSessionId), now with
+   * (or without) --chrome. Refused mid-turn — a restart would cut the reply off.
+   */
+  setChrome(id, on) {
+    const pane = this.panes.get(id);
+    if (!pane) return { ok: false, reason: "No such session." };
+    if (pane.provider !== "claude") return { ok: false, reason: "Claude in Chrome is a Claude feature." };
+    if (pane.remote) return { ok: false, reason: "Chrome runs on this machine — not for a session on another one." };
+    if (pane.status === "working" || pane.status === "waiting_permission")
+      return { ok: false, reason: "Wait for the current turn to finish (or stop it) first." };
+    if (!!pane.chrome === !!on) return { ok: true, chrome: !!on };
+    pane.chrome = !!on;
+    pane.driver?.dispose();
+    pane.driver = null; // the next message (or attach) resumes the same session with the new flag
+    this._persist();
+    this._ensureDriver(pane);
+    this.broadcast(pane.session, { t: "chrome", pane: id, on: !!on });
+    return { ok: true, chrome: !!on };
+  }
+
   /** Put the conversation (and any restored files) back as they were before the last rewind. */
   async undoRewind(id) {
     const pane = this.panes.get(id);
@@ -746,6 +771,7 @@ export class AgentManager {
       kind: "agent",
       cwd: p.cwd,
       cmd: p.cmd,
+      chrome: !!p.chrome,
       session: p.session,
       // See PtyManager.info — needed for registry.list()'s cross-manager sort.
       order: p.order,

@@ -603,6 +603,19 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   close-on-click skips `.menu-item.templates`, and a MutationObserver restores
   the items whenever the menu hides). A terminal-view template can't auto-send
   its prompt — the form says so.
+- **Claude in Chrome per session, keeping the conversation**
+  (`POST /api/panes/:id/chrome`, `registry.setChrome`). Chat panes:
+  `agents.setChrome` sets `pane.chrome` (persisted) and restarts the driver
+  resuming the SAME sdkSessionId with `extraArgs: { chrome: null }` (= the CLI's
+  `--chrome`; verified: the session gains the claude-in-chrome MCP server and
+  its ~22 browser tools, and has none without it). + → Turn on/off Chrome, or
+  type `/chrome` (intercepted in `submit()`, never sent to Claude). Terminal
+  panes: the claude must be RE-LAUNCHED, so the pane is replaced in its grid
+  slot like a flip with `<profile> --resume <sid> [--permission-mode …]
+  --chrome` (globe button in the title bar, asks first). The terminal pane's
+  `cmd` is the source of truth (`hasChrome`), and `resumeCommand` carries
+  `--chrome` across a flip both ways. Refused mid-turn, before the first hook
+  (no session id → a restart would lose the context), for codex/shells/remote.
 - **Parallel-safe sessions** (`server/worktrees.js`, `server/ship.js`,
   `git-status.ts`, `ship-panel.ts`). "Own branch" (new-session sheet's Branch
   row, the picker's checkbox → `POST /api/panes {worktree:true}`) runs `git

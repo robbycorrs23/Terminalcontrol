@@ -58,13 +58,17 @@ const CLI_PERMISSION_MODES = new Set(["acceptEdits", "auto", "bypassPermissions"
  * conversation is worse than visibly starting a new one — `flip` reports
  * `resumed:false` so the UI can say so.
  */
-function resumeCommand(profile, sid, mode) {
+function resumeCommand(profile, sid, mode, chrome = false) {
   if (profile.startsWith("codex")) return profile;
   let cmd = profile;
   if (sid) cmd += ` --resume ${sid}`;
   if (CLI_PERMISSION_MODES.has(mode)) cmd += ` --permission-mode ${mode}`;
+  if (chrome) cmd += " --chrome"; // Claude in Chrome — survives the flip both ways
   return cmd;
 }
+
+/** Was this terminal pane's claude started with --chrome? (Its cmd is the source of truth.) */
+const hasChrome = (cmd) => /(^|\s)--chrome(\s|$)/.test(String(cmd || ""));
 
 export function createRegistry(ptys, agents) {
   const ownerOf = (id) => (ptys.info(id) ? ptys : agents.info(id) ? agents : null);
@@ -187,11 +191,12 @@ export function createRegistry(ptys, agents) {
       // Past this point the old pane is gone, so nothing below may throw a
       // recoverable error — all the refusals are above.
       owner.kill(id);
+      const chrome = toChat ? hasChrome(info.cmd) : !!info.chrome;
       const pane = toChat
-        ? agents.create({ ...carry, cmd: profile, sdkSessionId: sid, mode })
+        ? agents.create({ ...carry, cmd: profile, sdkSessionId: sid, mode, chrome })
         : ptys.create({
             ...carry,
-            cmd: resumeCommand(profile, sid, mode),
+            cmd: resumeCommand(profile, sid, mode, chrome),
             sdkSessionId: sid,
             agentMode: mode,
           });
@@ -207,6 +212,42 @@ export function createRegistry(ptys, agents) {
         info: ownerOf(pane.id)?.info(pane.id) ?? null,
         resumed: toChat ? true : !!sid && !profile.startsWith("codex"),
       };
+    },
+
+    /**
+     * Claude in Chrome on/off for a session, keeping its conversation.
+     *  - chat: agents.setChrome restarts the driver resuming the same session.
+     *  - terminal: the claude has to be RE-LAUNCHED with --chrome, so — like a
+     *    flip — the pane is replaced by one running
+     *    `<profile> --resume <session> [--permission-mode …] --chrome`, in the
+     *    same grid slot (the route broadcasts `replaces`). Refused before the
+     *    first hook (no session id yet, so a restart would lose the context),
+     *    mid-turn, and for codex / plain shells.
+     * Returns { ok, reason?, replaced?, id?, info? }.
+     */
+    setChrome(id, on) {
+      const info = ownerOf(id)?.info(id);
+      if (!info) return { ok: false, reason: "No such session." };
+      if (info.kind === "agent") return agents.setChrome(id, on);
+      const profile = baseProfile(info.cmd);
+      if (!profile.startsWith("claude")) return { ok: false, reason: "Claude in Chrome needs a Claude session." };
+      if (hasChrome(info.cmd) === !!on) return { ok: true, chrome: !!on };
+      if (info.working) return { ok: false, reason: "Wait for Claude to finish its turn first." };
+      const sid = ptys.sdkSessionIdOf(id);
+      if (!sid) return { ok: false, reason: "This session hasn't told FleetView its conversation yet — send it one message first, so restarting doesn't lose the context." };
+      const mode = ptys.agentModeOf(id);
+      ptys.kill(id);
+      const pane = ptys.create({
+        cwd: info.cwd,
+        session: info.session,
+        cmd: resumeCommand(profile, sid, mode, !!on),
+        sdkSessionId: sid,
+        agentMode: mode,
+      });
+      if (info.name) ptys.setName(pane.id, info.name);
+      if (info.color) ptys.setColor(pane.id, info.color);
+      if (info.followUp) ptys.setFollowUp(pane.id, true);
+      return { ok: true, chrome: !!on, replaced: true, id, info: ptys.info(pane.id) };
     },
   };
 }

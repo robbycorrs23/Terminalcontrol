@@ -50,7 +50,7 @@ function stringifyBlockContent(content) {
  *   onModel?: (model: string) => void,
  * }} opts
  */
-export function startClaudeSession({ cwd, resume, resumeAt, env, mode, remote, onEvent, onSessionId, onModel, onRateLimit }) {
+export function startClaudeSession({ cwd, resume, resumeAt, env, mode, remote, chrome, onEvent, onSessionId, onModel, onRateLimit }) {
   const promptQueue = new PushQueue();
   const pendingPermissions = new Map(); // requestId -> (decision: "allow"|"deny"|"always", message?: string) => void
   const pendingQuestions = new Map(); // requestId -> (answers|null) => void
@@ -150,6 +150,10 @@ export function startClaudeSession({ cwd, resume, resumeAt, env, mode, remote, o
       // put them back (Query.rewindFiles). Edits made through Bash are not
       // tracked — the UI says so.
       enableFileCheckpointing: true,
+      // Claude in Chrome (the CLI's --chrome): connects the claude-in-chrome
+      // MCP server and its browser tools. Verified against the real SDK —
+      // without it the session has none of those tools.
+      ...(chrome ? { extraArgs: { chrome: null } } : {}),
       permissionMode: mode || "default",
       canUseTool,
       // Live text + thinking as they generate (the Claude app streams; a reply

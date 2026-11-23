@@ -66,6 +66,8 @@ export class AgentChat implements PaneView {
   private isRemote: boolean;
   private inputEl: HTMLTextAreaElement;
   private plusMenu!: HTMLElement;
+  private chromeBtn!: HTMLButtonElement;
+  private toggleChromeFn: (on: boolean) => void = () => {};
   private sendBtn!: HTMLButtonElement;
   private jumpBtn!: HTMLButtonElement;
   private modelSel!: HTMLSelectElement;
@@ -264,11 +266,20 @@ export class AgentChat implements PaneView {
     const viewBtn = menuItem("view", "terminal", "Switch to terminal view");
     // Saved prompt templates (templates.ts): pick one to put its prompt in the composer.
     const templatesBtn = menuItem("templates", "template", "Templates");
+    // Claude in Chrome on/off — reconnects keeping the conversation (also: type /chrome).
+    this.chromeBtn = menuItem("chrome", "chrome", "Turn on Chrome");
+    this.chromeBtn.hidden = !host.onToggleChrome || this.isRemote || !/^claude/.test(String(info.cmd || ""));
+    this.chromeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      host.onToggleChrome?.(this, !this.info.chrome);
+    });
+    this.toggleChromeFn = (on) => host.onToggleChrome?.(this, on);
     this.plusMenu = el("div", "plus-menu");
     this.plusMenu.hidden = true;
     this.infoEl = el("div", "menu-info");
     this.infoEl.hidden = true;
-    this.plusMenu.append(this.infoEl, changesBtn, templatesBtn, attachBtn, pasteBtn, secretBtn, viewBtn);
+    this.plusMenu.append(this.infoEl, changesBtn, templatesBtn, this.chromeBtn, attachBtn, pasteBtn, secretBtn, viewBtn);
+    this.setChromeState(!!info.chrome);
     templatesBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       void this.showTemplatePicker();
@@ -690,6 +701,15 @@ export class AgentChat implements PaneView {
 
   private submit() {
     const typed = this.inputEl.value.trim();
+    // "/chrome" — the CLI's way to ask for Claude in Chrome. Here it toggles it
+    // (reconnecting with --chrome, same conversation) instead of going to Claude.
+    if (/^\/chrome$/i.test(typed) && !this.chromeBtn.hidden) {
+      this.inputEl.value = "";
+      this.autoGrow();
+      this.syncSend();
+      this.toggleChromeFn(!this.info.chrome);
+      return;
+    }
     if (this.attachTray.uploading) return; // wait for the upload
     const paths = this.attachTray.paths();
     if (!typed && !paths.length) return;
@@ -1829,6 +1849,17 @@ export class AgentChat implements PaneView {
       }
     }
     this.infoEl.hidden = !this.infoEl.childElementCount;
+  }
+
+  /** Claude in Chrome state (info.chrome) → the + menu item's wording. */
+  setChromeState(on: boolean) {
+    this.info.chrome = on;
+    if (this.chromeBtn) {
+      const l = this.chromeBtn.querySelector(".menu-label");
+      if (l) l.textContent = on ? "Turn off Chrome" : "Turn on Chrome";
+      this.chromeBtn.classList.toggle("on", on);
+      this.chromeBtn.title = on ? "Claude in Chrome is on — turn it off (keeps the conversation)" : "Let Claude use your Chrome browser (keeps the conversation)";
+    }
   }
 
   /** Which model this session resolved to; hidden until the driver says. */

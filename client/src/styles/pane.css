@@ -414,3 +414,10 @@ body.big .term .pinned {
   min-height: 0;
   padding: 2px 4px;
 }
+/* Claude in Chrome: lit while the session runs with --chrome. */
+.term .title .ctl.chrome.active {
+  color: var(--accent);
+}
+.term .plus-menu .menu-item.chrome.on {
+  color: var(--accent);
+}
