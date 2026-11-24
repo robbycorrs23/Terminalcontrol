@@ -49,6 +49,12 @@ import { createPreviews } from "./previews.js";
 // most prominent thing the user sees — not buried under later startup logs.
 preflight({ quietIfOk: true });
 
+// A server started by hand from INSIDE a Claude session (e.g. `npm start` run by
+// a chat pane's agent) inherits that session's markers, and every terminal pane
+// would pass them on: `claude` then believes it's an SDK child and switches off
+// SDK-default-off tools such as Artifact. Nothing here wants them.
+for (const k of ["CLAUDE_CODE_ENTRYPOINT", "CLAUDECODE", "CLAUDE_AGENT_SDK_VERSION"]) delete process.env[k];
+
 const PORT = Number(process.env.FLEET_PORT) || 4280;
 // Bind to loopback by default. This server spawns REAL shells with NO auth, so a
 // process that can reach the port can run arbitrary commands on this machine —

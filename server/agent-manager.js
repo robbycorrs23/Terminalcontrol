@@ -166,6 +166,12 @@ export class AgentManager {
     if (pane.accountConfigDir) {
       env[pane.provider === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"] = pane.accountConfigDir;
     }
+    // Claude Code switches the Artifact tools (publish / update / comment on a
+    // claude.ai artifact) OFF by default in SDK sessions — "sdk_default_off" in
+    // the CLI — so a chat pane couldn't do what the same conversation did in
+    // terminal view ("switched off in this session"). This is the CLI's own
+    // opt-in; org policy and the user's enableArtifact setting still apply.
+    if (pane.provider === "claude" && env.CLAUDE_CODE_ARTIFACT === undefined) env.CLAUDE_CODE_ARTIFACT = "1";
     return env;
   }
 

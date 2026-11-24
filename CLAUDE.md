@@ -706,6 +706,17 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   `/review/send` with the turn's text → the original pane (chat: a message;
   terminal: `ptys.pasteText`, a bracketed paste so newlines don't submit
   early). Nothing goes back unless you tap it.
+- **Artifacts in chat panes need `CLAUDE_CODE_ARTIFACT=1`** (`_buildEnv`).
+  Claude Code switches the Artifact tools OFF by default in SDK sessions
+  (`sdk_default_off` in the CLI's gate; its error reads "switched off in this
+  session"), so a chat pane couldn't publish what the same conversation
+  published in terminal view. Org policy (`allow_cobalt_plinth`) and the
+  user's `enableArtifact` setting still apply on top. Related trap: a process
+  started from INSIDE a Claude session inherits `CLAUDE_CODE_ENTRYPOINT=sdk-ts`
+  etc., and a `claude` launched from it thinks it's an SDK child — index.js
+  deletes those at startup so terminal panes can't inherit them (it's also
+  what made a hand-run "terminal" test from a chat pane falsely report no
+  Artifact tool).
 - **Media mentioned by path** (`media-paths.ts`): replies name files as
   `assets/video/x.mp4` (relative), `~/…`, or in inline code, often with spaces
   — none of which markdown.ts's own media pass embeds. This resolves relative
