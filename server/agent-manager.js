@@ -259,6 +259,7 @@ export class AgentManager {
       pane.tasks ||= new Map();
       if (ev.task.status === "running" || ev.task.status === "pending" || ev.task.status === "paused") pane.tasks.set(ev.task.id, ev.task);
       else pane.tasks.delete(ev.task.id);
+      this._syncWork(pane);
     }
     else if (ev.t === "user" || (ev.t === "status" && ev.state === "working")) pane.suggestions = [];
     // Fleet inbox: what this pane is waiting on, and what it last said.
@@ -284,12 +285,8 @@ export class AgentManager {
     if (ev.t === "permission_request" || ev.t === "question") {
       this.setAttention(pane.id, "question");
     } else if (ev.t === "status") {
-      const wasWorking = pane.status === "working";
       pane.status = ev.state;
-      // Mirror PtyManager's "work" edge onto the control socket so agent panes
-      // get the same grid-wide working treatment terminal panes do.
-      if (wasWorking !== (ev.state === "working"))
-        this.broadcast(pane.session, { t: "work", pane: pane.id, on: ev.state === "working" });
+      this._syncWork(pane);
       if (ev.state === "idle") this.setAttention(pane.id, "done");
       // Turn over cleanly → send what was queued meanwhile, as one message.
       // Server-side on purpose: it must happen with no app open at all.
@@ -502,6 +499,34 @@ export class AgentManager {
       }
     });
     ws.on("close", () => pane.clients.delete(ws));
+  }
+
+  /**
+   * "Working" for the grid (box glow, Matrix rain, auto-update's idle check):
+   * a turn in progress OR a background task still running after the turn
+   * ended (a dev server, a long build, a subagent). The composer's Stop button
+   * is NOT this — it follows the turn alone (agent-chat.ts).
+   */
+  _isWorking(p) {
+    if (p.status === "working") return true;
+    for (const t of p.tasks?.values() || []) if (t.status === "running" || t.status === "pending") return true;
+    return false;
+  }
+
+  /** Stop the driver (rewind / Chrome / undo restart it): its background tasks die with it. */
+  _dropDriver(pane) {
+    pane.driver?.dispose();
+    pane.driver = null;
+    if (pane.tasks?.size) pane.tasks.clear();
+    this._syncWork(pane);
+  }
+
+  /** Mirror PtyManager's "work" EDGE onto the control socket — one broadcast per change. */
+  _syncWork(pane) {
+    const on = this._isWorking(pane);
+    if (!!pane.workOn === on) return;
+    pane.workOn = on;
+    this.broadcast(pane.session, { t: "work", pane: pane.id, on });
   }
 
   // ---- Queued messages (typed while a turn runs) --------------------------
@@ -740,8 +765,7 @@ export class AgentManager {
     pane.rewindUndo = { sdkSessionId: pane.sdkSessionId, backup };
 
     // Restart the conversation as a fork, just before the edited message.
-    pane.driver?.dispose();
-    pane.driver = null;
+    this._dropDriver(pane);
     const parent = t.entry.parentUuid || null;
     if (parent) pane.resumeAt = { at: parent };
     else {
@@ -772,8 +796,7 @@ export class AgentManager {
       return { ok: false, reason: "Wait for the current turn to finish (or stop it) first." };
     if (!!pane.chrome === !!on) return { ok: true, chrome: !!on };
     pane.chrome = !!on;
-    pane.driver?.dispose();
-    pane.driver = null; // the next message (or attach) resumes the same session with the new flag
+    this._dropDriver(pane); // the next message (or attach) resumes the same session with the new flag
     this._persist();
     this._ensureDriver(pane);
     this.broadcast(pane.session, { t: "chrome", pane: id, on: !!on });
@@ -787,8 +810,7 @@ export class AgentManager {
     if (!undo) return { ok: false, reason: "Nothing to undo." };
     if (pane.status === "working" || pane.status === "waiting_permission")
       return { ok: false, reason: "Wait for the current turn to finish (or stop it) first." };
-    pane.driver?.dispose();
-    pane.driver = null;
+    this._dropDriver(pane);
     if (undo.backup) this._restoreBackup(undo.backup);
     this._dropBackup(undo);
     pane.rewindUndo = null;
@@ -844,7 +866,7 @@ export class AgentManager {
       // See PtyManager.info — needed for registry.list()'s cross-manager sort.
       order: p.order,
       attention: p.attention,
-      working: p.status === "working",
+      working: this._isWorking(p),
       followUp: p.followUp,
       lastInput: p.lastInput || "",
       color: p.color || "",

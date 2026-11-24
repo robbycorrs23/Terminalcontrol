@@ -163,6 +163,15 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   The rain is CSS-only — one `transform` per column, no canvas and no rAF — and
   it PAUSES (not just hides) when a pane goes idle, so a quiet grid costs
   nothing. `◍` in the top bar cycles `body.fx-full` → `.fx-edge` → `.fx-off`.
+  Chat panes count a **running background task** as working too
+  (`AgentManager._isWorking`: turn in progress OR a `task_*` still running —
+  a dev server, a long build), so the box keeps its glow/rain after the turn
+  ends; `_dropDriver` clears tasks when a driver is torn down so a pane can't
+  stay "working" forever. The composer's Stop follows the TURN only
+  (`setTurnBusy` vs `setBusy` in agent-chat.ts). On the phone's home list the
+  content (and the rain inside it) is hidden, so every box also carries a
+  `row-rain` overlay that is `display:none` everywhere except non-zoomed rows
+  ≤640px.
 - **WebSockets:** `/term?pane=` (per box, reconnects after sleep) and `/control?session=`
   (per browser window; grid events + initial panes/dormant/tasks snapshot).
 - **One workspace per machine.** Panes are NOT scoped to a browser window any

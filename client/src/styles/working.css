@@ -94,6 +94,31 @@ body.fx-full .term.zoomed.busy:not(.waiting) .busy-rain {
 .term:not(.busy) .busy-rain .rain-col {
   animation-play-state: paused;
 }
+/* The phone's home list shows each pane as a one-line row with its content
+   hidden — and the rain above lives inside that content. So every box also
+   carries a row-sized copy (workingOverlay("row-rain")), rendered ONLY there:
+   display:none everywhere else, so it costs nothing on a desktop grid or in an
+   open pane. Fainter than the grid's, because the row's text sits under it. */
+.busy-rain.row-rain {
+  display: none;
+}
+@media (max-width: 640px) {
+  .term:not(.zoomed) > .busy-rain.row-rain {
+    display: flex;
+    z-index: 0;
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 30%, #000 100%);
+    mask-image: linear-gradient(to right, transparent, #000 30%, #000 100%);
+  }
+  body.fx-full .term:not(.zoomed).busy:not(.waiting) > .busy-rain.row-rain {
+    opacity: 0.55;
+  }
+  /* The row's name and last message stay on top of it. */
+  .term:not(.zoomed) > .title,
+  .term:not(.zoomed) > .cwdline {
+    position: relative;
+    z-index: 1;
+  }
+}
 
 /* One column = one glyph per line, drawn twice (see workingOverlay). The
    gradient is clipped to the text and TILED down it: each tile fades in from

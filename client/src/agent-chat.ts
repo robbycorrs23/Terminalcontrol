@@ -87,7 +87,8 @@ export class AgentChat implements PaneView {
   private dock!: ApprovalDock;
   private cmdMenu!: CommandMenu;
   private suggestEl!: HTMLElement;
-  private busy = false;
+  private busy = false; // a turn is running (composer Stop)
+  private active = false; // turn OR background task (grid glow + rain)
   private thinkingEls = new Map<string, HTMLElement>(); // thinking id -> row being streamed
   private turnStart: number | null = null; // ts of the user message that opened the current turn
   private turnEls: HTMLElement[] = []; // assistant text blocks of the current turn (for Copy)
@@ -421,7 +422,8 @@ export class AgentChat implements PaneView {
     );
     this.syncSend();
 
-    this.el.append(this.titleBar, cwdline, this.pinnedEl, chat);
+    // Row-sized rain for the phone's home list, where `chat` is hidden (terminal.ts).
+    this.el.append(this.titleBar, cwdline, this.pinnedEl, chat, workingOverlay("row-rain"));
     this.cell.append(this.el);
     this.setBusy(!!info.working);
 
@@ -1663,7 +1665,7 @@ export class AgentChat implements PaneView {
   }
 
   private setStatus(state: string, detail?: string, durationMs?: number, ts?: number) {
-    this.setBusy(state === "working");
+    this.setTurnBusy(state === "working");
     if (state === "working" || state === "waiting_permission") {
       this.statusEl.hidden = false;
       this.statusEl.textContent = "";
@@ -1864,10 +1866,20 @@ export class AgentChat implements PaneView {
       this.badgeSlot.append(badge);
     }
   }
+  /**
+   * The grid's "working" signal (main.ts, from the server's `work` edge): a
+   * turn OR a background task still running after it — drives the glow and
+   * the Matrix rain. Not the composer: that follows the turn (setTurnBusy).
+   */
   setBusy(on: boolean) {
-    setBusyClass(this.el, on);
+    this.active = on;
+    setBusyClass(this.el, this.busy || this.active);
+  }
+
+  /** A turn is running: the composer's button becomes Stop (see syncSend). */
+  private setTurnBusy(on: boolean) {
     this.busy = on;
-    // The composer's button becomes Stop while a turn runs (see syncSend).
+    setBusyClass(this.el, this.busy || this.active);
     if (this.sendBtn) this.syncSend();
   }
 

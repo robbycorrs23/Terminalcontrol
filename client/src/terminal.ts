@@ -214,7 +214,9 @@ export class Term implements PaneView {
       `<button data-key="Left">←</button>` +
       `<button data-key="Right">→</button>`;
     this.xtEl.append(workingOverlay());
-    this.el.append(this.titleBar, cwdline, this.pinnedEl, this.xtEl, softkeys);
+    // A second, row-sized rain on the box itself: the phone's home list hides
+    // the content (and the rain inside it). Not rendered anywhere else.
+    this.el.append(this.titleBar, cwdline, this.pinnedEl, this.xtEl, softkeys, workingOverlay("row-rain"));
     this.cell.append(this.el);
     this.setBusy(!!info.working);
     this.wireSoftKeys(softkeys);
@@ -772,8 +774,8 @@ const RAIN_GLYPHS_PER_COLUMN = 34; // one copy must out-tall the pane — see st
  * seamlessly, and every column gets its own duration/phase/opacity so they
  * never march in lockstep.
  */
-export function workingOverlay(): HTMLElement {
-  const o = el("div", "busy-rain");
+export function workingOverlay(extra = ""): HTMLElement {
+  const o = el("div", extra ? `busy-rain ${extra}` : "busy-rain");
   o.setAttribute("aria-hidden", "true");
   for (let i = 0; i < RAIN_COLUMNS; i++) {
     const col = el("div", "rain-col");
