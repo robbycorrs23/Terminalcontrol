@@ -125,7 +125,7 @@ final class MachineStore: ObservableObject {
         guard let i = machines.firstIndex(where: { $0.id == id }) else { return }
         let base = machines[i].base
         struct Manifest: Decodable { struct Icon: Decodable { let src: String }; let short_name: String?; let icons: [Icon]? }
-        guard let (data, resp) = try? await URLSession.shared.data(from: base.appendingPathComponent("manifest.webmanifest")),
+        guard let (data, resp) = await Reach.get(base.appendingPathComponent("manifest.webmanifest")),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let m = try? JSONDecoder().decode(Manifest.self, from: data),
               let j = machines.firstIndex(where: { $0.id == id }) else { return }
@@ -145,5 +145,30 @@ final class MachineStore: ObservableObject {
     func move(from: IndexSet, to: Int) {
         machines.move(fromOffsets: from, toOffset: to)
         save()
+    }
+}
+
+/// Can this phone reach a machine right now? One small public request (the
+/// manifest is served without sign-in) with a SHORT timeout. Needed because an
+/// offline tailnet peer doesn't refuse a connection — packets just vanish —
+/// so a plain page load sits on a blank screen for a minute or more.
+enum Reach {
+    private static let session: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.timeoutIntervalForRequest = 5
+        c.timeoutIntervalForResource = 6
+        c.waitsForConnectivity = false
+        c.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: c)
+    }()
+
+    static func probe(_ base: URL) async -> Bool {
+        guard let (_, resp) = try? await session.data(from: base.appendingPathComponent("manifest.webmanifest")) else { return false }
+        return (resp as? HTTPURLResponse).map { $0.statusCode < 500 } ?? false
+    }
+
+    /// Short-timeout GET for small public things (icons, manifests).
+    static func get(_ url: URL) async -> (Data, URLResponse)? {
+        try? await session.data(from: url)
     }
 }

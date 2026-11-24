@@ -26,6 +26,19 @@ final class MachineWeb: NSObject, ObservableObject {
     private(set) var ready = false
     /// Prompts on this machine waiting for a reply (app-bridge.ts reportWaiting).
     @Published private(set) var waiting = 0
+    /// The machine can't be reached (Reach.probe failed): show the offline
+    /// screen instead of a blank page that hangs. WebPool re-checks it.
+    @Published private(set) var offline = false
+    /// Parked on about:blank while offline in the background, so its page
+    /// isn't left retrying every pane's socket against a dead host.
+    private(set) var suspended = false
+    /// Bumped by every load/suspend: an older load's probe or watchdog that
+    /// finishes late must not act on a newer state.
+    private var loadToken = 0
+    /// Told when a load finds the machine up/down (WebPool keeps the set).
+    var onReach: ((Bool) -> Void)?
+    /// Is another machine offline? (dims its quick-switch button)
+    var isOffline: ((UUID) -> Bool)?
 
     var onRequestSwitcher: (() -> Void)?
     /// Quick switch (the machine buttons in the page's top bar).
@@ -61,24 +74,60 @@ final class MachineWeb: NSObject, ObservableObject {
         load()
     }
 
+    /// Check the machine is reachable FIRST (5s), then load. Offline → the
+    /// offline screen at once, never a blank page hanging for a minute.
     func load(fragment: String? = nil) {
         problem = nil
         ready = false
-        var c = URLComponents(url: machine.base, resolvingAgainstBaseURL: false)!
-        c.path = "/"
-        c.fragment = fragment
-        webView.load(URLRequest(url: c.url!))
+        suspended = false
+        loadToken += 1
+        let token = loadToken
+        Task { @MainActor in
+            let up = await Reach.probe(machine.base)
+            guard token == loadToken else { return }
+            onReach?(up)
+            offline = !up
+            guard up else { return }
+            var c = URLComponents(url: machine.base, resolvingAgainstBaseURL: false)!
+            c.path = "/"
+            c.fragment = fragment
+            webView.load(URLRequest(url: c.url!))
+            // Reachable a moment ago but the page still hasn't arrived: say so
+            // (with ways out) rather than leave a blank screen.
+            try? await Task.sleep(for: .seconds(15))
+            guard token == loadToken, webView.isLoading, !signingIn, problem == nil else { return }
+            webView.stopLoading()
+            problem = "\(machine.name) is taking too long to answer."
+        }
     }
 
     func reload() {
-        if webView.url == nil || problem != nil { load() } else { webView.reload() }
+        if webView.url == nil || problem != nil || offline || suspended { load() } else { webView.reload() }
+    }
+
+    /// The machine went offline while you're looking at another one: stop its
+    /// page (and every socket in it retrying) until it's back.
+    func suspend() {
+        guard !suspended else { return }
+        loadToken += 1
+        suspended = true
+        offline = true
+        ready = false
+        webView.stopLoading()
+        webView.load(URLRequest(url: URL(string: "about:blank")!))
+    }
+
+    /// WebPool saw it come back: load it again (no-op if already fine).
+    func cameBack() {
+        guard offline || suspended else { return }
+        load()
     }
 
     /// Open a pane: in the live page if it's up, else via the #pane= deep link.
     func openPane(_ id: String) {
         let safe = id.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
         guard !safe.isEmpty else { return }
-        if ready {
+        if ready && !suspended {
             webView.evaluateJavaScript("window.fleetOpenPane ? window.fleetOpenPane('\(safe)') : false") { [weak self] result, _ in
                 if (result as? Bool) != true { self?.load(fragment: "pane=\(safe)") }
             }
@@ -103,7 +152,8 @@ final class MachineWeb: NSObject, ObservableObject {
             ["id": $0.id.uuidString, "name": $0.name,
              "icon": $0.icon?.absoluteString ?? NSNull(),
              "iconData": IconCache.shared.dataURL(for: $0.icon) ?? NSNull(),
-             "current": $0.id == machine.id]
+             "current": $0.id == machine.id,
+             "offline": $0.id != machine.id && (isOffline?($0.id) ?? false)]
         }
         for m in list where IconCache.shared.dataURL(for: m.icon) == nil {
             IconCache.shared.fetch(m.icon) { [weak self] in self?.sendMachines() }
@@ -348,7 +398,7 @@ final class IconCache {
         inFlight.insert(url)
         Task {
             defer { inFlight.remove(url) }
-            guard let (data, resp) = try? await URLSession.shared.data(from: url),
+            guard let (data, resp) = await Reach.get(url),
                   (resp as? HTTPURLResponse)?.statusCode == 200,
                   data.count < 512 * 1024, data.starts(with: [0x89, 0x50, 0x4E, 0x47]) else { return } // PNG only
             cache[url] = "data:image/png;base64," + data.base64EncodedString()

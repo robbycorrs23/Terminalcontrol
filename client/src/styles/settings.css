@@ -597,3 +597,24 @@ body.in-app.app-quick #bar .brand {
   height: 34px;
   max-width: none;
 }
+
+/* An unreachable machine in the app's quick switch: faded, with a slash. */
+#bar .app-machines .app-machine.offline {
+  position: relative;
+}
+#bar .app-machines .app-machine.offline img,
+#bar .app-machines .app-machine.offline .app-machine-initial {
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+#bar .app-machines .app-machine.offline::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 70%;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--text-dim);
+  transform: translate(-50%, -50%) rotate(-45deg);
+}

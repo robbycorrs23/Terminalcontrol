@@ -21,7 +21,7 @@
  *    notifications — are hidden via body.in-app; the categories still apply.
  */
 type Handler = { postMessage: (m: unknown) => void };
-export type AppMachine = { id: string; name: string; icon: string | null; iconData?: string | null; current: boolean };
+export type AppMachine = { id: string; name: string; icon: string | null; iconData?: string | null; current: boolean; offline?: boolean };
 type AppWindow = Window & {
   webkit?: { messageHandlers?: { fleetApp?: Handler } };
   fleetOpenPane?: (id: string) => boolean;
@@ -62,9 +62,11 @@ export function initAppBridge(deps: { brand: HTMLElement; openPane: (id: string)
     for (const m of list) {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "app-machine" + (m.current ? " on" : "");
-      b.title = m.name;
-      b.setAttribute("aria-label", m.current ? `${m.name} (current)` : `Switch to ${m.name}`);
+      // `offline`: the app couldn't reach it (Tailscale, the machine asleep or
+      // off). Still tappable — the app shows its offline screen at once.
+      b.className = "app-machine" + (m.current ? " on" : "") + (m.offline ? " offline" : "");
+      b.title = m.offline ? `${m.name} — offline` : m.name;
+      b.setAttribute("aria-label", m.current ? `${m.name} (current)` : `Switch to ${m.name}${m.offline ? " (offline)" : ""}`);
       b.setAttribute("aria-pressed", String(!!m.current));
       // Prefer the app's natively fetched copy (iconData, a data: URL) so this
       // page never has to load another machine's image; else the https URL.

@@ -388,6 +388,21 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
      app-bridge `reportWaiting`) whenever it's used and when it backgrounds.
      Exact cross-machine sums while the app is closed would need a Notification
      Service Extension + App Group — not built.
+  6. **An unreachable machine must never trap you** (the work laptop while
+     travelling). An offline tailnet peer doesn't REFUSE connections — packets
+     vanish — so a plain WKWebView load sat on a blank page for a minute+ with
+     the quick-switch buttons (which live IN that page) unreachable. So
+     `MachineWeb.load()` probes first (`Reach.probe`: the public manifest, 5s
+     timeout) and shows the native `OfflineView` (Try again / other machines)
+     instead; a 15s watchdog covers a page that stalls after a good probe.
+     `WebPool` re-probes every machine every 20s while the app is in front
+     (nothing in the background): an offline machine that ISN'T on screen is
+     `suspend()`ed to about:blank so its page stops retrying every pane's
+     socket against a dead host (that's what slowed the whole app down), and a
+     machine that's back is reloaded. Quick-switch buttons get `offline`
+     (faded + slash, still tappable — the offline screen is instant). At
+     launch only, if the saved machine is offline and another answers, the app
+     opens on that one.
   3. **The web side detects the app by CAPABILITY**
      (`window.webkit.messageHandlers.fleetApp`), not the UA, and hides the
      browser-only notification rows via `body.in-app`.

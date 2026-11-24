@@ -57,6 +57,54 @@ final class FleetViewUITests: XCTestCase {
         attach(app, "q2-switched")
     }
 
+    /// Needs two mock machines: alpha on :4413, beta on :4414 (/tmp/fvtest
+    /// mock.mjs with MNAME). /__dark makes one stop answering — the way an
+    /// offline tailnet peer behaves (no refusal, just silence).
+    func testOfflineMachine() throws {
+        let alpha = "http://127.0.0.1:4413", beta = "http://127.0.0.1:4414"
+        mock(beta, "__light")
+        let app = XCUIApplication()
+        app.launchArguments = ["-FLEET_RESET", "YES", "-FLEET_ADD_MACHINE", "\(beta),\(alpha)"]
+        app.launch()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        if springboard.buttons["Allow"].waitForExistence(timeout: 6) { springboard.buttons["Allow"].tap() }
+        let web = app.webViews.descendants(matching: .any)
+        XCTAssertTrue(web["beta (current)"].waitForExistence(timeout: 20), "beta never loaded")
+
+        // The laptop goes away. Relaunch: the app should start on alpha, not hang on beta.
+        mock(beta, "__dark")
+        app.terminate()
+        app.launchArguments = []
+        let t0 = Date()
+        app.launch()
+        XCTAssertTrue(web["alpha (current)"].waitForExistence(timeout: 15), "launch didn't fall back to the machine that answers")
+        print("fallback after \(Date().timeIntervalSince(t0))s")
+        let betaBtn = web["Switch to beta (offline)"]
+        XCTAssertTrue(betaBtn.waitForExistence(timeout: 10), "beta's quick-switch button isn't marked offline")
+        attach(app, "o1-fallback")
+
+        // Tapping it shows the offline screen quickly, with a way back.
+        betaBtn.tap()
+        let t1 = Date()
+        XCTAssertTrue(app.staticTexts["beta is offline"].waitForExistence(timeout: 8), "no offline screen")
+        print("offline screen after \(Date().timeIntervalSince(t1))s")
+        attach(app, "o2-offline")
+        app.buttons["Open alpha"].tap()
+        XCTAssertTrue(web["alpha (current)"].waitForExistence(timeout: 5), "couldn't get back to alpha")
+
+        // beta comes back: switching to it loads it.
+        mock(beta, "__light")
+        web["Switch to beta (offline)"].firstMatch.tap()
+        XCTAssertTrue(web["beta (current)"].waitForExistence(timeout: 20), "beta didn't come back")
+        attach(app, "o3-back")
+    }
+
+    private func mock(_ base: String, _ path: String) {
+        let done = expectation(description: path)
+        URLSession.shared.dataTask(with: URL(string: "\(base)/\(path)")!) { _, _, _ in done.fulfill() }.resume()
+        wait(for: [done], timeout: 5)
+    }
+
     private func attach(_ app: XCUIApplication, _ name: String) {
         let a = XCTAttachment(screenshot: app.screenshot())
         a.name = name

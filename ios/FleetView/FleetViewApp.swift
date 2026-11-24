@@ -23,10 +23,15 @@ struct FleetViewApp: App {
 @MainActor
 final class WebPool: ObservableObject {
     private var webs: [UUID: MachineWeb] = [:]
+    /// Machines this phone can't reach right now (Reach.probe). A travelling
+    /// laptop is the normal case: it must cost nothing and never trap you.
+    @Published private(set) var offline: Set<UUID> = []
+    private var monitor: Task<Void, Never>?
 
     /// Wired once by RootView: the machine list and how to switch.
     var machines: () -> [Machine] = { [] }
     var switchTo: (UUID) -> Void = { _ in }
+    var currentID: () -> UUID? = { nil }
 
     func web(for m: Machine, onSwitcher: @escaping () -> Void) -> MachineWeb {
         if let w = webs[m.id], w.machine.base == m.base { return w }
@@ -34,8 +39,51 @@ final class WebPool: ObservableObject {
         w.onRequestSwitcher = onSwitcher
         w.machineList = { [weak self] in self?.machines() ?? [] }
         w.onSwitch = { [weak self] id in self?.switchTo(id) }
+        w.onReach = { [weak self] up in self?.setReach(m.id, up) }
+        w.isOffline = { [weak self] id in self?.offline.contains(id) ?? false }
         webs[m.id] = w
         return w
+    }
+
+    private func setReach(_ id: UUID, _ up: Bool) {
+        let changed = up ? offline.remove(id) != nil : offline.insert(id).inserted
+        guard changed else { return }
+        for w in webs.values { w.sendMachines() } // re-draw every page's quick switch
+    }
+
+    /// Probe every machine at once (5s each, in parallel) and react: an
+    /// offline machine in the background is parked (its page stops retrying);
+    /// one that's back is reloaded — the one on screen included, so its
+    /// offline screen turns into FleetView by itself.
+    func checkAll() async {
+        let list = machines()
+        let results = await withTaskGroup(of: (UUID, Bool).self) { group -> [(UUID, Bool)] in
+            for m in list { group.addTask { (m.id, await Reach.probe(m.base)) } }
+            var out: [(UUID, Bool)] = []
+            for await r in group { out.append(r) }
+            return out
+        }
+        for (id, up) in results {
+            setReach(id, up)
+            guard let w = webs[id] else { continue }
+            if up { w.cameBack() } else if id != currentID() { w.suspend() }
+        }
+    }
+
+    /// Every 20s while the app is in front; nothing at all in the background.
+    func startMonitor() {
+        monitor?.cancel()
+        monitor = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.checkAll()
+                try? await Task.sleep(for: .seconds(20))
+            }
+        }
+    }
+
+    func stopMonitor() {
+        monitor?.cancel()
+        monitor = nil
     }
 
     func existing(_ id: UUID) -> MachineWeb? { webs[id] }
@@ -63,7 +111,8 @@ struct RootView: View {
                 // only the current one is visible and touchable.
                 ForEach(store.machines.filter { opened.contains($0.id) || $0.id == store.currentID }) { m in
                     let web = pool.web(for: m) { showSwitcher = true }
-                    MachinePage(web: web) { showSwitcher = true }
+                    MachinePage(web: web, others: store.machines.filter { $0.id != m.id }, offlineIDs: pool.offline,
+                                switchTo: { store.currentID = $0 }) { showSwitcher = true }
                         .opacity(m.id == store.currentID ? 1 : 0)
                         .allowsHitTesting(m.id == store.currentID)
                         // Hidden machines stay loaded but must not be reachable by VoiceOver.
@@ -80,6 +129,9 @@ struct RootView: View {
         }
         .onChange(of: store.currentID) { _, id in
             push.visibleOrigin = store.machines.first { $0.id == id }?.origin
+            // Switching to a machine that was parked offline: check again now
+            // (its offline screen shows meanwhile — never a hanging blank page).
+            if let id, let w = pool.existing(id) { w.cameBack() }
         }
         .onChange(of: push.token) { _, token in
             guard let token else { return }
@@ -88,10 +140,12 @@ struct RootView: View {
         .onChange(of: push.pendingOpen?.origin) { _, _ in openPendingNotification() }
         .onChange(of: phase) { _, p in
             if p == .active {
+                pool.startMonitor()
                 push.refreshBadge()
                 push.visibleOrigin = store.current?.origin
                 openPendingNotification()
             } else {
+                pool.stopMonitor()
                 push.visibleOrigin = nil
                 push.refreshBadge() // leave the icon showing the true total
             }
@@ -101,6 +155,18 @@ struct RootView: View {
             pool.machines = { [weak store] in store?.machines ?? [] }
             push.badgeSources = { [weak pool] in pool?.all.reduce(0) { $0 + $1.waiting } ?? 0 }
             pool.switchTo = { [weak store] id in store?.currentID = id }
+            pool.currentID = { [weak store] in store?.currentID }
+        }
+        // Opening the app on a machine that's away (the work laptop while
+        // you travel): start on one that answers instead. Only at launch —
+        // later you're on whatever you chose, and see its offline screen.
+        .task {
+            await pool.checkAll()
+            if let cur = store.currentID, pool.offline.contains(cur),
+               let alt = store.machines.first(where: { !pool.offline.contains($0.id) }) {
+                store.currentID = alt.id
+            }
+            pool.startMonitor()
         }
         // Names/icons/order changed (or a machine was added/removed): every
         // open page redraws its quick-switch buttons.
@@ -140,12 +206,17 @@ struct RootView: View {
 /// One machine's page plus its states: signing in, or unreachable.
 struct MachinePage: View {
     @ObservedObject var web: MachineWeb
+    let others: [Machine]
+    let offlineIDs: Set<UUID>
+    let switchTo: (UUID) -> Void
     let openSwitcher: () -> Void
 
     var body: some View {
         ZStack {
             MachineWebView(web: web).ignoresSafeArea()
-            if let problem = web.problem {
+            if web.offline {
+                OfflineView(web: web, others: others, offlineIDs: offlineIDs, switchTo: switchTo, openSwitcher: openSwitcher)
+            } else if let problem = web.problem {
                 VStack(spacing: 16) {
                     Image(systemName: "bolt.horizontal.circle")
                         .font(.system(size: 44, weight: .light))
@@ -160,6 +231,7 @@ struct MachinePage: View {
                         Button("Machines", action: openSwitcher)
                             .buttonStyle(.bordered)
                     }
+                    OtherMachines(others: others, offlineIDs: offlineIDs, switchTo: switchTo)
                 }
                 .padding(32)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -169,6 +241,84 @@ struct MachinePage: View {
                     .padding(24)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
             }
+        }
+    }
+}
+
+/// A machine this phone can't reach. Shown at once (Reach.probe, 5s) instead
+/// of a blank page; the way out — your other machines — is right here, and
+/// WebPool turns it back into FleetView by itself when the machine returns.
+struct OfflineView: View {
+    @ObservedObject var web: MachineWeb
+    let others: [Machine]
+    let offlineIDs: Set<UUID>
+    let switchTo: (UUID) -> Void
+    let openSwitcher: () -> Void
+    @State private var checking = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "wifi.slash")
+                .font(.system(size: 44, weight: .light))
+                .foregroundStyle(.secondary)
+            Text("\(web.machine.name) is offline").font(.title2.bold())
+            Text("This phone can't reach it right now — it may be asleep, switched off, or off Tailscale. It reconnects by itself when it's back.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Button {
+                    checking = true
+                    web.load()
+                    Task { try? await Task.sleep(for: .seconds(5)); checking = false }
+                } label: {
+                    HStack(spacing: 8) {
+                        if checking { ProgressView().tint(.white) }
+                        Text(checking ? "Checking…" : "Try again")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(checking)
+                Button("Machines", action: openSwitcher)
+                    .buttonStyle(.bordered)
+            }
+            OtherMachines(others: others, offlineIDs: offlineIDs, switchTo: switchTo)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(fleetBackground)
+    }
+}
+
+/// "Go to another machine" buttons for the offline / can't-reach screens.
+struct OtherMachines: View {
+    let others: [Machine]
+    let offlineIDs: Set<UUID>
+    let switchTo: (UUID) -> Void
+
+    var body: some View {
+        if !others.isEmpty {
+            VStack(spacing: 10) {
+                ForEach(others) { m in
+                    let away = offlineIDs.contains(m.id)
+                    Button { switchTo(m.id) } label: {
+                        HStack(spacing: 12) {
+                            MachineIcon(url: m.icon).opacity(away ? 0.4 : 1)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Open \(m.name)").font(.headline)
+                                if away { Text("Offline too").font(.caption).foregroundStyle(.secondary) }
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(maxWidth: 360)
+            .padding(.top, 8)
         }
     }
 }
