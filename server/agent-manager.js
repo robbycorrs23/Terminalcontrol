@@ -112,6 +112,7 @@ export class AgentManager {
         driver: null,
         events: [],
         clients: new Set(),
+        queue: Array.isArray(r.queue) ? r.queue.filter((q) => q && typeof q.text === "string") : [],
         attention: { waiting: false, kind: null },
         status: "disconnected",
       });
@@ -142,6 +143,7 @@ export class AgentManager {
       rewindUndo: p.rewindUndo || null,
       chrome: !!p.chrome, // Claude in Chrome on for this session (setChrome)
       reviewOf: p.reviewOf || null, // a "Review with Claude" session: the pane it reviews
+      queue: p.queue?.length ? p.queue : undefined, // survives closing the app AND a restart
     }));
     writeFileSync(this.stateFile, JSON.stringify(records, null, 2));
   }
@@ -289,6 +291,14 @@ export class AgentManager {
       if (wasWorking !== (ev.state === "working"))
         this.broadcast(pane.session, { t: "work", pane: pane.id, on: ev.state === "working" });
       if (ev.state === "idle") this.setAttention(pane.id, "done");
+      // Turn over cleanly → send what was queued meanwhile, as one message.
+      // Server-side on purpose: it must happen with no app open at all.
+      if (ev.state === "idle" && pane.queue?.length) {
+        const text = pane.queue.map((q) => q.text).join("\n\n");
+        pane.queue = [];
+        this._queueChanged(pane);
+        setImmediate(() => this.sendMessage(pane.id, text));
+      }
       // Cut off (interrupt/restart/rate-limit/API hiccup), not a genuine
       // finish — see claude-driver.js/codex-driver.js. Its own attention
       // kind, not "done": the pane does need a look, but for a different
@@ -339,6 +349,7 @@ export class AgentManager {
       driver: null,
       events: [],
       clients: new Set(),
+      queue: [], // messages typed mid-turn, sent when the turn ends (queueAdd)
       attention: { waiting: false, kind: null },
       followUp: false,
       lastInput: "",
@@ -426,6 +437,7 @@ export class AgentManager {
       for (const task of pane.tasks?.values() || []) state.push({ t: "task", task });
       if (pane.status !== "working") for (const text of pane.suggestions || []) state.push({ t: "suggestion", text });
       for (const ev of state) ws.send(JSON.stringify({ t: "ev", ev }));
+      ws.send(JSON.stringify({ t: "queue", items: pane.queue || [] }));
     } catch {}
     ws.on("message", (raw) => {
       let m;
@@ -436,6 +448,18 @@ export class AgentManager {
       }
       if (m.t === "send" && typeof m.text === "string" && m.text.trim()) {
         this.sendMessage(id, m.text);
+      } else if (m.t === "queueAdd" && typeof m.text === "string" && m.text.trim()) {
+        this.queueAdd(id, m.text.slice(0, 100000));
+      } else if (m.t === "queueTake" && Array.isArray(m.ids)) {
+        // Edit (back into the composer) / interrupted turn: hand the texts
+        // to THIS window only — whoever asked first gets them, no duplicates.
+        const taken = this.queueTake(id, m.ids.map(String));
+        if (taken.length && ws.readyState === 1) ws.send(JSON.stringify({ t: "queueTaken", items: taken, why: m.why || "" }));
+      } else if (m.t === "queueSendNow" && typeof m.qid === "string") {
+        const [item] = this.queueTake(id, [m.qid]);
+        if (item) this.sendMessage(id, item.text);
+      } else if (m.t === "queueDrop" && typeof m.qid === "string") {
+        this.queueTake(id, [m.qid]);
       } else if (m.t === "approve" && m.requestId) {
         this.approve(id, m.requestId, m.decision, typeof m.message === "string" ? m.message.slice(0, 4000) : undefined);
       } else if (m.t === "answer" && m.requestId && m.answers && typeof m.answers === "object") {
@@ -478,6 +502,41 @@ export class AgentManager {
       }
     });
     ws.on("close", () => pane.clients.delete(ws));
+  }
+
+  // ---- Queued messages (typed while a turn runs) --------------------------
+  // Kept HERE, not in the page, so closing the app can't lose them: persisted
+  // with the pane and sent by _handleEvent on the turn's clean end.
+
+  queueAdd(id, text) {
+    const pane = this.panes.get(id);
+    if (!pane) return false;
+    // The page thought it was mid-turn but the turn already ended: just send.
+    if (pane.status !== "working" && pane.status !== "waiting_permission") return this.sendMessage(id, text);
+    (pane.queue ||= []).push({ id: randomUUID().slice(0, 8), text, at: Date.now() });
+    this._queueChanged(pane);
+    return true;
+  }
+
+  queueTake(id, qids) {
+    const pane = this.panes.get(id);
+    if (!pane?.queue?.length) return [];
+    const want = new Set(qids);
+    const taken = pane.queue.filter((q) => want.has(q.id));
+    if (!taken.length) return [];
+    pane.queue = pane.queue.filter((q) => !want.has(q.id));
+    this._queueChanged(pane);
+    return taken;
+  }
+
+  _queueChanged(pane) {
+    this._persist();
+    const msg = JSON.stringify({ t: "queue", items: pane.queue || [] });
+    for (const ws of pane.clients) {
+      try {
+        ws.send(msg);
+      } catch {}
+    }
   }
 
   sendMessage(id, text) {

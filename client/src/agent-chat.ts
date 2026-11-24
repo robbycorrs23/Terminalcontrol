@@ -29,7 +29,7 @@ import { iconSvg, setIcon } from "./icons";
 import { chipSelect, syncChip } from "./chip-select";
 import { createQuestionCard, resolveQuestionCard } from "./chat-question";
 import { TaskTray, isLiveTask } from "./chat-tasks";
-import { MessageQueue } from "./chat-queue";
+import { MessageQueue, type QueuedItem } from "./chat-queue";
 import { AttachmentTray } from "./chat-attachments";
 import { clipboardImages, readClipboardImages } from "./clipboard-images";
 import { headKeysOf } from "./event-keys";
@@ -378,14 +378,10 @@ export class AgentChat implements PaneView {
     this.suggestEl.hidden = true;
     this.queue = new MessageQueue({
       renderText: (into, text) => this.renderUserText(into, text),
-      onEdit: (text) => {
-        // Tap to edit: back into the composer.
-        this.inputEl.value = this.inputEl.value ? `${text}\n${this.inputEl.value}` : text;
-        this.autoGrow();
-        this.syncSend();
-        this.inputEl.focus();
-      },
-      onSendNow: (text) => this.wsSend({ t: "send", text }),
+      // Tap to edit: take it back from the server (queueTaken puts it in the composer).
+      onEdit: (item) => (item.id ? this.wsSend({ t: "queueTake", ids: [item.id], why: "edit" }) : this.toComposer([item.text])),
+      onSendNow: (item) => this.wsSend({ t: "queueSendNow", qid: item.id }),
+      onDrop: (item) => this.wsSend({ t: "queueDrop", qid: item.id }),
     });
     this.dock = new ApprovalDock(
       this.isCodex,
@@ -631,7 +627,11 @@ export class AgentChat implements PaneView {
     const ws = new WebSocket(`${proto}://${location.host}/agent?pane=${this.id}`);
     this.ws = ws;
     ws.onopen = () => {
-      if (this.ws === ws) this.setConnected(true);
+      if (this.ws !== ws) return;
+      this.setConnected(true);
+      // Typed while the socket was down: hand it to the server's queue now
+      // (it sends straight away if the turn has ended meanwhile).
+      for (const text of this.queue.takePending()) this.wsSend({ t: "queueAdd", text });
     };
     ws.onmessage = (e) => {
       let m: { t: string; events?: AgentEvent[]; ev?: AgentEvent; more?: boolean; [k: string]: unknown };
@@ -659,6 +659,11 @@ export class AgentChat implements PaneView {
       } else if (m.t === "undoResult") {
         this.undoBar.hidden = true;
         this.flashNote(m.ok ? "Rewind undone" : String(m.reason || "Couldn't undo."));
+      } else if (m.t === "queue" && Array.isArray(m.items)) {
+        this.queue.setItems(m.items as QueuedItem[]);
+        this.syncSend();
+      } else if (m.t === "queueTaken" && Array.isArray(m.items)) {
+        this.toComposer((m.items as QueuedItem[]).map((i) => i.text));
       } else if (m.t === "history" && m.events) {
         this.prependHistory(m.events, !!m.more);
       } else if (m.t === "ev" && m.ev) {
@@ -738,7 +743,7 @@ export class AgentChat implements PaneView {
     this.inputEl.value = "";
     if (this.busy) {
       // Claude is mid-turn: hold it (visibly) and send when the turn ends.
-      this.queue.push(text);
+      this.enqueue(text);
       this.autoGrow();
       this.syncSend();
       return;
@@ -746,7 +751,10 @@ export class AgentChat implements PaneView {
     this.autoGrow();
     this.cmdMenu.close();
     this.stick = true; // sending is "take me to the bottom"
-    this.wsSend({ t: "send", text });
+    // Disconnected (phone just woke, signal dropped): don't lose it — hold it
+    // visibly and hand it over on reconnect.
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) this.queue.addPending(text);
+    else this.wsSend({ t: "send", text });
     this.syncSend();
   }
 
@@ -1476,12 +1484,13 @@ export class AgentChat implements PaneView {
   sendExternal(text: string) {
     if (!text.trim()) return;
     if (this.busy) {
-      this.queue.push(text);
+      this.enqueue(text);
       this.syncSend();
       return;
     }
     this.stick = true;
-    this.wsSend({ t: "send", text });
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) this.queue.addPending(text);
+    else this.wsSend({ t: "send", text });
     this.syncSend();
   }
 
@@ -1632,15 +1641,25 @@ export class AgentChat implements PaneView {
    */
   private onLiveStatus(state: string) {
     if (!this.queue.length) return;
-    if (state === "idle") {
-      const text = this.queue.takeAll().join("\n\n");
-      this.stick = true;
-      this.wsSend({ t: "send", text });
-    } else if (state === "aborted") {
-      this.inputEl.value = [...this.queue.takeAll(), this.inputEl.value].filter(Boolean).join("\n\n");
-      this.autoGrow();
-      this.syncSend();
-    }
+    // A clean end is the SERVER's job now (agent-manager.js sends the queue
+    // even with no app open). Interrupted → ask for them back into the composer.
+    if (state === "idle") this.stick = true;
+    else if (state === "aborted" && this.queue.ids.length) this.wsSend({ t: "queueTake", ids: this.queue.ids, why: "aborted" });
+  }
+
+  /** Put texts back in the composer, ahead of anything already typed. */
+  private toComposer(texts: string[]) {
+    if (!texts.length) return;
+    this.inputEl.value = [...texts, this.inputEl.value].filter(Boolean).join("\n\n");
+    this.autoGrow();
+    this.syncSend();
+    this.inputEl.focus();
+  }
+
+  /** Mid-turn: hold a message on the server's queue (or locally until reconnected). */
+  private enqueue(text: string) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.wsSend({ t: "queueAdd", text });
+    else this.queue.addPending(text);
   }
 
   private setStatus(state: string, detail?: string, durationMs?: number, ts?: number) {

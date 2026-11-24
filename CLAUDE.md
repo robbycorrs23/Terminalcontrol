@@ -443,9 +443,16 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   result for good). The parsed transcript is cached until the file changes.
   The client renders a page off-screen with `prepending` set (no live side
   effects) and keeps your scroll position. Codex/remote panes get none.
-- **Messages typed mid-turn are queued CLIENT-side**, visibly, with edit /
-  Send now / ✕, and go out as one message on the next LIVE `idle` (never a
-  replayed one); an interrupted turn puts them back in the composer.
+- **Messages typed mid-turn are queued on the SERVER** (`agent-manager.js`
+  `queueAdd`/`queueTake`, persisted with the pane), shown above the composer
+  with edit / Send now / ✕ in every window (`{t:"queue"}`), and sent as one
+  message by `_handleEvent` on the turn's clean `idle` — with no app open, and
+  across a restart. It used to live in the page, so closing the app lost it.
+  An interrupted turn: the first window to ask (`queueTake`, answered to that
+  window only via `queueTaken`) gets them back in its composer; with no window
+  open they stay queued. A message sent or queued while the socket is DOWN is
+  held in the page as "Waiting for connection" and handed over on reconnect
+  (`queueAdd` sends at once if the turn has ended) — it used to be dropped.
 - **Status the SDK reports, now shown**: `api_retry` → "Retrying in 8s ·
   attempt 2/10 (API 529)" in the status line (back to Working… when output
   resumes); `compact_boundary` → a "Conversation compacted · 162k → 21k"
