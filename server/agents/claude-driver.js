@@ -313,8 +313,21 @@ export function startClaudeSession({ cwd, resume, resumeAt, env, mode, remote, c
             backgrounded: !!msg.is_backgrounded,
             toolUseId: msg.tool_use_id,
             kind: msg.subagent_type || msg.task_type || "",
+            // Not activity (a live-update watcher, e.g. a published artifact
+            // being watched for edits/comments) — never counts as "working".
+            ambient: !!msg.ambient,
           });
           emitTask(msg.task_id);
+        } else if (msg.subtype === "background_tasks_changed") {
+          // The SDK's LEVEL signal: every live background task, replace-semantics,
+          // with `ambient` on the ones hosts must not count as activity. Safer
+          // than pairing task_started/task_notification edges (a missed bookend
+          // can't wedge "working" on).
+          onEvent({
+            t: "bg_level",
+            active: (msg.tasks || []).filter((x) => !x.ambient).length,
+            ambient: (msg.tasks || []).filter((x) => x.ambient).length,
+          });
         } else if (msg.subtype === "task_progress") {
           const t = tasks.get(msg.task_id);
           if (t) {

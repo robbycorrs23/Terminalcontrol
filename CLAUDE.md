@@ -166,7 +166,13 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   Chat panes count a **running background task** as working too
   (`AgentManager._isWorking`: turn in progress OR a `task_*` still running —
   a dev server, a long build), so the box keeps its glow/rain after the turn
-  ends; `_dropDriver` clears tasks when a driver is torn down so a pane can't
+  ends — EXCEPT `ambient` tasks, which the SDK marks as "not activity": every
+  live-update watcher, notably a published artifact's live watch (a
+  `monitor_ws` task that runs as long as the artifact is open), which
+  otherwise kept a finished session "working" indefinitely. The SDK's level
+  signal `background_tasks_changed` (driver → internal `bg_level` event,
+  never ringed or sent) is authoritative once seen; the per-task `ambient`
+  flag is the fallback for CLIs that predate it; both reset per CLI process; `_dropDriver` clears tasks when a driver is torn down so a pane can't
   stay "working" forever. The composer's Stop follows the TURN only
   (`setTurnBusy` vs `setBusy` in agent-chat.ts). On the phone's home list the
   content (and the rain inside it) is hidden, so every box also carries a

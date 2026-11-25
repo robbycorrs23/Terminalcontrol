@@ -208,6 +208,9 @@ export class AgentManager {
   _ensureDriver(pane) {
     if (pane.driver) return pane.driver;
     const start = pane.provider === "codex" ? startCodexSession : startClaudeSession;
+    // A new CLI process: its background-task level starts empty (SDK docs).
+    pane.bgLevelSeen = false;
+    pane.bgActive = 0;
     pane.driver = start({
       cwd: pane.cwd,
       resume: this._resumableSessionId(pane),
@@ -254,6 +257,14 @@ export class AgentManager {
     // fires isn't in the replay (it stays on screen for connected clients).
     // When it happened — drives "Thought for 8s" and similar in the client.
     if (ev.ts == null) ev.ts = Date.now();
+    // Background-task LEVEL (claude-driver.js): how many non-ambient tasks are
+    // live. Internal only — feeds _isWorking, never stored or sent to clients.
+    if (ev.t === "bg_level") {
+      pane.bgActive = Number(ev.active) || 0;
+      pane.bgLevelSeen = true;
+      this._syncWork(pane);
+      return;
+    }
     // Session-level facts, not log entries: kept as the pane's CURRENT value
     // and sent once after the replay (see attach), so a long commands list
     // can't evict history and a stale suggestion can't resurface on reload.
@@ -515,7 +526,11 @@ export class AgentManager {
    */
   _isWorking(p) {
     if (p.status === "working") return true;
-    for (const t of p.tasks?.values() || []) if (t.status === "running" || t.status === "pending") return true;
+    // The SDK's level signal is authoritative once seen; it already leaves out
+    // ambient tasks — a published artifact's live watch would otherwise keep
+    // a finished session "working" for as long as the artifact is open.
+    if (p.bgLevelSeen) return p.bgActive > 0;
+    for (const t of p.tasks?.values() || []) if (!t.ambient && (t.status === "running" || t.status === "pending")) return true;
     return false;
   }
 
@@ -524,6 +539,8 @@ export class AgentManager {
     pane.driver?.dispose();
     pane.driver = null;
     if (pane.tasks?.size) pane.tasks.clear();
+    pane.bgLevelSeen = false; // per CLI process: the next one starts from nothing
+    pane.bgActive = 0;
     this._syncWork(pane);
   }
 
