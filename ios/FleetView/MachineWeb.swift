@@ -29,6 +29,8 @@ final class MachineWeb: NSObject, ObservableObject {
     /// The machine can't be reached (Reach.probe failed): show the offline
     /// screen instead of a blank page that hangs. WebPool re-checks it.
     @Published private(set) var offline = false
+    /// Why the last check failed ("no answer within 10 seconds"…), for the offline screen.
+    @Published private(set) var offlineReason: String?
     /// Parked on about:blank while offline in the background, so its page
     /// isn't left retrying every pane's socket against a dead host.
     private(set) var suspended = false
@@ -83,15 +85,21 @@ final class MachineWeb: NSObject, ObservableObject {
         loadToken += 1
         let token = loadToken
         Task { @MainActor in
-            let up = await Reach.probe(machine.base)
+            let reason = await Reach.check(machine.base)
             guard token == loadToken else { return }
+            let up = reason == nil
             onReach?(up)
             offline = !up
-            guard up else { return }
+            offlineReason = reason
+            // Load the page EITHER way: a failed check isn't final (a phone's
+            // tunnel waking up can outlast it). If FleetView loads, its
+            // "ready" clears the offline screen; if the machine really is
+            // away, this just waits quietly behind it.
             var c = URLComponents(url: machine.base, resolvingAgainstBaseURL: false)!
             c.path = "/"
             c.fragment = fragment
             webView.load(URLRequest(url: c.url!))
+            guard up else { return }
             // Reachable a moment ago but the page still hasn't arrived: say so
             // (with ways out) rather than leave a blank screen.
             try? await Task.sleep(for: .seconds(15))
@@ -355,6 +363,9 @@ extension MachineWeb: WKScriptMessageHandler {
         case "ready": // app-bridge.ts: FleetView itself is up and signed in
             ready = true
             problem = nil
+            // A working page outranks any failed reachability check.
+            if offline { offline = false; offlineReason = nil }
+            onReach?(true)
             if let token = PushCenter.shared.token { registerPush(token: token) }
             sendMachines()
             // Tell the page what this build can do (older builds never say, and

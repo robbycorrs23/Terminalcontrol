@@ -137,6 +137,23 @@ final class FleetViewUITests: XCTestCase {
         return out
     }
 
+    /// Real machines over the tailnet: the reachability check must not call
+    /// them offline. (Sign-in can't complete in a test; we only check the
+    /// offline screen never appears.)
+    func testRealMachinesNotOffline() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-FLEET_RESET", "YES", "-FLEET_ADD_MACHINE",
+                               "did2200.tail5df669.ts.net,docholliday.tail5df669.ts.net"]
+        app.launch()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        if springboard.buttons["Allow"].waitForExistence(timeout: 6) { springboard.buttons["Allow"].tap() }
+        sleep(12)
+        attach(app, "real-1")
+        let offline = app.staticTexts.matching(NSPredicate(format: "label ENDSWITH 'is offline'")).firstMatch
+        print("offline screen shown: \(offline.exists) \(offline.exists ? offline.label : "")")
+        XCTAssertFalse(offline.exists)
+    }
+
     private func mock(_ base: String, _ path: String) {
         let done = expectation(description: path)
         URLSession.shared.dataTask(with: URL(string: "\(base)/\(path)")!) { _, _, _ in done.fulfill() }.resume()

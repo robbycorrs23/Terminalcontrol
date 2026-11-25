@@ -409,6 +409,17 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
      (faded + slash, still tappable — the offline screen is instant). At
      launch only, if the saved machine is offline and another answers, the app
      opens on that one.
+     **But a failed check must never be final** — it called BOTH live machines
+     offline on a real phone (the simulator, on the Mac's tunnel, never did):
+     a phone's Tailscale tunnel can take seconds to wake when the app returns,
+     longer than a short probe waits. So: the probe waits 9–10s; the page
+     loads BEHIND the offline screen anyway and its `ready` clears it (a
+     working page outranks any check); a round where EVERY machine fails is
+     ignored (that's the phone's connection, not the machines); a failure
+     counts at once only when another machine answered in the same round,
+     else after two misses in a row; the launch fallback needs "saved one
+     failed AND another answered"; and `OfflineView` shows the check's
+     reason ("no answer within 10 seconds", "name didn't resolve"…).
   3. **The web side detects the app by CAPABILITY**
      (`window.webkit.messageHandlers.fleetApp`), not the UA, and hides the
      browser-only notification rows via `body.in-app`.

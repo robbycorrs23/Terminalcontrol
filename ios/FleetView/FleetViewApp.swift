@@ -26,6 +26,7 @@ final class WebPool: ObservableObject {
     /// Machines this phone can't reach right now (Reach.probe). A travelling
     /// laptop is the normal case: it must cost nothing and never trap you.
     @Published private(set) var offline: Set<UUID> = []
+    private var misses: [UUID: Int] = [:]
     private var monitor: Task<Void, Never>?
 
     /// Wired once by RootView: the machine list and how to switch.
@@ -55,7 +56,8 @@ final class WebPool: ObservableObject {
     /// offline machine in the background is parked (its page stops retrying);
     /// one that's back is reloaded — the one on screen included, so its
     /// offline screen turns into FleetView by itself.
-    func checkAll() async {
+    @discardableResult
+    func checkAll() async -> [UUID: Bool] {
         let list = machines()
         let results = await withTaskGroup(of: (UUID, Bool).self) { group -> [(UUID, Bool)] in
             for m in list { group.addTask { (m.id, await Reach.probe(m.base)) } }
@@ -63,11 +65,20 @@ final class WebPool: ObservableObject {
             for await r in group { out.append(r) }
             return out
         }
+        // EVERY machine failing at once says more about this phone's
+        // connection (Tailscale waking up, no signal) than about the
+        // machines: don't mark anything offline on that.
+        if results.count > 1 && results.allSatisfy({ !$0.1 }) { return Dictionary(uniqueKeysWithValues: results) }
+        // A failure next to a machine that DID answer is credible at once; with
+        // nothing to compare against (one machine), it takes two in a row.
+        let someoneAnswered = results.contains { $0.1 }
         for (id, up) in results {
-            setReach(id, up)
+            misses[id] = up ? 0 : (misses[id] ?? 0) + 1
+            if up { setReach(id, true) } else if someoneAnswered || (misses[id] ?? 0) >= 2 { setReach(id, false) } else { continue }
             guard let w = webs[id] else { continue }
             if up { w.cameBack() } else if id != currentID() { w.suspend() }
         }
+        return Dictionary(uniqueKeysWithValues: results)
     }
 
     /// Every 20s while the app is in front; nothing at all in the background.
@@ -178,9 +189,11 @@ struct RootView: View {
         // you travel): start on one that answers instead. Only at launch —
         // later you're on whatever you chose, and see its offline screen.
         .task {
-            await pool.checkAll()
-            if let cur = store.currentID, pool.offline.contains(cur),
-               let alt = store.machines.first(where: { !pool.offline.contains($0.id) }) {
+            // Only when the saved machine fails AND another answers in the
+            // same check — that's a machine away, not this phone's network.
+            let reach = await pool.checkAll()
+            if let cur = store.currentID, reach[cur] == false,
+               let alt = store.machines.first(where: { reach[$0.id] == true }) {
                 store.currentID = alt.id
             }
             pool.startMonitor()
@@ -282,6 +295,12 @@ struct OfflineView: View {
             Text("This phone can't reach it right now — it may be asleep, switched off, or off Tailscale. It reconnects by itself when it's back.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
+            if let why = web.offlineReason {
+                Text("Last check: \(why)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+            }
             HStack(spacing: 12) {
                 Button {
                     checking = true

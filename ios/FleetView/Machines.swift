@@ -155,16 +155,37 @@ final class MachineStore: ObservableObject {
 enum Reach {
     private static let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
-        c.timeoutIntervalForRequest = 5
-        c.timeoutIntervalForResource = 6
+        // Generous: a phone's Tailscale tunnel can take several seconds to wake
+        // after the app returns to the front, and 5s called live machines
+        // "offline". A failed check is no longer final anyway (MachineWeb
+        // keeps loading the page behind the offline screen).
+        c.timeoutIntervalForRequest = 9
+        c.timeoutIntervalForResource = 10
         c.waitsForConnectivity = false
         c.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: c)
     }()
 
-    static func probe(_ base: URL) async -> Bool {
-        guard let (_, resp) = try? await session.data(from: base.appendingPathComponent("manifest.webmanifest")) else { return false }
-        return (resp as? HTTPURLResponse).map { $0.statusCode < 500 } ?? false
+    static func probe(_ base: URL) async -> Bool { await check(base) == nil }
+
+    /// nil = reachable; otherwise a short reason, shown on the offline screen.
+    static func check(_ base: URL) async -> String? {
+        do {
+            let (_, resp) = try await session.data(from: base.appendingPathComponent("manifest.webmanifest"))
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            return code > 0 && code < 500 ? nil : "it answered HTTP \(code)"
+        } catch let e as URLError {
+            switch e.code {
+            case .timedOut: return "no answer within 10 seconds"
+            case .cannotFindHost, .dnsLookupFailed: return "its name didn't resolve (is Tailscale on?)"
+            case .notConnectedToInternet: return "this phone is offline"
+            case .cannotConnectToHost: return "it refused the connection"
+            case .secureConnectionFailed, .serverCertificateUntrusted: return "its HTTPS certificate wasn't accepted"
+            default: return e.localizedDescription
+            }
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     /// Short-timeout GET for small public things (icons, manifests).
