@@ -487,6 +487,22 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   `perTaskStopAffordance: true` is what makes the turn's Stop spare
   background tasks — only valid BECAUSE the tray exists. retry/context/task
   are LIVE_ONLY; context and running tasks are re-sent on attach.
+- **Resume = rebuild every socket, never trust one across a pause**
+  (`recoverConnections` in main.ts). iOS freezes a backgrounded app and kills
+  its connections while leaving them readyState OPEN, so the old rule
+  ("reconnect only if the control socket looks closed, or the heartbeat saw a
+  15s gap") left a quick app switch dead until a manual refresh. Now any
+  return after ≥2s hidden (`visibilitychange`), `pageshow`, `online`, the
+  heartbeat gap, or the app's own `window.fleetResume()` (MachineWeb.resume,
+  on a real .background → .active only — not Control Centre / Face ID
+  sheets) rebuilds: control + the OPEN pane first, the rest staggered 120ms
+  apart (a dozen chat replays in one frame is what made it feel slow), deduped
+  within 1s. Watchdog: no `panes` snapshot within 6s → full reload back INTO
+  the open pane (`#pane=` / the app's `{t:"reload", pane}`, which probes the
+  machine first). The app reloads outright after >10 min away, or if the page
+  can't answer (process discarded). Composer drafts persist in localStorage
+  (`fleet-draft:<paneId>`, saved in `syncSend`) so a reload never eats a
+  half-typed message.
 - **"Reconnecting…"** shows 1.5s after the agent socket drops. The timer must
   NOT restart on each failed retry (one per second) or it never shows.
 - **Code blocks are syntax-highlighted** by `highlight.ts` (dependency-free,

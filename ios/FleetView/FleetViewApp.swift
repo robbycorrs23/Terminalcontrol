@@ -86,6 +86,21 @@ final class WebPool: ObservableObject {
         monitor = nil
     }
 
+    /// Set only on a REAL trip to the background — not Control Centre, a
+    /// notification pull-down or a Face ID sheet, which pass through
+    /// .inactive and leave the sockets alive.
+    private var backgroundedAt: Date?
+    func didEnterBackground() { backgroundedAt = Date() }
+
+    /// Back in front after being in the background: every loaded page
+    /// rebuilds its connections (or reloads — see MachineWeb.resume).
+    func resumeAll() {
+        guard let since = backgroundedAt else { return }
+        backgroundedAt = nil
+        let away = Date().timeIntervalSince(since)
+        for w in webs.values { w.resume(after: away) }
+    }
+
     func existing(_ id: UUID) -> MachineWeb? { webs[id] }
     var all: [MachineWeb] { Array(webs.values) }
     func drop(_ id: UUID) { webs[id] = nil }
@@ -140,11 +155,13 @@ struct RootView: View {
         .onChange(of: push.pendingOpen?.origin) { _, _ in openPendingNotification() }
         .onChange(of: phase) { _, p in
             if p == .active {
+                pool.resumeAll()
                 pool.startMonitor()
                 push.refreshBadge()
                 push.visibleOrigin = store.current?.origin
                 openPendingNotification()
             } else {
+                if p == .background { pool.didEnterBackground() }
                 pool.stopMonitor()
                 push.visibleOrigin = nil
                 push.refreshBadge() // leave the icon showing the true total

@@ -99,6 +99,44 @@ final class FleetViewUITests: XCTestCase {
         attach(app, "o3-back")
     }
 
+    /// Leaving the app and coming back must rebuild the page's connections at
+    /// once (iOS kills them in the background but leaves them looking open).
+    /// Needs the alpha mock on :4413.
+    func testResumeReconnects() throws {
+        let alpha = "http://127.0.0.1:4413"
+        mock(alpha, "__light")
+        let app = XCUIApplication()
+        app.launchArguments = ["-FLEET_RESET", "YES", "-FLEET_ADD_MACHINE", alpha]
+        app.launch()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        if springboard.buttons["Allow"].waitForExistence(timeout: 6) { springboard.buttons["Allow"].tap() }
+        XCTAssertTrue(app.webViews.buttons["Switch machine"].waitForExistence(timeout: 20), "page never loaded")
+        sleep(2)
+        let before = conns(alpha)
+        XCUIDevice.shared.press(.home)
+        sleep(5)
+        let t0 = Date()
+        app.activate()
+        sleep(3)
+        let fresh = conns(alpha).dropFirst(before.count)
+        let control = fresh.first { ($0["url"] as? String ?? "").hasPrefix("/control") }
+        let ms = (control?["at"] as? Double).map { $0 - t0.timeIntervalSince1970 * 1000 }
+        print("after resume: \(fresh.count) new sockets; control after \(ms.map { Int($0) } ?? -1)ms")
+        XCTAssertNotNil(control, "the control socket wasn't rebuilt on return")
+        attach(app, "r1-resumed")
+    }
+
+    private func conns(_ base: String) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        let done = expectation(description: "conns")
+        URLSession.shared.dataTask(with: URL(string: "\(base)/__conns")!) { d, _, _ in
+            out = (d.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [[String: Any]]) ?? []
+            done.fulfill()
+        }.resume()
+        wait(for: [done], timeout: 5)
+        return out
+    }
+
     private func mock(_ base: String, _ path: String) {
         let done = expectation(description: path)
         URLSession.shared.dataTask(with: URL(string: "\(base)/\(path)")!) { _, _, _ in done.fulfill() }.resume()

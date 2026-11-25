@@ -339,6 +339,12 @@ export class AgentChat implements PaneView {
     // it for when the current turn ends.
     const inputBar = el("div", "chat-input");
     this.inputEl = document.createElement("textarea");
+    // A half-typed message survives a reload (the app reloads a page that
+    // didn't come back after a pause — main.ts recoverConnections).
+    try {
+      const draft = localStorage.getItem(`fleet-draft:${this.id}`);
+      if (draft) this.inputEl.value = draft;
+    } catch {}
     this.inputEl.rows = 1;
     this.inputEl.placeholder = this.isCodex ? "Message Codex…" : "Message Claude…";
     this.sendBtn = el("button", "chat-send") as HTMLButtonElement;
@@ -769,7 +775,18 @@ export class AgentChat implements PaneView {
   }
 
   /** One button, two jobs: Send when there's text, Stop while a turn runs with nothing typed. */
+  /** Keep the composer's text in localStorage until it's sent (or cleared). */
+  private saveDraft() {
+    try {
+      const key = `fleet-draft:${this.id}`;
+      const v = this.inputEl.value;
+      if (v.trim()) localStorage.setItem(key, v);
+      else localStorage.removeItem(key);
+    } catch {}
+  }
+
   private syncSend() {
+    this.saveDraft();
     const has = !!this.inputEl.value.trim() || this.attachTray.count > 0;
     const stop = this.busy && !has;
     this.sendBtn.classList.toggle("stop", stop);

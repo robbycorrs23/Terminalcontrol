@@ -26,7 +26,7 @@ type AppWindow = Window & {
   webkit?: { messageHandlers?: { fleetApp?: Handler } };
   fleetOpenPane?: (id: string) => boolean;
   fleetSetMachines?: (list: AppMachine[]) => void;
-  fleetAppCaps?: { browser?: boolean };
+  fleetAppCaps?: { browser?: boolean; reload?: boolean };
 };
 
 const w = window as AppWindow;
@@ -130,4 +130,13 @@ export function appBrowser(): boolean {
 export function openUrl(url: string) {
   if (appBrowser()) w.webkit!.messageHandlers!.fleetApp!.postMessage({ t: "open", url });
   else window.open(url, "_blank", "noopener");
+}
+
+/** Ask the app to reload this machine (it checks the machine is reachable
+ *  first, and shows its offline screen if not). false = not in an app build
+ *  that can — the caller reloads the page itself. */
+export function requestAppReload(pane?: string): boolean {
+  if (!inApp() || !w.fleetAppCaps?.reload) return false;
+  w.webkit!.messageHandlers!.fleetApp!.postMessage({ t: "reload", pane: pane || "" });
+  return true;
 }

@@ -105,6 +105,27 @@ final class MachineWeb: NSObject, ObservableObject {
         if webView.url == nil || problem != nil || offline || suspended { load() } else { webView.reload() }
     }
 
+    /// Back from the background. A short absence: the page rebuilds its own
+    /// sockets (main.ts fleetResume — dead ones look open after iOS froze the
+    /// app). A long one, or a page that can't answer because iOS discarded
+    /// its process: load it fresh.
+    func resume(after away: TimeInterval) {
+        guard !suspended, !offline, !signingIn else { return }
+        if away > 10 * 60 {
+            load()
+            return
+        }
+        // Still loading (or showing its can't-reach overlay): leave it be.
+        guard ready else { return }
+        webView.evaluateJavaScript("window.fleetResume ? (window.fleetResume(), true) : false") { [weak self] result, error in
+            Task { @MainActor in
+                guard let self else { return }
+                if error != nil { self.load() } // the page is gone
+                else if (result as? Bool) != true { self.webView.reload() } // an old page without fleetResume
+            }
+        }
+    }
+
     /// The machine went offline while you're looking at another one: stop its
     /// page (and every socket in it retrying) until it's back.
     func suspend() {
@@ -338,7 +359,7 @@ extension MachineWeb: WKScriptMessageHandler {
             sendMachines()
             // Tell the page what this build can do (older builds never say, and
             // the page falls back to window.open → Safari).
-            webView.evaluateJavaScript("window.fleetAppCaps = { browser: true }", completionHandler: nil)
+            webView.evaluateJavaScript("window.fleetAppCaps = { browser: true, reload: true }", completionHandler: nil)
         case "waiting":
             waiting = max(0, (body["n"] as? Int) ?? 0)
             PushCenter.shared.refreshBadge()
@@ -346,6 +367,9 @@ extension MachineWeb: WKScriptMessageHandler {
             onRequestSwitcher?()
         case "switch":
             if let s = body["id"] as? String, let id = UUID(uuidString: s) { onSwitch?(id) }
+        case "reload": // main.ts: the page didn't come back after a pause
+            let pane = (body["pane"] as? String ?? "").filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+            load(fragment: pane.isEmpty ? nil : "pane=\(pane)")
         case "open": // Live preview (client/src/previews.ts): an in-app browser sheet
             if let s = body["url"] as? String, let url = URL(string: s),
                url.scheme == "https" || url.scheme == "http", let top = Self.topController() {

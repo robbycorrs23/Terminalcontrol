@@ -1,5 +1,5 @@
 import { openNewSession } from "./new-session";
-import { initAppBridge, reportWaiting, inApp } from "./app-bridge";
+import { initAppBridge, reportWaiting, inApp, requestAppReload } from "./app-bridge";
 import { initSchedules, openSchedules } from "./schedules";
 import { openPreviews } from "./previews";
 import { initTemplates, openTemplates, listTemplates, showForm as showTemplateForm } from "./templates";
@@ -1844,6 +1844,7 @@ function connectControl() {
     const m = JSON.parse(e.data);
     switch (m.t) {
       case "panes": {
+        lastSnapshotAt = Date.now(); // the resume watchdog waits for this
         void checkVersion(openSettingsPanel); // every (re)connect — a server restart is when updates land
         // Authoritative snapshot of this window's live terminals (sent on every
         // connect). Add new ones and drop any box the server no longer has —
@@ -1967,12 +1968,47 @@ function reconnectControl() {
   connectControl();
 }
 
-// Laptop sleep silently freezes every WebSocket; on wake they can be dead
-// "zombies" (still readyState OPEN) so the page looks live but nothing flows
-// until a manual refresh. Re-establish the control socket and every terminal.
+// Laptop sleep — and, constantly, a phone leaving the app for a moment —
+// silently kills every WebSocket while leaving it "zombie" (readyState still
+// OPEN), so the page looks live but nothing flows until a long TCP timeout or
+// a manual refresh. Never trust a socket across a pause: rebuild them.
+//
+// Order matters on a phone with a dozen sessions: the control socket (the
+// fleet: attention, working, the list) and the pane you're LOOKING at come
+// back first; the rest reconnect in the background, staggered, so a dozen
+// chat replays don't all land in the same frame as the one you care about.
+// If the fleet hasn't answered within RESUME_WATCHDOG_MS, a full reload (in the
+// app: the native one, which checks the machine is reachable first).
+const RESUME_WATCHDOG_MS = 6000;
+let lastSnapshotAt = 0;
+let resumeSeq = 0;
+let lastRecoverAt = 0;
 function recoverConnections() {
+  // The app's fleetResume and the page's visibilitychange both fire on the
+  // same return — one rebuild is enough.
+  if (Date.now() - lastRecoverAt < 1000) return;
+  lastRecoverAt = Date.now();
+  const seq = ++resumeSeq;
+  const started = Date.now();
   reconnectControl();
-  for (const t of panes.values()) t.reconnectNow();
+  const first = zoomed;
+  first?.reconnectNow();
+  const rest = [...panes.values()].filter((t) => t !== first);
+  rest.forEach((t, i) => setTimeout(() => seq === resumeSeq && t.reconnectNow(), 250 + i * 120));
+  setTimeout(() => {
+    if (seq !== resumeSeq || lastSnapshotAt >= started || document.visibilityState !== "visible") return;
+    if (!navigator.onLine) return; // nothing to reload into; `online` will resume us
+    hardReload();
+  }, RESUME_WATCHDOG_MS);
+}
+
+/** Reload the whole page — via the app when we're in it (it probes first) —
+ *  landing back in the session that was open (the #pane= deep link). */
+function hardReload() {
+  const pane = zoomed?.id;
+  if (requestAppReload(pane)) return;
+  if (pane) history.replaceState(null, "", `${location.pathname}${location.search}#pane=${encodeURIComponent(pane)}`);
+  location.reload();
 }
 
 // Detect a wake via a heartbeat: if the interval didn't fire for far longer than
@@ -1989,9 +2025,25 @@ addEventListener("online", () => recoverConnections());
 addEventListener("pageshow", (e) => {
   if ((e as PageTransitionEvent).persisted) recoverConnections();
 });
+// Coming back after ANY real pause (switched apps, tapped a notification,
+// locked the phone): rebuild, don't wait for a dead socket to time out. A
+// blink under RESUME_MIN_HIDDEN_MS (a system sheet, Control Centre) keeps
+// the sockets — they're fine and a reconnect would just flicker.
+const RESUME_MIN_HIDDEN_MS = 2000;
+let hiddenAt = 0;
+// The iOS app calls this when it comes to the front (app-bridge / MachineWeb).
+(window as Window & { fleetResume?: () => void }).fleetResume = () => {
+  hiddenAt = 0;
+  recoverConnections();
+};
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible") return;
-  if (controlWs?.readyState !== WebSocket.OPEN) {
+  if (document.visibilityState !== "visible") {
+    hiddenAt = Date.now();
+    return;
+  }
+  const away = hiddenAt ? Date.now() - hiddenAt : 0;
+  hiddenAt = 0;
+  if (away >= RESUME_MIN_HIDDEN_MS || controlWs?.readyState !== WebSocket.OPEN) {
     recoverConnections();
     return;
   }
