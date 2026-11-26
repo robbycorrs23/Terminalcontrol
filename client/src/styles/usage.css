@@ -159,3 +159,18 @@
     box-shadow: 0 0 0 2px currentColor, 0 0 28px 7px currentColor;
   }
 }
+/* Ten keys don't fit a phone at a tappable size: the row scrolls sideways,
+   most-used first (Esc, ^C, Ctrl, Paste, Copy), arrows at the end. */
+.term .softkeys {
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.term .softkeys::-webkit-scrollbar {
+  display: none;
+}
+.term .softkeys button {
+  flex: 1 0 auto;
+  min-width: 44px;
+  padding: 0 8px;
+}

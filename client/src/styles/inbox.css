@@ -522,3 +522,49 @@ body.light .inbox-mini + .inbox-mini {
   word-break: break-all;
   user-select: text;
 }
+
+/* Terminal Copy / Paste sheets (term-clipboard.ts) — reuse the inbox drawer. */
+.term-clip .ib.primary {
+  width: 100%;
+  min-height: 40px;
+  margin-bottom: 10px;
+}
+.term-clip-lines {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.45;
+  background: var(--term-bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 0;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.term-clip-line {
+  padding: 1px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  cursor: pointer;
+}
+.term-clip-line:active,
+.term-clip-line.copied {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.term-clip-line.copied::after {
+  content: "  copied";
+  color: var(--accent);
+  font-family: system-ui, sans-serif;
+  font-size: 11px;
+}
+.term-clip-box {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 16px; /* under 16px iOS zooms the page on focus */
+  background: var(--term-bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+}

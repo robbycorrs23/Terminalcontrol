@@ -1277,6 +1277,13 @@ app.delete("/api/previews/:port", async (req, res) => {
 // What this session has changed: the files it edited (from its transcript) as
 // they are on disk now vs HEAD, plus other uncommitted changes in the repo,
 // kept apart. Read-only; see changes.js.
+// A terminal pane's recent text (scrollback included) for the phone's Copy sheet.
+app.get("/api/panes/:id/text", (req, res) => {
+  const text = ptys.screenText(req.params.id, req.query.lines);
+  if (text == null) return res.status(404).json({ error: "Not a live terminal pane." });
+  res.json({ text });
+});
+
 app.get("/api/panes/:id/changes", async (req, res) => {
   const id = req.params.id;
   const info = registry.info(id);

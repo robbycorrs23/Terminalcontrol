@@ -91,6 +91,7 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
 | `server/templates.js` / `client/src/templates.ts` | prompt templates: saved prompts (+ optional folder/agent/view/own branch) → new-session chips, composer + → Templates, Settings sheet |
 | `client/src/review.ts` | review mode: commentable numbered diffs in the Changes panel → one review message |
 | `server/previews.js` / `client/src/previews.ts` | Live preview: dev servers in a session's folder → `tailscale serve` → opened on the phone |
+| `client/src/term-clipboard.ts` | phone Copy / Paste for terminal panes (soft-key row): copy sheet from `GET /api/panes/:id/text`, paste via clipboard or a paste box |
 | `client/src/media-paths.ts` | embeds media files a reply names by path (relative/`~`/in inline code) as players |
 | `server/self-check.js` | startup: fix deps vs lockfile, rebuild a stale bundle, version info |
 | `client/src/chat-question.ts` / `chat-tasks.ts` / `chat-queue.ts` / `chat-attachments.ts` | chat pane components: AskUserQuestion card / background-task tray / queued messages / composer attachments |
@@ -756,6 +757,15 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   deletes those at startup so terminal panes can't inherit them (it's also
   what made a hand-run "terminal" test from a chat pane falsely report no
   Artifact tool).
+- **Terminal panes on a phone: Esc · ^C · Ctrl · Paste · Copy · Tab · arrows**
+  (the soft-key row, `wireSoftKeys`; scrolls sideways, most-used first). Every
+  key does `pointerdown` preventDefault — a button taking focus dropped the iOS
+  keyboard, so "Ctrl, then c" never got its c. A phone has no ⌘C/⌘V and tmux
+  owns touch selection, so `term-clipboard.ts`: **Paste** = async clipboard
+  (iOS's own Paste bubble) → `term.paste()` (bracketed paste when the app
+  enabled it), else a sheet with a paste box; **Copy** = a sheet of the pane's
+  last 400 lines incl. scrollback (`ptys.screenText` = `capture-pane -J -S`),
+  tap a line to copy it, Copy all, or select freely.
 - **Media mentioned by path** (`media-paths.ts`): replies name files as
   `assets/video/x.mp4` (relative), `~/…`, or in inline code, often with spaces
   — none of which markdown.ts's own media pass embeds. This resolves relative

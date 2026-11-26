@@ -587,6 +587,23 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * The last `lines` lines of the pane, scrollback included, as plain text —
+   * the phone's Copy sheet (client term-clipboard.ts): tmux owns touch
+   * selection, so this is the only way to copy something off the terminal.
+   */
+  screenText(id, lines = 400) {
+    const pane = this.panes.get(id);
+    if (!pane || !this.tmux) return null;
+    const n = Math.max(20, Math.min(5000, Number(lines) || 400));
+    const r = spawnSync(this.tmuxBin, this._tx(["capture-pane", "-p", "-J", "-S", `-${n}`, "-t", "fleet_" + id], pane.sock), {
+      encoding: "utf8",
+      timeout: 3000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return r.status === 0 ? r.stdout.replace(/\s+$/, "") : null;
+  }
+
+  /**
    * Press keys in a pane from the inbox. `keys` are tmux key names ("Down",
    * "Enter"); `text`, if given, is typed literally first (-l, so nothing in it
    * is interpreted as a key name). Returns false without tmux.

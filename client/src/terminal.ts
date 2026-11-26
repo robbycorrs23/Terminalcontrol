@@ -1,3 +1,4 @@
+import { openCopySheet, pasteInto } from "./term-clipboard";
 import { Terminal as Xterm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
@@ -209,7 +210,12 @@ export class Term implements PaneView {
     const softkeys = el("div", "softkeys");
     softkeys.innerHTML =
       `<button data-key="Escape">Esc</button>` +
+      // ^C in one tap — the thing Ctrl is almost always wanted for.
+      `<button data-key="CtrlC" title="Ctrl-C (interrupt)">^C</button>` +
       `<button data-key="Ctrl" class="ctrl-key">Ctrl</button>` +
+      // No ⌘C/⌘V on a phone, and tmux owns touch selection (term-clipboard.ts).
+      `<button data-key="Paste" title="Paste">Paste</button>` +
+      `<button data-key="Copy" title="Copy text from the terminal">Copy</button>` +
       `<button data-key="Tab">Tab</button>` +
       `<button data-key="Up">↑</button>` +
       `<button data-key="Down">↓</button>` +
@@ -605,15 +611,31 @@ export class Term implements PaneView {
       Down: "\x1b[B",
       Left: "\x1b[D",
       Right: "\x1b[C",
+      CtrlC: "\x03",
     };
     this.ctrlKeyBtn = container.querySelector(".ctrl-key") as HTMLElement;
     container.querySelectorAll("button").forEach((btn) => {
+      // Keep the terminal focused (and the keyboard UP) through the tap: a
+      // button taking focus dropped the keyboard, so "Ctrl, then c" had no c.
+      btn.addEventListener("pointerdown", (e) => e.preventDefault());
       btn.addEventListener("click", (e) => {
         e.stopPropagation(); // don't let the box's own click-to-zoom/unzoom fire
         const key = (btn as HTMLElement).dataset.key!;
         if (key === "Ctrl") {
           this.ctrlArmed = !this.ctrlArmed;
           this.ctrlKeyBtn?.classList.toggle("active", this.ctrlArmed);
+          this.focusTerm();
+          return;
+        }
+        if (key === "Paste") {
+          void pasteInto((text) => {
+            this.term.paste(text); // bracketed paste when the app asked for it
+            this.focusTerm();
+          }, displayName(this.info));
+          return;
+        }
+        if (key === "Copy") {
+          void openCopySheet(this.id, displayName(this.info));
           return;
         }
         this.send({ t: "d", d: KEYS[key] });
