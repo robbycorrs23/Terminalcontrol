@@ -472,7 +472,13 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   order, which re-sorts as you open things); the "3/12 ⌄" `.pane-switch`
   button added to every title bar opens a sessions sheet (needs-you first);
   `zoom()` on a phone while a pane is open becomes `switchTo()`. The phone
-  home list is restyled as an inbox (CSS only). The open pane's top edge is
+  home list is restyled as an inbox (CSS only), ORDERED by activity
+  (`reflowMobileOrder`): needs you → working → cut off → done → the rest,
+  most recently active first within each (`lastActiveAt`, stamped by BOTH
+  managers on the work edge, persisted, in `info()`; bumped client-side on
+  `work`/`input`). A CSS `order` per row — grid order, layouts and desktop
+  are untouched — and held while a finger is on the list (touchstart/scroll
+  + 1.2s) so a row never jumps out from under a tap. Swipe keeps GRID order. The open pane's top edge is
   `max(visual-viewport top, #bar bottom)` — NOT `vy + barH`, which left a gap
   when the iOS keyboard scrolled #bar away.
 - **Earlier history pages in from the transcript.** The replay ring only holds

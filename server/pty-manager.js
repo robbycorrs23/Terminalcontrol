@@ -198,6 +198,7 @@ export class PtyManager extends EventEmitter {
       color: p.color || "",
       name: p.name || "",
       createdAt: p.createdAt,
+      lastActiveAt: p.lastActiveAt || null,
       sdkSessionId: p.sdkSessionId || null,
       agentMode: p.agentMode || "",
       sock: p.sock ?? null,
@@ -235,6 +236,7 @@ export class PtyManager extends EventEmitter {
       color: m.color || "",
       name: m.name || "",
       createdAt: m.createdAt || Date.now(),
+      lastActiveAt: m.lastActiveAt || null,
       sdkSessionId: m.sdkSessionId || null,
       agentMode: m.agentMode || "",
       sessionAlive: false,
@@ -634,6 +636,9 @@ export class PtyManager extends EventEmitter {
     const on = pane.work.hook || pane.work.out;
     if (on === pane.work.active) return;
     pane.work.active = on;
+    // When it last started OR stopped working — the phone list's "most
+    // recently active first" (main.ts reflowMobileOrder). Edge-only, so free.
+    pane.lastActiveAt = Date.now();
     this.emit("work", pane.id, on);
   }
 
@@ -797,6 +802,7 @@ export class PtyManager extends EventEmitter {
       order: p.order,
       attention: p.attention,
       working: p.work.hook || p.work.out,
+      lastActiveAt: p.lastActiveAt || null,
       followUp: p.followUp,
       lastInput: p.lastInput || "",
       color: p.color || "",

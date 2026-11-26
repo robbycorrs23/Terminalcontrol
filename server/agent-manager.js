@@ -143,6 +143,7 @@ export class AgentManager {
       rewindUndo: p.rewindUndo || null,
       chrome: !!p.chrome, // Claude in Chrome on for this session (setChrome)
       reviewOf: p.reviewOf || null, // a "Review with Claude" session: the pane it reviews
+      lastActiveAt: p.lastActiveAt || null,
       queue: p.queue?.length ? p.queue : undefined, // survives closing the app AND a restart
     }));
     writeFileSync(this.stateFile, JSON.stringify(records, null, 2));
@@ -549,6 +550,7 @@ export class AgentManager {
     const on = this._isWorking(pane);
     if (!!pane.workOn === on) return;
     pane.workOn = on;
+    pane.lastActiveAt = Date.now(); // the phone list's recency order (main.ts)
     this.broadcast(pane.session, { t: "work", pane: pane.id, on });
   }
 
@@ -885,6 +887,7 @@ export class AgentManager {
       cmd: p.cmd,
       chrome: !!p.chrome,
       reviewOf: p.reviewOf || null,
+      lastActiveAt: p.lastActiveAt || null,
       session: p.session,
       // See PtyManager.info — needed for registry.list()'s cross-manager sort.
       order: p.order,

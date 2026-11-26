@@ -22,6 +22,8 @@ export interface PaneInfo {
   color?: string;
   name?: string; // user-chosen display name; ""/absent = show the cwd basename
   createdAt: number;
+  /** When it last started or stopped working (server work edge) — phone list recency. */
+  lastActiveAt?: number | null;
   /** Grid position, numbered across BOTH pane kinds (server/pane-registry.js). */
   order?: number;
   /** Which model an agent pane resolved to; null until its driver reports one. */

@@ -651,15 +651,48 @@ async function toggleChrome(t: PaneView, on: boolean) {
   }
 }
 
-// Mobile-only visual ordering: terminals needing you float to the top of the
-// scroll stack (question > aborted > done > idle), stable otherwise. Pure
-// presentation — doesn't touch the underlying grid order that drag-to-reorder
-// persists, so desktop layouts and saved layouts are unaffected.
+// Mobile-only visual ordering of the session list: needs you → working →
+// cut off → done → the rest, and within each group the most recently active
+// first (lastActiveAt: the server's work edge, or your last message). Pure
+// presentation — a CSS `order` per row; the underlying grid order that
+// drag-to-reorder and saved layouts persist is untouched, and desktop is
+// never reordered. Cheap: a sort of a dozen rows, only on an edge/message, and
+// held while a finger is on the list so a row never jumps out from under a tap.
+const LIST_HOLD_MS = 1200;
+let listTouchedAt = 0;
+let listReflowTimer: number | undefined;
+grid.addEventListener("touchstart", () => (listTouchedAt = Date.now()), { passive: true });
+grid.addEventListener("scroll", () => (listTouchedAt = Date.now()), { passive: true });
 function reflowMobileOrder() {
-  const rank = { question: 0, aborted: 1, done: 2 } as const;
-  for (const t of panes.values()) {
-    t.cell.style.order = mobileQuery.matches ? String(t.isWaiting() ? rank[t.waitingKind()] : 3) : "";
+  if (!mobileQuery.matches) {
+    for (const t of panes.values()) t.cell.style.order = "";
+    return;
   }
+  const wait = listTouchedAt + LIST_HOLD_MS - Date.now();
+  if (wait > 0) {
+    clearTimeout(listReflowTimer);
+    listReflowTimer = window.setTimeout(reflowMobileOrder, wait + 50);
+    return;
+  }
+  const waitRank = { question: 0, aborted: 2, done: 3 } as const;
+  const gridIndex = new Map([...grid.children].map((c, i) => [c, i]));
+  const rows = [...panes.values()].map((t) => ({
+    t,
+    group: t.isWaiting() ? waitRank[t.waitingKind()] : t.cell.firstElementChild?.classList.contains("busy") ? 1 : 4,
+    at: t.info.lastActiveAt || t.info.createdAt || 0,
+    i: gridIndex.get(t.cell) ?? 0,
+  }));
+  rows.sort((a, b) => a.group - b.group || b.at - a.at || a.i - b.i);
+  rows.forEach((r, n) => (r.t.cell.style.order = String(n)));
+}
+/** Something became active: note when, and re-sort the phone list (batched). */
+function touchActivity(id: string) {
+  const t = panes.get(id);
+  if (!t) return;
+  t.info.lastActiveAt = Date.now();
+  if (!mobileQuery.matches) return;
+  clearTimeout(listReflowTimer);
+  listReflowTimer = window.setTimeout(reflowMobileOrder, 300);
 }
 mobileQuery.addEventListener("change", reflow);
 
@@ -1886,6 +1919,7 @@ function connectControl() {
         break;
       case "input":
         panes.get(m.pane)?.setLastInput(m.text);
+        touchActivity(m.pane);
         break;
       case "tasks":
         applyRemoteTasks(m.tasks);
@@ -1929,6 +1963,7 @@ function connectControl() {
         break;
       case "work":
         panes.get(m.pane)?.setBusy(m.on);
+        touchActivity(m.pane);
         if (!m.on) scheduleGitRefresh(1500); // a turn ended — new edits may now overlap
         break;
       case "cleared":
