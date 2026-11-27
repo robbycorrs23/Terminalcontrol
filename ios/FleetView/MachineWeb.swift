@@ -70,6 +70,15 @@ final class MachineWeb: NSObject, ObservableObject {
         // The page lays itself out with viewport-fit=cover + safe-area insets.
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.allowsBackForwardNavigationGestures = false
+        // No form-navigation bar (˄ ˅ ✓) over the keyboard: it's for hopping
+        // between form fields, FleetView has one text box at a time, and the
+        // floating version newer iOS draws sits ON TOP of the chat composer —
+        // covering the mode/model pickers and Send.
+        #if DEBUG
+        if !UserDefaults.standard.bool(forKey: "FLEET_KEEP_ACCESSORY") { webView.hideFormAccessoryBar() } // test switch: before/after
+        #else
+        webView.hideFormAccessoryBar()
+        #endif
         #if DEBUG
         webView.isInspectable = true
         #endif
@@ -442,3 +451,32 @@ final class IconCache {
     }
 }
 
+
+
+// MARK: - No form accessory bar
+
+/// iOS gives every text box in a web page a "previous / next / Done" bar above
+/// the keyboard. A WKWebView has no public switch for it; the bar is the
+/// content view's `inputAccessoryView`, so the content view is given a tiny
+/// runtime subclass whose `inputAccessoryView` is nil. Idempotent.
+private final class NoFormAccessoryBar: NSObject {
+    @objc var inputAccessoryView: AnyObject? { nil }
+}
+
+extension WKWebView {
+    func hideFormAccessoryBar() {
+        guard let content = scrollView.subviews.first(where: { String(describing: type(of: $0)).hasPrefix("WKContent") }),
+              let base: AnyClass = object_getClass(content) else { return }
+        let name = "\(NSStringFromClass(base))_FleetNoAccessory"
+        if NSStringFromClass(base).hasSuffix("_FleetNoAccessory") { return } // already done
+        var sub: AnyClass? = NSClassFromString(name)
+        if sub == nil, let made = objc_allocateClassPair(base, name, 0),
+           let method = class_getInstanceMethod(NoFormAccessoryBar.self, #selector(getter: NoFormAccessoryBar.inputAccessoryView)) {
+            class_addMethod(made, #selector(getter: UIResponder.inputAccessoryView),
+                            method_getImplementation(method), method_getTypeEncoding(method))
+            objc_registerClassPair(made)
+            sub = made
+        }
+        if let sub { object_setClass(content, sub) }
+    }
+}

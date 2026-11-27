@@ -421,6 +421,14 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
      else after two misses in a row; the launch fallback needs "saved one
      failed AND another answered"; and `OfflineView` shows the check's
      reason ("no answer within 10 seconds", "name didn't resolve"…).
+  7. **No form-accessory bar** (`hideFormAccessoryBar()` in MachineWeb.swift):
+     iOS puts a previous/next/Done bar over the keyboard for every web text
+     box, and newer iOS FLOATS it over the page — on top of the chat
+     composer's bottom row (mode, model, Send). No public API turns it off in
+     a WKWebView; the content view gets a runtime subclass whose
+     `inputAccessoryView` is nil (idempotent). Verified both ways by
+     `testNoFormAccessoryBar` (DEBUG `-FLEET_KEEP_ACCESSORY YES` keeps it).
+     Needs the simulator's hardware keyboard OFF to show a keyboard at all.
   3. **The web side detects the app by CAPABILITY**
      (`window.webkit.messageHandlers.fleetApp`), not the UA, and hides the
      browser-only notification rows via `body.in-app`.

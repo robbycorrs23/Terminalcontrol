@@ -154,6 +154,34 @@ final class FleetViewUITests: XCTestCase {
         XCTAssertFalse(offline.exists)
     }
 
+    /// The form bar (˄ ˅ ✓) must not appear over the composer. Run twice:
+    /// FLEET_KEEP_ACCESSORY=YES shows the bar is there without the fix.
+    func testNoFormAccessoryBar() throws {
+        let alpha = "http://127.0.0.1:4413"
+        mock(alpha, "__light")
+        let keep = ProcessInfo.processInfo.environment["KEEP"] == "1"
+        let app = XCUIApplication()
+        app.launchArguments = ["-FLEET_RESET", "YES", "-FLEET_ADD_MACHINE", alpha] + (keep ? ["-FLEET_KEEP_ACCESSORY", "YES"] : [])
+        app.launch()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        if springboard.buttons["Allow"].waitForExistence(timeout: 6) { springboard.buttons["Allow"].tap() }
+        let web = app.webViews.firstMatch
+        XCTAssertTrue(web.waitForExistence(timeout: 20))
+        sleep(3)
+        // Open the first session, then focus the composer.
+        let row = web.staticTexts["proj"].firstMatch
+        if row.waitForExistence(timeout: 10) { row.tap() }
+        sleep(2)
+        let box = web.textViews.firstMatch
+        XCTAssertTrue(box.waitForExistence(timeout: 10), "no composer")
+        box.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 8), "no on-screen keyboard (hardware keyboard connected?)")
+        sleep(1)
+        let bar = app.buttons["Done"].exists || app.toolbars.buttons.count > 0
+        print("form accessory bar present: \(bar) (keep=\(keep))")
+        attach(app, keep ? "acc-before" : "acc-after")
+    }
+
     private func mock(_ base: String, _ path: String) {
         let done = expectation(description: path)
         URLSession.shared.dataTask(with: URL(string: "\(base)/\(path)")!) { _, _, _ in done.fulfill() }.resume()
