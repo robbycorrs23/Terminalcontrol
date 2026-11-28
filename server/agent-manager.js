@@ -173,6 +173,12 @@ export class AgentManager {
     // terminal view ("switched off in this session"). This is the CLI's own
     // opt-in; org policy and the user's enableArtifact setting still apply.
     if (pane.provider === "claude" && env.CLAUDE_CODE_ARTIFACT === undefined) env.CLAUDE_CODE_ARTIFACT = "1";
+    // The "predicted next message" chip (promptSuggestions in claude-driver.js)
+    // went silent: verified, a normal 2-turn session got NO prompt_suggestion,
+    // and the same session with this set got one. The CLI holds suggestions
+    // back when it thinks the account is near its plan limit (it did at 2%);
+    // this is its own documented override — at the limit they stay off anyway.
+    if (pane.provider === "claude" && env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION === undefined) env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION = "true";
     return env;
   }
 

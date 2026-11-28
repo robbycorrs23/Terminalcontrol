@@ -765,6 +765,13 @@ top bar counts it. Local-only tool: a Node server on `localhost` spawns the shel
   deletes those at startup so terminal panes can't inherit them (it's also
   what made a hand-run "terminal" test from a chat pane falsely report no
   Artifact tool).
+- **Prompt suggestions need `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=true`**
+  (`_buildEnv`). The SDK only sends `prompt_suggestion` (the chip above the
+  composer) when the CLI doesn't think the account is near its plan limit;
+  it decided that at 2% usage and the chip silently disappeared. Verified: a
+  real 2-turn session got none without the var, one with it. Remember the
+  documented suppressions too: never on a conversation's FIRST turn, never in
+  plan mode, and it arrives AFTER the `result` message.
 - **Terminal panes on a phone: Esc · ^C · Ctrl · Paste · Copy · Tab · arrows**
   (the soft-key row, `wireSoftKeys`; scrolls sideways, most-used first). Every
   key does `pointerdown` preventDefault — a button taking focus dropped the iOS
